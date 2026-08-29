@@ -25,6 +25,16 @@ menu "EcoFlow NUT Bridge"
         int "Config-wipe hold time (ms)"
         default 3000
 
+    config ENABLE_WEB_OTA
+        bool "Firmware update from the admin web page"
+        default y
+        help
+            Adds a firmware-upload box to the Maintenance tab. The device
+            writes the uploaded .bin to the spare OTA slot and reboots, with
+            bootloader rollback if it won't come up. There is no auth on the
+            web UI beyond a typed confirmation, so disable this if the device
+            might sit on an untrusted network.
+
     config ECOFLOW_BLE_ADDRESS
         string "EcoFlow BLE address"
         default ""

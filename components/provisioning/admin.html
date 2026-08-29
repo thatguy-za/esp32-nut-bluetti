@@ -58,6 +58,24 @@
 </section>
 
 <section id="maint">
+  <div id="otaBox" hidden>
+    <h2 style="font-size:1rem">Firmware update</h2>
+    <p>Running <code id="fwNow">?</code>. Upload a new
+      <code>esp32-nut-ecoflow.bin</code> (or the app-only
+      <code>*-app.bin</code>); it's written to the spare slot and the device
+      reboots. If the new build won't come up, the bootloader rolls back.</p>
+    <div class="row">
+      <input type="file" id="fwFile" accept=".bin,application/octet-stream">
+    </div>
+    <div class="row">
+      <span>Type <code>FLASH</code> to confirm:</span>
+      <input id="fwConfirm" size="8" autocomplete="off">
+      <button class="act danger" id="fwGo" disabled>Update</button>
+    </div>
+    <progress id="fwProg" value="0" max="100" style="width:100%;display:none"></progress>
+    <p class="hint" id="fwMsg"></p>
+  </div>
+
   <h2 style="font-size:1rem">Re-provision</h2>
   <p>Forget the stored Wi-Fi / EcoFlow settings and reboot into setup mode.</p>
   <button class="act danger" id="reset">Forget config &amp; reboot</button>
@@ -81,10 +99,49 @@ async function refreshStatus() {
     const rows = Object.entries(j).map(([k, v]) =>
       `<tr><td>${k}</td><td>${String(v)}</td></tr>`).join('');
     $('#statusTable').innerHTML = rows;
+    if (j.ota) {
+      $('#otaBox').hidden = false;
+      $('#fwNow').textContent = (j.fw_version || '?') + ' (' + (j.fw_date || '') + ')';
+    }
   } catch (e) { /* keep last */ }
 }
 refreshStatus();
 setInterval(refreshStatus, 3000);
+
+/* ---- firmware update ---- */
+function otaReady() {
+  $('#fwGo').disabled = !($('#fwFile').files[0] && $('#fwConfirm').value === 'FLASH');
+}
+$('#fwFile').onchange = otaReady;
+$('#fwConfirm').oninput = otaReady;
+$('#fwGo').onclick = () => {
+  const f = $('#fwFile').files[0];
+  if (!f || $('#fwConfirm').value !== 'FLASH') return;
+  if (!confirm(`Flash ${f.name} (${(f.size/1024/1024).toFixed(2)} MB) and reboot?`)) return;
+  $('#fwGo').disabled = true;
+  $('#fwProg').style.display = 'block';
+  const x = new XMLHttpRequest();
+  x.open('POST', '/api/ota');
+  x.setRequestHeader('X-Confirm', 'FLASH');
+  x.upload.onprogress = e => {
+    if (e.lengthComputable) $('#fwProg').value = 100 * e.loaded / e.total;
+  };
+  x.onload = () => {
+    if (x.status === 200) {
+      $('#fwMsg').textContent = 'Uploaded. Rebooting into the new firmware — '
+        + 'reload this page in ~20 s.';
+    } else {
+      $('#fwMsg').textContent = 'Update failed: ' + (x.responseText || x.status);
+      $('#fwGo').disabled = false;
+    }
+  };
+  x.onerror = () => {
+    /* the device may reboot before responding — treat as probably-ok */
+    $('#fwMsg').textContent = 'Connection dropped (device may be rebooting). '
+      + 'Reload in ~20 s to check the version.';
+  };
+  x.send(f);
+};
 
 /* ---- logs ---- */
 let logCursor = 0, logText = '', logTimer = null;

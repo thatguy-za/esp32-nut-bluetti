@@ -3,9 +3,9 @@
 `esp32-nut-ecoflow-factory.bin` is a **merged factory image** for **ESP32-S3**:
 bootloader + partition table + app in one file, written at flash offset `0x0`.
 
-- size: 1,380,592 bytes
-- sha256: `a7071cd89ad9c5343992c5e95d9256df915af2b2cc7a0a8777dcdc41e943f09f`
-- chip: ESP32-S3, flash mode DIO, 80 MHz, 2 MB
+- size: 1,458,176 bytes
+- sha256: `e0abbc67fdcf818cf47e3a7cc9a55446ff0090ab6c7d3b4dd4af4762e3944ad2`
+- chip: ESP32-S3, flash mode DIO, 80 MHz, needs ≥4 MB flash
 
 Use a Chromium browser (Chrome / Edge / Opera) on a desktop — flashing needs
 Web Serial, which Firefox and Safari don't support.
@@ -52,12 +52,19 @@ The device has no Wi-Fi credentials yet, so it starts an open AP
 
 See the project README for details.
 
+## Updating later
+
+After this first USB flash, new versions go over the network: the admin page at
+`http://<device-ip>/` → **Maintenance** → **Firmware update**. Upload
+`esp32-nut-ecoflow.bin` from a later release; it's written to the spare OTA slot
+and the device reboots (bootloader rolls back if it won't come up).
+
 ## Individual images (Option C, manual offsets)
 
-If you'd rather flash the parts separately:
+If you'd rather flash the parts separately (ESP32-S3, ≥4 MB flash):
 
 | offset | file |
 | --- | --- |
 | `0x0` | `bootloader.bin` |
 | `0x8000` | `partition-table.bin` |
-| `0x10000` | `esp32-nut-ecoflow-app.bin` |
+| `0x20000` | `esp32-nut-ecoflow-app.bin` |

@@ -21,6 +21,8 @@
 #include "esp_wifi.h"
 #include "esp_system.h"
 #include "esp_http_server.h"
+#include "esp_ota_ops.h"
+#include "esp_app_desc.h"
 
 #include "wifi_mgr.h"
 #include "ecoflow_ble.h"
@@ -337,6 +339,9 @@ static esp_err_t h_admin_root(httpd_req_t *r);
 static esp_err_t h_admin_status(httpd_req_t *r);
 static esp_err_t h_admin_logs(httpd_req_t *r);
 static esp_err_t h_factory_reset(httpd_req_t *r);
+#if CONFIG_ENABLE_WEB_OTA
+static esp_err_t h_ota(httpd_req_t *r);
+#endif
 
 static esp_err_t start_httpd(bool captive)
 {
@@ -347,6 +352,9 @@ static esp_err_t start_httpd(bool captive)
     c.stack_size = 8192;
     if (captive) {
         c.uri_match_fn = httpd_uri_match_wildcard;
+    } else {
+        c.recv_wait_timeout = 20;   /* tolerate a slow firmware upload */
+        c.send_wait_timeout = 20;
     }
     esp_err_t rc = httpd_start(&P.httpd, &c);
     if (rc != ESP_OK) {
@@ -373,6 +381,9 @@ static esp_err_t start_httpd(bool captive)
         reg(P.httpd, "/api/status", HTTP_GET, h_admin_status);
         reg(P.httpd, "/api/logs", HTTP_GET, h_admin_logs);
         reg(P.httpd, "/api/factory-reset", HTTP_POST, h_factory_reset);
+#if CONFIG_ENABLE_WEB_OTA
+        reg(P.httpd, "/api/ota", HTTP_POST, h_ota);
+#endif
     }
     return ESP_OK;
 }
@@ -438,13 +449,21 @@ static esp_err_t h_admin_status(httpd_req_t *r)
     wifi_mgr_sta_ip(ip, sizeof(ip));
     ecoflow_state_t st;
     bool have = ecoflow_ble_get_state(&st);
-    char out[320];
+    const esp_app_desc_t *app = esp_app_get_description();
+#if CONFIG_ENABLE_WEB_OTA
+    const bool ota = true;
+#else
+    const bool ota = false;
+#endif
+    char out[420];
     snprintf(out, sizeof(out),
              "{\"ip\":\"%s\",\"ups\":\"%s\",\"nut_port\":%u,"
+             "\"fw_version\":\"%s\",\"fw_date\":\"%s %s\",\"ota\":%s,"
              "\"ble_target\":\"%s\",\"ble_connected\":%s,"
              "\"telemetry_valid\":%s,\"battery_pct\":%d,"
              "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\"}",
              ip, P.cfg->ups_name, P.cfg->nut_port,
+             app->version, app->date, app->time, ota ? "true" : "false",
              P.cfg->ble_addr[0] ? P.cfg->ble_addr : P.cfg->ble_name,
              ecoflow_ble_connected() ? "true" : "false",
              have && st.valid ? "true" : "false",
@@ -491,6 +510,96 @@ static esp_err_t h_factory_reset(httpd_req_t *r)
     esp_restart();
     return ESP_OK;
 }
+
+#if CONFIG_ENABLE_WEB_OTA
+static void reboot_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(1200));
+    esp_restart();
+}
+
+/* POST /api/ota  — body is a raw app image; header X-Confirm: FLASH */
+static esp_err_t h_ota(httpd_req_t *r)
+{
+    char confirm[16] = "";
+    httpd_req_get_hdr_value_str(r, "X-Confirm", confirm, sizeof(confirm));
+    if (strcmp(confirm, "FLASH") != 0) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "confirm required");
+    }
+    if (r->content_len < 4096 || r->content_len > 4 * 1024 * 1024) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "implausible size");
+    }
+
+    const esp_partition_t *tgt = esp_ota_get_next_update_partition(NULL);
+    if (!tgt) {
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "no OTA partition");
+    }
+    ESP_LOGW(TAG, "OTA: %d bytes -> partition '%s'", r->content_len, tgt->label);
+
+    esp_ota_handle_t h = 0;
+    esp_err_t err = esp_ota_begin(tgt, r->content_len, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(err));
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "ota_begin failed");
+    }
+
+    char *buf = malloc(4096);
+    if (!buf) {
+        esp_ota_abort(h);
+        return httpd_resp_send_500(r);
+    }
+    int remaining = r->content_len;
+    bool ok = true;
+    int stalls = 0;
+    while (remaining > 0) {
+        int n = httpd_req_recv(r, buf, remaining < 4096 ? remaining : 4096);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (++stalls > 6) {          /* ~2 min of no data => give up */
+                ok = false;
+                break;
+            }
+            continue;
+        }
+        stalls = 0;
+        if (n <= 0) {
+            ok = false;
+            break;
+        }
+        if (esp_ota_write(h, buf, n) != ESP_OK) {
+            ok = false;
+            break;
+        }
+        remaining -= n;
+    }
+    free(buf);
+
+    if (!ok || remaining != 0) {
+        esp_ota_abort(h);
+        ESP_LOGE(TAG, "OTA transfer failed (%d left)", remaining);
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "transfer failed");
+    }
+    err = esp_ota_end(h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end: %s", esp_err_to_name(err));
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                   err == ESP_ERR_OTA_VALIDATE_FAILED
+                                       ? "image invalid" : "ota_end failed");
+    }
+    err = esp_ota_set_boot_partition(tgt);
+    if (err != ESP_OK) {
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "set_boot failed");
+    }
+
+    ESP_LOGW(TAG, "OTA written; rebooting into '%s'", tgt->label);
+    send_json(r, "{\"ok\":true}");
+    xTaskCreate(reboot_task, "ota_reboot", 2048, NULL, 5, NULL);
+    return ESP_OK;
+}
+#endif /* CONFIG_ENABLE_WEB_OTA */
 
 esp_err_t provisioning_admin_start(const app_config_t *cfg)
 {

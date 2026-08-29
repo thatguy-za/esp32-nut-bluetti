@@ -22,6 +22,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_netif_sntp.h"
+#include "esp_ota_ops.h"
 #include "driver/gpio.h"
 
 #include "app_config.h"
@@ -246,4 +247,14 @@ void app_main(void)
              cfg->ble_addr[0] ? cfg->ble_addr : cfg->ble_name);
 
     start_services(cfg);
+
+    /* We reached "online + services up" — if this build arrived via OTA and is
+     * still on probation, confirm it so the bootloader keeps it. */
+    esp_ota_img_states_t ota_state;
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    if (esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
+        ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+        esp_ota_mark_app_valid_cancel_rollback();
+        ESP_LOGI(TAG, "OTA image confirmed valid");
+    }
 }

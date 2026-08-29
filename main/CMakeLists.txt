@@ -4,6 +4,8 @@ idf_component_register(
     REQUIRES
         nvs_flash
         esp_timer
+        esp_netif
+        app_update
         driver
         app_config
         wifi_mgr

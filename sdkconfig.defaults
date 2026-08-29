@@ -27,5 +27,10 @@ CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 # --- Logging ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
-# --- Partition table: single-app large enough for BLE + Wi-Fi ---
-CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+# --- Flash + partitions: 4 MB, two OTA app slots (web firmware update) ---
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- OTA: roll back automatically if a freshly-flashed build won't come up ---
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

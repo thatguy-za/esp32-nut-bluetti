@@ -66,7 +66,8 @@ will also refuse the BLE auth.
 
 ## Hardware
 
-- Any ESP32 with BLE (ESP32, ESP32-S3, ESP32-C3, …).
+- **ESP32-S3 with ≥4 MB flash** (the partition table has two OTA app slots).
+  Other ESP32s with BLE work if you swap the target and check `partitions.csv`.
 - A Wi-Fi network reachable by the hosts that will monitor the UPS.
 - A button to GND on GPIO0 (the BOOT button on most dev boards) for config wipe.
 
@@ -75,9 +76,12 @@ will also refuse the BLE auth.
 Requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) v5.1 or newer.
 
 ```bash
-idf.py set-target esp32
+idf.py set-target esp32s3
 idf.py build flash monitor
 ```
+
+The prebuilt release image needs a **one-time USB flash**; after that, updates go
+over the network from the admin page (below).
 
 You normally do **not** need `menuconfig` — configuration happens at runtime
 through the setup portal (below). `menuconfig` only sets compile-time defaults
@@ -125,9 +129,15 @@ three tabs:
 - **Logs** — a live tail of the device log (~12 KB ring buffer), so you can watch
   the BLE handshake without a serial cable. Turn on `CONFIG_ECOFLOW_BLE_TRACE`
   for the full dump.
-- **Maintenance** — *Forget config & reboot* (re-provision).
+- **Maintenance** —
+  - **Firmware update**: upload a new `esp32-nut-ecoflow.bin` (or the app-only
+    `*-app.bin`); it's written to the spare OTA slot and the device reboots,
+    with bootloader rollback if the new build won't come up. Gated by a typed
+    `FLASH` confirmation. Disable with `CONFIG_ENABLE_WEB_OTA=n`.
+  - **Forget config & reboot** (re-provision).
 
-There is no authentication — keep it on a trusted LAN.
+There is **no authentication** — anyone on the network can read the logs and
+(with OTA enabled) flash firmware. Keep it on a trusted LAN.
 
 ### Re-provisioning
 
