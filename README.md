@@ -40,60 +40,33 @@ themselves down cleanly on a mains failure.
 Units bound to a **different EcoFlow account** than the `user_id` you provision
 will also refuse the BLE auth.
 
-## What's implemented
+## Flash it
 
-- **NUT server** — upsd-compatible, read-only; verified against a third-party
-  NUT client (`LIST UPS/VAR`, `GET VAR`, `upsmon` primary handshake, …).
-- **Provisioning** — captive-portal Wi-Fi + EcoFlow-account setup, config in NVS,
-  BOOT-button / web re-provision.
-- **EcoFlow BLE "V2" stack** — ECDH (secp160r1) key agreement, AES-128-CBC
-  session, keydata session-key derivation, both framing layers, `MD5(user_id +
-  serial)` account auth, and a protobuf reader for the `pr705` telemetry
-  message. Ported from [`rabits/ha-ef-ble`](https://github.com/rabits/ha-ef-ble).
+Grab `esp32-nut-ecoflow-factory.bin` from the
+[latest release](https://github.com/thatguy-za/esp32-nut-ecoflow/releases/latest).
+It targets an **ESP32-S3 with ≥4 MB flash** and is written at flash offset `0x0`.
+Only this first flash is over USB — after that, updates go over the network from
+the [admin page](#admin-page).
 
-### Verified without hardware ([`test/`](test/), runs in CI)
+Flashing needs **Web Serial**, so use a Chromium browser (Chrome / Edge / Opera)
+on a desktop — not Firefox or Safari.
 
-- **Telemetry decode** — 5 real `DisplayPropertyUpload` packets captured from a
-  River 3 UPS decode through the actual C code to the exact values ha-ef-ble
-  documents (SOC, AC-in/out, load, discharge, temperature, backup mode, runtime).
-- **Crypto** — micro-ecc secp160r1 pubkey + ECDH shared secret, `md5` IV /
-  session-key / auth-token derivation, all byte-for-byte against `python-ecdsa`
-  (which is what the device interoperates with).
-- **NUT server** — full protocol conformance driven over a socket by a test
-  client, plus the `upsmon` primary handshake.
-- **Framing** — CRC-8/16, inner-packet build↔parse, XOR deobfuscation, frame
-  reassembly across split BLE notifications.
+- **[esptool-js](https://espressif.github.io/esptool-js/)** — Espressif's
+  browser flasher. *Connect*, add `esp32-nut-ecoflow-factory.bin` at address
+  `0x0`, *Program*. Nothing to install.
+- **ESP Web Tools install button** — the engine behind
+  [ESPHome's web installer](https://esphome.github.io/esp-web-tools/). Drop the
+  release `.bin` into [`dist/`](dist/), host that folder, and open `index.html`
+  for a one-click *Install*. Details in [`dist/FLASHING.md`](dist/FLASHING.md).
+- **Command line:**
+  `esptool --chip esp32s3 write-flash 0x0 esp32-nut-ecoflow-factory.bin`
 
-## Hardware
+> [web.esphome.io](https://web.esphome.io) itself **won't** flash this — it only
+> handles ESPHome-generated firmware. Use one of the options above (they all use
+> the same underlying flashing code).
 
-- **ESP32-S3 with ≥4 MB flash** (the partition table has two OTA app slots).
-  Other ESP32s with BLE work if you swap the target and check `partitions.csv`.
-- A Wi-Fi network reachable by the hosts that will monitor the UPS.
-- A button to GND on GPIO0 (the BOOT button on most dev boards) for config wipe.
-
-## Build & flash (ESP-IDF)
-
-Requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) v5.1 or newer.
-
-```bash
-idf.py set-target esp32s3
-idf.py build flash monitor
-```
-
-The prebuilt release image needs a **one-time USB flash**; after that, updates go
-over the network from the admin page (below).
-
-You normally do **not** need `menuconfig` — configuration happens at runtime
-through the setup portal (below). `menuconfig` only sets compile-time defaults
-and the config-wipe GPIO, under **`EcoFlow NUT Bridge`**.
-
-### Debugging the BLE handshake
-
-Enable **`Trace the EcoFlow BLE handshake`** in `menuconfig` (or
-`CONFIG_ECOFLOW_BLE_TRACE=y`) and watch `idf.py monitor`. It hex-dumps every
-stage — our/device public keys, shared secret, IV, session key, auth token, and
-every decoded inner packet — so a failed handshake shows exactly where it broke.
-It prints key material, so turn it off afterwards.
+You also need a Wi-Fi network the monitoring hosts can reach, and — on most dev
+boards — the BOOT button on GPIO0 for the config wipe.
 
 ## First-run provisioning
 
@@ -164,6 +137,56 @@ MONITOR ecoflow@<device-ip> 1 monuser somepass slave
 
 The server is read-only and does not enforce auth (`LOGIN` is accepted from
 anyone); keep the device on a trusted LAN.
+
+## What's implemented
+
+- **NUT server** — upsd-compatible, read-only; verified against a third-party
+  NUT client (`LIST UPS/VAR`, `GET VAR`, `upsmon` primary handshake, …).
+- **Provisioning** — captive-portal Wi-Fi + EcoFlow-account setup, config in NVS,
+  BOOT-button / web re-provision.
+- **EcoFlow BLE "V2" stack** — ECDH (secp160r1) key agreement, AES-128-CBC
+  session, keydata session-key derivation, both framing layers, `MD5(user_id +
+  serial)` account auth, and a protobuf reader for the `pr705` telemetry
+  message. Ported from [`rabits/ha-ef-ble`](https://github.com/rabits/ha-ef-ble).
+- **Web OTA** — upload firmware from the admin page; spare-slot write with
+  bootloader rollback.
+
+### Verified without hardware ([`test/`](test/), runs in CI)
+
+- **Telemetry decode** — 5 real `DisplayPropertyUpload` packets captured from a
+  River 3 UPS decode through the actual C code to the exact values ha-ef-ble
+  documents (SOC, AC-in/out, load, discharge, temperature, backup mode, runtime).
+- **Crypto** — micro-ecc secp160r1 pubkey + ECDH shared secret, `md5` IV /
+  session-key / auth-token derivation, all byte-for-byte against `python-ecdsa`
+  (which is what the device interoperates with).
+- **NUT server** — full protocol conformance driven over a socket by a test
+  client, plus the `upsmon` primary handshake.
+- **Framing** — CRC-8/16, inner-packet build↔parse, XOR deobfuscation, frame
+  reassembly across split BLE notifications.
+
+## Build from source
+
+ESP32-S3, ≥4 MB flash. Requires
+[ESP-IDF](https://docs.espressif.com/projects/esp-idf/) v5.1 or newer.
+
+```bash
+idf.py set-target esp32s3
+idf.py build flash monitor
+```
+
+Configuration is all runtime (the setup portal). `menuconfig` only sets
+compile-time defaults, the config-wipe GPIO, the trace flag, and
+`CONFIG_ENABLE_WEB_OTA`, under **`EcoFlow NUT Bridge`**. The version comes from
+[`version.txt`](version.txt) — see [`RELEASING.md`](RELEASING.md).
+
+### Debugging the BLE handshake
+
+Enable **`Trace the EcoFlow BLE handshake`** in `menuconfig` (or
+`CONFIG_ECOFLOW_BLE_TRACE=y`). It hex-dumps every stage — our/device public keys,
+shared secret, IV, session key, auth token, and every decoded inner packet — so a
+failed handshake shows exactly where it broke. Watch it on the admin page's
+**Logs** tab or `idf.py monitor`. It prints key material, so turn it off
+afterwards.
 
 ## Layout
 
