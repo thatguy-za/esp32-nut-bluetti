@@ -35,12 +35,6 @@ typedef struct {
     char     static_gw[16];
     char     static_dns[16];
     char     ble_addr[18];   /* "AA:BB:CC:DD:EE:FF", the only way to target */
-    /* Was an advertised-name prefix fallback, removed in 0.3.0: it could
-     * bind to the wrong unit, and the scan list gives the address anyway.
-     * The field stays so the stored blob keeps its size — shrinking it
-     * would fail the length check on update and drop every device back
-     * into setup, Wi-Fi credentials and all. */
-    char     _unused_ble_name[24];
     bool     ble_probe;      /* log GATT + notifications, decode nothing  */
     char     ups_name[32];
     uint16_t nut_port;

@@ -79,6 +79,13 @@ optional fields off.
 | `EP600` `EP760` `EP800` `EP2000` | V2, but grid/PV systems — three-phase grid and PV-string registers, sharing none of the addresses above |
 | `AC200L` `AC200M` `AC200PL` `AC300` `AC500` `EB3A` `EP500` `EP500P` | The older **V1** protocol, a different framing this firmware does not speak |
 
+### Updating from 0.2.x
+
+The stored configuration changed shape in 0.3.0, so a device updating from
+0.2.x **comes up unprovisioned** — it starts its setup access point again and
+needs Wi-Fi, admin login and unit re-entered. Nothing is silently carried over
+half-migrated.
+
 ### A caveat on all of it
 
 Development has centred on the **Elite 10**. The other 16 come from the same
