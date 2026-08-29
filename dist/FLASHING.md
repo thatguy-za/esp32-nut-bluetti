@@ -1,11 +1,12 @@
 # Flashing esp32-nut-ecoflow
 
-`esp32-nut-ecoflow-factory.bin` is a **merged factory image** for **ESP32-S3**:
-bootloader + partition table + app in one file, written at flash offset `0x0`.
+`esp32-nut-ecoflow-factory.bin` (from the
+[latest release](https://github.com/thatguy-za/esp32-nut-ecoflow/releases/latest))
+is a **merged factory image** for **ESP32-S3, ≥4 MB flash**: bootloader +
+partition table + app in one file, written at flash offset `0x0` (DIO, 80 MHz).
 
-- size: 1,458,176 bytes
-- sha256: `e0abbc67fdcf818cf47e3a7cc9a55446ff0090ab6c7d3b4dd4af4762e3944ad2`
-- chip: ESP32-S3, flash mode DIO, 80 MHz, needs ≥4 MB flash
+The release notes list the exact size and SHA-256 for that build — verify against
+them after downloading.
 
 Use a Chromium browser (Chrome / Edge / Opera) on a desktop — flashing needs
 Web Serial, which Firefox and Safari don't support.
