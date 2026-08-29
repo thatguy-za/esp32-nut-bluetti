@@ -5,8 +5,11 @@ Everything here comes from reading
 (which in turn builds on
 [`nhurman/bluetti_mqtt`](https://github.com/nhurman/bluetti_mqtt) and
 [`warhammerkid/bluetti_mqtt`](https://github.com/warhammerkid/bluetti_mqtt)).
-**None of it has been confirmed against an Elite 10 yet** — verify with probe
-mode before trusting any of it.
+The register map is from
+[PR #89](https://github.com/Patrick762/bluetti-bt-lib/pull/89), which is
+**unmerged**. All of it is implemented here — `bt_crypto.c`, `bt_session.c`,
+`bt_regs.c` — and **none of it has been confirmed against an Elite 10**. If a
+reading looks wrong, probe mode (below) shows the raw frames.
 
 ## Transport
 
@@ -111,21 +114,29 @@ Enough is here for a useful UPS. `battery.charge` ← 102, `battery.runtime` ←
 `OL`/`OB` from whether AC input power (146) or input voltage (1314) is
 non-zero.
 
-Not in the map, and needed for a full mapping:
+What the map does not give, and what was done about it:
 
-- **battery voltage** and **pack temperature** — no register listed
-- **explicit charging flag** — will have to be inferred from input power
-- **design capacity** — the Elite 10 is 128 Wh, so it can be a constant
-- **continuous AC rating** — 200 W for this unit; already a UI setting
+- **battery voltage** and **pack temperature** — no register listed, so those
+  NUT variables are not published at all rather than guessed
+- **explicit charging flag** — inferred in `bt_regs.c` from mains present and
+  charge below 100%
+- **mains presence** — inferred from AC input power (146) or line voltage
+  (1314) being non-zero; voltage is checked as well because a plugged-in but
+  idle unit reads 0 W
+- **design capacity** — the Elite 10 is 128 Wh, a constant
+- **continuous AC rating** — 200 W for this unit; a UI setting, not hardcoded
 
-## Verifying before writing a decoder
+## Probe mode
 
-Enable probe mode and watch the Logs tab. What to look for:
+The decoder is written, so probe mode is now a diagnostic rather than a first
+step: enable it when a value looks wrong or the link never reaches `READY`.
+In the Logs tab:
 
 - `ff01`/`ff02` present → the transport above is right.
-- Notifications starting `2a 2a` → the encrypted handshake; implement that
-  before anything else will make sense.
+- Notifications starting `2a 2a` → the encrypted handshake, which
+  `bt_session.c` answers. If it repeats without ever reaching `READY`, the
+  fixed keys or the challenge derivation are wrong for this firmware.
 - Plain Modbus responses (slave id, `0x03`, byte count, data, CRC) → the unit
-  is unencrypted and the register reads can go in directly.
+  is unencrypted; the session layer passes those straight through.
 - Connect then immediate disconnect with no traffic → the device gave up
   waiting for a handshake response.
