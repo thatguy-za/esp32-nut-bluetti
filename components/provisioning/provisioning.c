@@ -530,30 +530,9 @@ static esp_err_t h_admin_config(httpd_req_t *r)
     return send_json(r, out);
 }
 
-static void reconfigure_task(void *arg)
+static void reboot_after_delay(void *arg)
 {
-    if (P.ef_email[0] && P.ef_pass[0]) {
-        char err[80] = "";
-        int lr = ecoflow_resolve_user_id(P.ef_email, P.ef_pass, P.ef_region,
-                                         P.pending.ef_user_id,
-                                         sizeof(P.pending.ef_user_id),
-                                         err, sizeof(err));
-        memset(P.ef_pass, 0, sizeof(P.ef_pass));
-        if (lr != 0) {
-            snprintf(P.detail, sizeof(P.detail), "EcoFlow login: %s", err);
-            P.state = ST_FAILED;
-            vTaskDelete(NULL);
-            return;
-        }
-    }
-    memset(P.ef_pass, 0, sizeof(P.ef_pass));
-
-    *P.cfg = P.pending;
-    P.cfg->provisioned = true;
-    app_config_save(P.cfg);
-    P.state = ST_CONNECTED;
-    ESP_LOGW(TAG, "reconfigured via web; rebooting");
-    vTaskDelay(pdMS_TO_TICKS(800));
+    vTaskDelay(pdMS_TO_TICKS(900));
     esp_restart();
 }
 
@@ -608,10 +587,33 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
                                    "need a BLE address or name");
     }
 
-    P.state = ST_CONNECTING;
-    P.detail[0] = '\0';
-    xTaskCreate(reconfigure_task, "reconfigure", 4096, NULL, 5, NULL);
-    return send_json(r, "{\"ok\":true}");
+    /* Resolve a fresh user id inline (blocking HTTPS) so we can report the
+     * outcome; the setup portal does this in a task only because it also
+     * waits on Wi-Fi. */
+    if (P.ef_email[0] && P.ef_pass[0]) {
+        char err[80] = "";
+        int lr = ecoflow_resolve_user_id(P.ef_email, P.ef_pass, P.ef_region,
+                                         P.pending.ef_user_id,
+                                         sizeof(P.pending.ef_user_id),
+                                         err, sizeof(err));
+        memset(P.ef_pass, 0, sizeof(P.ef_pass));
+        if (lr != 0) {
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, err);
+        }
+    }
+    memset(P.ef_pass, 0, sizeof(P.ef_pass));
+
+    *P.cfg = P.pending;
+    P.cfg->provisioned = true;
+    esp_err_t se = app_config_save(P.cfg);
+    if (se != ESP_OK) {
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "could not save config");
+    }
+    ESP_LOGW(TAG, "reconfigured via web; rebooting");
+    send_json(r, "{\"ok\":true}");
+    xTaskCreate(reboot_after_delay, "reboot", 2048, NULL, 5, NULL);
+    return ESP_OK;
 }
 
 #if CONFIG_ENABLE_WEB_OTA
