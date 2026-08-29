@@ -12,12 +12,17 @@
 #include "esp_netif.h"
 #include "esp_mac.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 static const char *TAG = "wifi_mgr";
 
 #define BIT_CONNECTED  BIT0
 #define BIT_FAILED     BIT1
+/* Attempts before wifi_mgr_sta_connect() reports failure to its caller.
+ * Reconnection itself never gives up — see reconnect_later(). */
 #define MAX_RETRY      8
+#define BACKOFF_MIN_MS 1000
+#define BACKOFF_MAX_MS 30000
 
 static EventGroupHandle_t s_events;
 static esp_netif_t       *s_sta_netif;
@@ -26,7 +31,39 @@ static bool               s_ap_up;
 static bool               s_inited;
 static bool               s_want_connect;
 static int                s_retries;
+static uint32_t           s_backoff_ms = BACKOFF_MIN_MS;
+static esp_timer_handle_t s_retry_timer;
 static char               s_ip[16] = "0.0.0.0";
+
+/* Retry forever, with backoff. Giving up permanently would strand a
+ * headless device after any transient outage — a rebooted router, or the
+ * link drop that the AP->STA mode switch causes at the end of setup. */
+static void retry_timer_cb(void *arg)
+{
+    if (s_want_connect) {
+        esp_wifi_connect();
+    }
+}
+
+static void reconnect_later(void)
+{
+    if (!s_retry_timer) {
+        const esp_timer_create_args_t a = { .callback = retry_timer_cb,
+                                            .name = "wifi_retry" };
+        if (esp_timer_create(&a, &s_retry_timer) != ESP_OK) {
+            esp_wifi_connect();          /* no timer: at least try once */
+            return;
+        }
+    }
+    esp_timer_stop(s_retry_timer);
+    esp_timer_start_once(s_retry_timer, (uint64_t)s_backoff_ms * 1000);
+    if (s_backoff_ms < BACKOFF_MAX_MS) {
+        s_backoff_ms *= 2;
+        if (s_backoff_ms > BACKOFF_MAX_MS) {
+            s_backoff_ms = BACKOFF_MAX_MS;
+        }
+    }
+}
 
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -39,18 +76,25 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (!s_want_connect) {
             return;
         }
-        if (s_retries < MAX_RETRY) {
-            s_retries++;
-            ESP_LOGW(TAG, "STA disconnected, retry %d/%d", s_retries, MAX_RETRY);
-            esp_wifi_connect();
-        } else {
+        s_retries++;
+        if (s_retries == MAX_RETRY) {
+            /* Unblock an in-flight wifi_mgr_sta_connect() so setup can
+             * report the failure, but keep trying in the background. */
             xEventGroupSetBits(s_events, BIT_FAILED);
         }
+        ESP_LOGW(TAG, "STA disconnected (attempt %d), retrying in %u ms",
+                 s_retries, (unsigned)s_backoff_ms);
+        reconnect_later();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         esp_ip4addr_ntoa(&e->ip_info.ip, s_ip, sizeof(s_ip));
         ESP_LOGI(TAG, "STA got IP %s", s_ip);
         s_retries = 0;
+        s_backoff_ms = BACKOFF_MIN_MS;
+        if (s_retry_timer) {
+            esp_timer_stop(s_retry_timer);
+        }
+        xEventGroupClearBits(s_events, BIT_FAILED);
         xEventGroupSetBits(s_events, BIT_CONNECTED);
     }
 }
@@ -138,8 +182,17 @@ esp_err_t wifi_mgr_ap_start(const char *ssid, const char *pass)
 
 esp_err_t wifi_mgr_ap_stop(void)
 {
+    /* Dropping APSTA back to STA reinitialises the interfaces and takes
+     * the station link with it, so reconnect deliberately rather than
+     * relying on the disconnect handler to notice. */
     esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
     s_ap_up = false;
+    if (s_want_connect) {
+        s_retries = 0;
+        s_backoff_ms = BACKOFF_MIN_MS;
+        xEventGroupClearBits(s_events, BIT_FAILED);
+        esp_wifi_connect();
+    }
     ESP_LOGI(TAG, "SoftAP stopped");
     return err;
 }
@@ -299,6 +352,7 @@ esp_err_t wifi_mgr_sta_connect(const char *ssid, const char *pass,
 
     xEventGroupClearBits(s_events, BIT_CONNECTED | BIT_FAILED);
     s_retries = 0;
+    s_backoff_ms = BACKOFF_MIN_MS;
     s_want_connect = true;
 
     esp_wifi_disconnect();
