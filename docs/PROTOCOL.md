@@ -6,8 +6,11 @@ Everything here comes from reading
 [`nhurman/bluetti_mqtt`](https://github.com/nhurman/bluetti_mqtt) and
 [`warhammerkid/bluetti_mqtt`](https://github.com/warhammerkid/bluetti_mqtt)).
 The register map is from
-[PR #89](https://github.com/Patrick762/bluetti-bt-lib/pull/89), which is
-**unmerged**. All of it is implemented here — `bt_crypto.c`, `bt_session.c`,
+[PR #89](https://github.com/Patrick762/bluetti-bt-lib/pull/89), merged upstream
+on 2026-08-29 and verified line-by-line against what is implemented here: every
+address below, the 6-word swapped model string, SOC bounded 0-100, and register
+104 carrying **minutes** (upstream scales it by 1/60 to display hours). All of
+it is implemented here — `bt_crypto.c`, `bt_session.c`,
 `bt_regs.c` — and **none of it has been confirmed against an Elite 10**. If a
 reading looks wrong, probe mode (below) shows the raw frames.
 
@@ -74,10 +77,16 @@ here.)
 
 ## Elite 10 register map
 
-From the **open, unmerged** PR
-[Patrick762/bluetti-bt-lib#89](https://github.com/Patrick762/bluetti-bt-lib/pull/89)
-("Add EL10 device"), plus the `BaseDeviceV2` common fields. Unmerged means
-unreviewed — treat the addresses as a strong hypothesis, not fact.
+From [Patrick762/bluetti-bt-lib#89](https://github.com/Patrick762/bluetti-bt-lib/pull/89)
+("Add EL10 device"), merged upstream on 2026-08-29, plus the `BaseDeviceV2`
+common fields. Review is not hardware confirmation: as far as is known nobody
+has run it against a unit either, so treat the addresses as a well-reviewed
+hypothesis rather than fact.
+
+Upstream matches advertised names as `^(…|EL10|EL100V2|…)(\d+)$` — a model name
+followed by digits. Note that `EL10` is a prefix of `EL100V2`, a different unit
+with a different map, which is why the scanner here requires digits after the
+prefix rather than matching on the prefix alone.
 
 | Register | Field | Type / scale |
 | --- | --- | --- |

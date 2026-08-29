@@ -128,14 +128,28 @@ static bool name_looks_bluetti(const char *name, size_t len)
     return false;
 }
 
+/*
+ * BLUETTI advertises as a model name followed by digits — upstream matches
+ * ^(AC60|EL10|EL100V2|…)(\d+)$. A plain prefix test is not enough, because
+ * "EL10" is also a prefix of "EL100V2…", a different unit with a different
+ * register map: we would connect to it and decode nonsense. So the tail
+ * after the prefix must be digits (or nothing, for an exact name).
+ */
 static bool adv_name_matches_target(const struct ble_hs_adv_fields *f)
 {
     if (b.name_prefix[0] == '\0' || f->name_len == 0) {
         return false;
     }
     size_t pl = strlen(b.name_prefix);
-    return f->name_len >= pl &&
-           strncmp((const char *)f->name, b.name_prefix, pl) == 0;
+    if (f->name_len < pl || strncmp((const char *)f->name, b.name_prefix, pl) != 0) {
+        return false;
+    }
+    for (size_t i = pl; i < f->name_len; i++) {
+        if (f->name[i] < '0' || f->name[i] > '9') {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool seen_before(const uint8_t val[6])

@@ -28,8 +28,9 @@ themselves down cleanly on a mains failure.
 > are all written, and none of it has touched real hardware. Two caveats worth
 > knowing before you trust a reading:
 >
-> - The Elite 10 register map comes from an **unmerged** PR
->   ([bluetti-bt-lib#89](https://github.com/Patrick762/bluetti-bt-lib/pull/89)).
+> - The Elite 10 register map matches
+>   [bluetti-bt-lib#89](https://github.com/Patrick762/bluetti-bt-lib/pull/89),
+>   merged upstream on 2026-08-29 — but nobody has run it against a unit either.
 > - Some NUT values are **inferred**, not measured — see below.
 >
 > Probe mode is still there for when something does not line up.
