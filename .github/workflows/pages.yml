@@ -31,7 +31,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [ -z "$tag" ]; then
+            echo "No release yet — nothing to publish."
+            exit 0
+          fi
           echo "Latest release: $tag"
           mkdir -p _site
           cp dist/index.html _site/
@@ -56,9 +60,20 @@ jobs:
           EOF
           ls -l _site
 
+      - name: Skip when there is no release
+        id: check
+        run: |
+          if [ -d _site ] && [ -f _site/manifest.json ]; then
+            echo "have_site=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_site=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/upload-pages-artifact@v3
+        if: steps.check.outputs.have_site == 'true'
         with:
           path: _site
 
       - id: deploy
+        if: steps.check.outputs.have_site == 'true'
         uses: actions/deploy-pages@v4
