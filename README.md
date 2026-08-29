@@ -16,21 +16,41 @@ themselves down cleanly on a mains failure.
  └───────────┘          └─────────┘                    └──────────────┘
 ```
 
-## Status
+> ## 🚧 Work in progress
+>
+> **This has never run against a real EcoFlow unit.** The NUT server, Wi-Fi
+> provisioning, and the BLE framing/crypto pass host unit tests and a
+> third-party NUT client, but the end-to-end BLE handshake with a River 3 is
+> unverified and will almost certainly need on-device debugging. Treat every
+> release as pre-release. Feedback / logs / captures very welcome.
 
-Targets the **EcoFlow River 3 / River 3 UPS** (`EF-R3…`, serial `R651` / `R653`
-/ `R654` / `R655`). The full EcoFlow BLE "V2" stack is implemented — ECDH
-(secp160r1) key agreement, AES-128-CBC session, the keydata session-key
-derivation, both framing layers, account auth, and a protobuf reader for the
-`pr705` telemetry message. Wi-Fi provisioning and the NUT server are done.
+## Compatibility
 
-**Untested on hardware** — written against the `rabits/ha-ef-ble` reference and
-verified with host unit tests for the framing / CRC / protobuf / packet paths,
-but not yet run against a real River 3. Expect to debug the handshake on-device
-(serial log at `info`).
+| EcoFlow model | Serial prefix | Status |
+| --- | --- | --- |
+| **River 3**, **River 3 UPS** | `R651` `R653` `R654` `R655` | 🟡 **Target** — implemented, needs hardware testing |
+| River 3 Plus | `R633`-family | 🟡 Same protocol; likely works, model string / add-on battery not handled |
+| Delta 3 / 3 Plus / 3 Max, Delta Pro 3, Delta Pro Ultra, Smart Home Panel 2, Stream, PowerOcean | — | 🟠 Shares the BLE handshake, but a **different protobuf** — connects & authenticates, telemetry won't decode until its field map is added |
+| Delta 2 / 2 Max, River 2 / 2 Max / 2 Pro, Delta Max, Delta Pro, RIVER Pro (2nd gen) | — | 🔴 Older `encrypt_type 0/1` — different handshake and framing, **not implemented** |
+| Original DELTA / RIVER (1st gen) | — | 🔴 Different "v1" wire format |
+| PowerStream, smart plugs, most GLACIER / WAVE data | — | 🔴 No local BLE telemetry (Wi-Fi / cloud only) |
 
-Other EcoFlow models are not wired up; the transport is generic but the
-telemetry decode and model table are River-3-specific.
+Units bound to a **different EcoFlow account** than the `user_id` you provision
+will also refuse the BLE auth.
+
+## What's implemented
+
+- **NUT server** — upsd-compatible, read-only; verified against a third-party
+  NUT client (`LIST UPS/VAR`, `GET VAR`, `upsmon` primary handshake, …).
+- **Provisioning** — captive-portal Wi-Fi + EcoFlow-account setup, config in NVS,
+  BOOT-button / web re-provision.
+- **EcoFlow BLE "V2" stack** — ECDH (secp160r1) key agreement, AES-128-CBC
+  session, keydata session-key derivation, both framing layers, `MD5(user_id +
+  serial)` account auth, and a protobuf reader for the `pr705` telemetry
+  message. Ported from [`rabits/ha-ef-ble`](https://github.com/rabits/ha-ef-ble).
+
+Verified with host unit tests (framing / CRC / protobuf / packet paths) — **not**
+yet on a real River 3.
 
 ## Hardware
 
