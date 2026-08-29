@@ -57,8 +57,8 @@
   <form id="cfgForm">
     <h2 style="font-size:1rem">EcoFlow unit</h2>
     <label for="cfgBleSel">Device</label>
-    <select id="cfgBleSel"><option value="">— keep current / scan —</option></select>
-    <button type="button" class="act" id="cfgBleScan">Re-scan (drops the link briefly)</button>
+    <select id="cfgBleSel"><option value="">— select —</option></select>
+    <button type="button" class="act" id="cfgBleScan">Scan for devices</button>
     <label for="cfgBleAddr">BLE address / name prefix</label>
     <input id="cfgBleAddr" name="ble_addr" autocomplete="off">
     <p class="hint" id="cfgBleHint">A <code>AA:BB:CC:DD:EE:FF</code> address, or a
@@ -66,8 +66,8 @@
 
     <h2 style="font-size:1rem">EcoFlow account</h2>
     <p class="hint" id="cfgUidState"></p>
-    <details>
-      <summary>Change account / user id</summary>
+    <details id="cfgAcctDetails">
+      <summary id="cfgAcctSummary">Set the EcoFlow account</summary>
       <label for="cfgEmail">Email or phone</label>
       <input id="cfgEmail" name="ef_email" autocomplete="off">
       <label for="cfgPass">Password</label>
@@ -148,9 +148,11 @@ tabs.forEach(b => b.onclick = () => {
 });
 
 /* ---- status ---- */
+let lastStatus = {};
 async function refreshStatus() {
   try {
     const j = await (await fetch('/api/status')).json();
+    lastStatus = j;
     const rows = Object.entries(j).map(([k, v]) =>
       `<tr><td>${k}</td><td>${String(v)}</td></tr>`).join('');
     $('#statusTable').innerHTML = rows;
@@ -240,7 +242,7 @@ $('#reset').onclick = () => {
 };
 
 /* ---- config ---- */
-let cfgLoaded = false;
+let cfgLoaded = false, cfgScanned = false;
 async function loadConfig() {
   if (cfgLoaded) return;
   try {
@@ -249,9 +251,16 @@ async function loadConfig() {
     $('#cfgUps').value = j.ups_name || '';
     $('#cfgPort').value = j.nut_port || 3493;
     $('#cfgLow').value = j.low_pct || 20;
-    $('#cfgUidState').textContent = j.has_user_id
-      ? 'An EcoFlow account id is stored. Only change it if you switched accounts.'
-      : 'No EcoFlow account id stored — set one below, or the BLE auth will fail.';
+    if (j.has_user_id) {
+      $('#cfgUidState').textContent =
+        'An EcoFlow account id is stored. Change it only if you switched accounts.';
+      $('#cfgAcctSummary').textContent = 'Change the EcoFlow account';
+    } else {
+      $('#cfgUidState').textContent =
+        'No EcoFlow account id stored — set one below, or the BLE auth will fail.';
+      $('#cfgAcctSummary').textContent = 'Set the EcoFlow account';
+      $('#cfgAcctDetails').open = true;
+    }
     cfgLoaded = true;
   } catch (e) { $('#cfgMsg').textContent = 'Could not load current config.'; }
 }
@@ -270,20 +279,33 @@ async function pollCfgBle(deadline, first) {
         sel.appendChild(o);
       });
     sel.value = keep;
-    $('#cfgBleHint').textContent = d.scanning ? 'Scanning…'
-      : `Found ${(d.devices || []).length} device(s). The BLE link resumes shortly.`;
-    if (d.scanning && Date.now() < deadline)
-      cfgBleTimer = setTimeout(() => pollCfgBle(deadline, false), 1500);
-    else $('#cfgBleScan').disabled = false;
+    if (d.scanning) {
+      $('#cfgBleHint').textContent = 'Scanning…';
+      if (Date.now() < deadline)
+        cfgBleTimer = setTimeout(() => pollCfgBle(deadline, false), 1500);
+      else finishScan();
+    } else {
+      $('#cfgBleHint').textContent = `Found ${(d.devices || []).length} device(s).`;
+      finishScan();
+    }
   } catch (e) {
     $('#cfgBleHint').textContent = 'Scan failed.';
-    $('#cfgBleScan').disabled = false;
+    finishScan();
   }
+}
+function finishScan() {
+  cfgScanned = true;
+  const b = $('#cfgBleScan');
+  b.disabled = false;
+  b.textContent = 'Re-scan';
 }
 $('#cfgBleScan').onclick = () => {
   clearTimeout(cfgBleTimer);
   $('#cfgBleScan').disabled = true;
-  $('#cfgBleHint').textContent = 'Scanning…';
+  $('#cfgBleScan').textContent = cfgScanned ? 'Re-scanning…' : 'Scanning…';
+  $('#cfgBleHint').textContent = lastStatus.ble_connected
+    ? 'Scanning… (the BLE link drops during the scan and resumes after)'
+    : 'Scanning…';
   pollCfgBle(Date.now() + 12000, true);
 };
 $('#cfgBleSel').onchange = () => {
