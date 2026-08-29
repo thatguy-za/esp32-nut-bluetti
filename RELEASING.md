@@ -1,34 +1,40 @@
-# Releasing
+# Versioning & releases
 
-Versions come from git tags — ESP-IDF bakes `git describe` into
-`esp_app_desc.version`, which the admin page and the OTA UI display.
+The version lives in [`version.txt`](version.txt). ESP-IDF bakes it into
+`esp_app_desc.version`, which the admin page and the OTA update UI show.
 
-To cut a release:
+## Every commit bumps it
+
+`version.txt` is bumped in the **same commit** as the change, so no two builds
+ever report the same version:
+
+- **patch** (`0.2.0` → `0.2.1`) — fixes, docs, tests, refactors
+- **minor** (`0.2.0` → `0.3.0`) — user-visible features
+- **major** — after 1.0
+
+## Cutting a release
+
+A release is a commit whose `version.txt` you also tag:
 
 ```bash
-git tag -a vX.Y.Z -m "vX.Y.Z"
-git push origin vX.Y.Z
+# version.txt already bumped and committed
+V=$(cat version.txt)
+git tag -a "v$V" -m "v$V"
+git push origin main "v$V"
 
-# build from the tagged tree so the image reports the right version
-rm -rf build
-idf.py build
+rm -rf build && idf.py build            # image reports v$V
 idf.py merge-bin -o esp32-nut-ecoflow-factory.bin
+# update dist/FLASHING.md size + sha256 to match
 
-gh release create vX.Y.Z --prerelease \
-  --notes-file - <<'EOF'
-...
-EOF
-gh release upload vX.Y.Z \
+gh release create "v$V" --prerelease --notes-file NOTES.md
+gh release upload  "v$V" \
   build/esp32-nut-ecoflow-factory.bin build/esp32-nut-ecoflow.bin
 ```
 
-Rules:
+## Rules
 
-- **Never** `git tag -f` / force-push a tag that's already published.
-- One tag per release; bump the version for every change that ships a binary.
+- **Never** `git tag -f` or force-push a published tag. Wrong upload → new patch
+  version, new tag.
+- One tag per version; the tag name is `v` + `version.txt`.
 - `dist/*.bin` is git-ignored — binaries live only on the release.
-- Keep `dist/FLASHING.md`'s size/sha256 in step with the uploaded factory image.
-
-Versioning: `0.MINOR.PATCH` while pre-1.0. Bump MINOR for features, PATCH for
-fixes. Stay `--prerelease` until the BLE handshake is confirmed on real
-hardware.
+- Stay `--prerelease` until the BLE handshake is confirmed on real hardware.
