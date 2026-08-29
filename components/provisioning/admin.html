@@ -225,10 +225,30 @@
   </div>
 
   <div class="box">
-    <h2>Re-provision</h2>
-    <p>Forget every stored setting (Wi-Fi, EcoFlow, NUT) and reboot into the
-      setup access point.</p>
-    <button class="act danger" id="reset">Forget config &amp; reboot</button>
+    <h2>Admin login</h2>
+    <form id="credForm">
+      <label for="credUser">Username</label>
+      <input id="credUser" name="auth_user" autocomplete="username" maxlength="32">
+      <label for="credCur">Current password</label>
+      <input id="credCur" name="current_pass" type="password"
+             autocomplete="current-password">
+      <label for="credNew">New password</label>
+      <input id="credNew" name="auth_pass" type="password"
+             autocomplete="new-password" required>
+      <label for="credNew2">Confirm new password</label>
+      <input id="credNew2" type="password" autocomplete="new-password" required>
+      <p><button class="act" id="credSave">Update login</button>
+         <span class="hint" id="credMsg"></span></p>
+      <p class="hint">Your browser caches the old login for this session — after
+        changing it, close the tab (or use a private window) to be asked again.</p>
+    </form>
+  </div>
+
+  <div class="box">
+    <h2>Reset</h2>
+    <p>Forget every stored setting (Wi-Fi, admin login, EcoFlow, NUT) and reboot
+      into the setup access point.</p>
+    <button class="act danger" id="reset">Reset &amp; reboot</button>
     <p class="hint" id="resetMsg"></p>
   </div>
 </section>
@@ -241,7 +261,7 @@ tabs.forEach(b => b.onclick = () => {
   document.querySelectorAll('section').forEach(s =>
     s.classList.toggle('active', s.id === b.dataset.tab));
   if (b.dataset.tab === 'status') pollLogs();
-  if (['ecoflow', 'nut', 'wifi'].includes(b.dataset.tab)) loadConfig();
+  if (['ecoflow', 'nut', 'wifi', 'maint'].includes(b.dataset.tab)) loadConfig();
 });
 
 /* ---- status ---- */
@@ -339,6 +359,9 @@ async function loadConfig() {
       $('#wifiSsid').appendChild(o);
       $('#wifiSsid').value = cfg.wifi_ssid;
     }
+    $('#credUser').value = cfg.auth_user || 'admin';
+    $('#credCur').disabled = !cfg.auth_set;
+    $('#credCur').placeholder = cfg.auth_set ? '' : 'no password set yet';
     $('#wifiPass').placeholder = cfg.has_wifi_pass ? 'unchanged' : 'none set';
     $('#apPass').placeholder = cfg.has_ap_pass ? 'unchanged' : 'none set';
     syncWifiMode();
@@ -503,6 +526,38 @@ $('#reset').onclick = () => {
   fetch('/api/factory-reset', { method: 'POST' })
     .then(() => $('#resetMsg').textContent =
       'Rebooting into setup mode — join the esp-nut-ecoflow-XXXX network.');
+};
+
+/* ---- admin login ---- */
+$('#credForm').onsubmit = async ev => {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  if (!fd.get('auth_pass')) {
+    $('#credMsg').textContent = 'Enter a new password.'; return;
+  }
+  if (fd.get('auth_pass') !== $('#credNew2').value) {
+    $('#credMsg').textContent = 'The two passwords don’t match.'; return;
+  }
+  $('#credSave').disabled = true;
+  $('#credMsg').textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/credentials',
+      { method: 'POST', body: new URLSearchParams(fd) });
+    if (!r.ok) {
+      let why = '';
+      try { why = (await r.text()).trim(); } catch (e) {}
+      if (!why || why.length > 120 || why.includes('<')) why = 'HTTP ' + r.status;
+      throw new Error(why);
+    }
+  } catch (e) {
+    $('#credMsg').textContent = 'Failed: ' + e.message;
+    $('#credSave').disabled = false;
+    return;
+  }
+  $('#credMsg').textContent = 'Login updated.';
+  ev.target.reset();
+  $('#credUser').value = cfg.auth_user || 'admin';
+  $('#credSave').disabled = false;
 };
 
 /* ---- firmware update ---- */

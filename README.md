@@ -70,7 +70,7 @@ Join it from a phone or laptop — a captive-portal DNS server redirects
 everything to the setup page, so it should pop up automatically; if not, browse
 to `http://192.168.4.1/`.
 
-Pick one:
+**Step 1 — network.** Pick one:
 
 - **Join my Wi-Fi** (default) — choose your network from the scanned list and
   enter the password. On success the page shows the bridge's new LAN IP as a
@@ -79,6 +79,11 @@ Pick one:
 - **Run its own AP** — name the network and set a password (8+ chars, or leave
   blank for open). The bridge reboots hosting that network at
   `http://192.168.4.1/`. Your NUT clients have to join it too.
+
+**Step 2 — admin login.** Choose the username (default `admin`) and a password
+for the bridge's own page. Any password is accepted, but you have to set one —
+the admin page is what configures the EcoFlow unit, reads the logs and flashes
+firmware.
 
 ### 2. EcoFlow + NUT (admin page)
 
@@ -115,16 +120,22 @@ In normal operation the device serves a page at `http://<device-ip>/`:
     Gated by a typed `FLASH` confirmation. Disable with
     `CONFIG_ENABLE_WEB_OTA=n`.
   - **Restart** — reboot, keeping settings.
-  - **Re-provision** — forget everything and reboot into the setup AP.
+  - **Admin login** — change the username / password (the current password is
+    required).
+  - **Reset** — forget everything and reboot into the setup AP.
 
-There is **no authentication** — anyone on the network can read the logs and
-(with OTA enabled) flash firmware. Keep it on a trusted LAN.
+The admin page is protected by the username and password you set during setup
+(HTTP Basic). There is **no TLS**, so credentials cross the network
+base64-encoded, not encrypted — this keeps other people on the LAN out of the
+admin page, it does not defend against someone capturing your traffic. Keep the
+bridge on a trusted network.
 
-### Re-provisioning
+### Reset
 
 - **BOOT button:** hold GPIO0 to GND while resetting, keep it held ~3 s. The
   stored config is wiped and the device reboots into setup mode. (Pin and hold
-  time are configurable in `menuconfig`.)
+  time are configurable in `menuconfig`.) This is also the way back in if you
+  forget the admin password.
 - **Web:** the Maintenance tab of the admin page.
 
 If stored Wi-Fi credentials ever stop working, the device falls back to setup
@@ -150,9 +161,11 @@ anyone); keep the device on a trusted LAN.
 
 - **NUT server** — upsd-compatible, read-only; verified against a third-party
   NUT client (`LIST UPS/VAR`, `GET VAR`, `upsmon` primary handshake, …).
-- **Provisioning** — captive-portal Wi-Fi setup (join a network or run as an
-  AP), then EcoFlow + NUT from the admin page; config in NVS, BOOT-button / web
-  re-provision.
+- **Provisioning** — two-step captive portal (network, then admin login), with
+  EcoFlow + NUT set from the admin page afterwards; config in NVS, BOOT-button /
+  web reset.
+- **Admin auth** — HTTP Basic on every admin route; the password is stored as a
+  salted SHA-256, never in the clear.
 - **EcoFlow BLE "V2" stack** — ECDH (secp160r1) key agreement, AES-128-CBC
   session, keydata session-key derivation, both framing layers, `MD5(user_id +
   serial)` account auth, and a protobuf reader for the `pr705` telemetry
@@ -170,6 +183,9 @@ anyone); keep the device on a trusted LAN.
   (which is what the device interoperates with).
 - **NUT server** — full protocol conformance driven over a socket by a test
   client, plus the `upsmon` primary handshake.
+- **Admin auth** — password hashing/verification and Basic-header parsing:
+  salt uniqueness, wrong / empty / wrong-case passwords rejected, and no
+  length or character restrictions.
 - **Framing** — CRC-8/16, inner-packet build↔parse, XOR deobfuscation, frame
   reassembly across split BLE notifications.
 
@@ -218,11 +234,16 @@ afterwards.
 
 ## Security
 
-The NUT server is **read-only and unauthenticated** — `LOGIN` is accepted from
-anyone on the network, and there is no TLS. Keep the bridge on a trusted LAN and
-do not expose port 3493 (or the setup portal) to the internet. During first-run
-setup the Wi-Fi AP is open; it shuts down as soon as the device joins your
-network.
+- **Admin page** — HTTP Basic auth with the credentials chosen during setup.
+  The password is stored only as a salted SHA-256, and compared in constant
+  time. There is no TLS, so the credential is base64 on the wire: this keeps
+  other people on your LAN out, it is not protection against traffic capture.
+- **NUT server** — read-only and **unauthenticated**: `LOGIN` is accepted from
+  anyone that can reach port 3493. That is deliberate (NUT clients expect it),
+  so treat the port as public on your LAN.
+- Don't expose either port to the internet. During first-run setup the Wi-Fi AP
+  is open; it shuts down as soon as the device joins your network.
+- Forgot the password? Hold the BOOT button through a reset to wipe the config.
 
 ## Protocol notes
 

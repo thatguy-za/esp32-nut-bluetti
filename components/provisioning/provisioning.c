@@ -23,6 +23,7 @@
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
 #include "esp_app_desc.h"
+#include "mbedtls/base64.h"
 
 #include "wifi_mgr.h"
 #include "ecoflow_ble.h"
@@ -123,6 +124,64 @@ static esp_err_t send_json(httpd_req_t *r, const char *json)
     return httpd_resp_sendstr(r, json);
 }
 
+/* ---- admin authentication (HTTP Basic) ---------------------------- *
+ * There is no TLS here, so this keeps casual users off the admin page
+ * rather than defending against someone sniffing the LAN. The password
+ * itself is stored only as a salted SHA-256.                          */
+
+static bool auth_ok(httpd_req_t *r)
+{
+    if (!P.cfg || !P.cfg->auth_set) {
+        return true;                       /* not configured yet */
+    }
+    size_t len = httpd_req_get_hdr_value_len(r, "Authorization");
+    if (len == 0 || len > 400) {
+        return false;
+    }
+    char hdr[416];
+    if (httpd_req_get_hdr_value_str(r, "Authorization", hdr, sizeof(hdr)) != ESP_OK) {
+        return false;
+    }
+    if (strncasecmp(hdr, "Basic ", 6) != 0) {
+        return false;
+    }
+
+    unsigned char dec[160];
+    size_t dlen = 0;
+    if (mbedtls_base64_decode(dec, sizeof(dec) - 1, &dlen,
+                              (const unsigned char *)hdr + 6,
+                              strlen(hdr + 6)) != 0) {
+        return false;
+    }
+    dec[dlen] = '\0';
+
+    char *colon = strchr((char *)dec, ':');
+    if (!colon) {
+        return false;
+    }
+    *colon = '\0';
+    bool ok = strcmp((char *)dec, P.cfg->auth_user) == 0 &&
+              app_config_check_password(P.cfg, colon + 1);
+    memset(dec, 0, sizeof(dec));           /* don't leave it on the stack */
+    return ok;
+}
+
+static esp_err_t send_401(httpd_req_t *r)
+{
+    httpd_resp_set_status(r, "401 Unauthorized");
+    httpd_resp_set_hdr(r, "WWW-Authenticate",
+                       "Basic realm=\"EcoFlow NUT Bridge\", charset=\"UTF-8\"");
+    httpd_resp_set_type(r, "text/plain");
+    return httpd_resp_sendstr(r, "Authentication required");
+}
+
+/* Wrap a handler so it 401s unless the request carries valid credentials. */
+#define REQUIRE_AUTH(req) do {            \
+        if (!auth_ok(req)) {              \
+            return send_401(req);         \
+        }                                 \
+    } while (0)
+
 /* ---- BLE scan glue -------------------------------------------------- */
 
 static void ble_scan_cb(const ecoflow_scan_entry_t *e, void *user)
@@ -136,6 +195,7 @@ static void ble_scan_cb(const ecoflow_scan_entry_t *e, void *user)
 
 static esp_err_t h_ble_scan(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);   /* no-op during setup: no password set yet */
     /* A bare GET (re)starts a scan; "?poll=1" only reports progress. */
     char q[16] = "";
     httpd_req_get_url_query_str(r, q, sizeof(q));
@@ -172,6 +232,7 @@ static esp_err_t h_ble_scan(httpd_req_t *r)
 
 static esp_err_t h_wifi_scan(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);   /* no-op during setup: no password set yet */
     wifi_scan_entry_t aps[20];
     int n = wifi_mgr_scan(aps, 20);
     if (n < 0) n = 0;
@@ -241,10 +302,28 @@ static esp_err_t h_provision(httpd_req_t *r)
     form_get(body, "wifi_mode", mode, sizeof(mode));
     bool ap_mode = strcmp(mode, "ap") == 0;
 
+    /* Step 2 of the portal: the admin login for the page you'll land on. */
+    char auth_user[33] = "", auth_pass[128] = "";
+    form_get(body, "auth_user", auth_user, sizeof(auth_user));
+    form_get(body, "auth_pass", auth_pass, sizeof(auth_pass));
+    if (auth_pass[0] == '\0') {
+        memset(body, 0, len);
+        free(body);
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                   "an admin password is required");
+    }
+    if (auth_user[0] == '\0') {
+        strlcpy(auth_user, "admin", sizeof(auth_user));
+    }
+    strlcpy(P.pending.auth_user, auth_user, sizeof(P.pending.auth_user));
+    app_config_set_password(&P.pending, auth_pass);
+    memset(auth_pass, 0, sizeof(auth_pass));
+
     if (ap_mode) {
         P.pending.wifi_mode = APP_WIFI_AP;
         form_get(body, "ap_ssid", P.pending.ap_ssid, sizeof(P.pending.ap_ssid));
         form_get(body, "ap_pass", P.pending.ap_pass, sizeof(P.pending.ap_pass));
+        memset(body, 0, len);
         free(body);
 
         size_t plen = strlen(P.pending.ap_pass);
@@ -273,6 +352,7 @@ static esp_err_t h_provision(httpd_req_t *r)
     P.pending.wifi_mode = APP_WIFI_STATION;
     form_get(body, "ssid", P.pending.wifi_ssid, sizeof(P.pending.wifi_ssid));
     form_get(body, "pass", P.pending.wifi_pass, sizeof(P.pending.wifi_pass));
+    memset(body, 0, len);
     free(body);
 
     if (P.pending.wifi_ssid[0] == '\0') {
@@ -334,6 +414,7 @@ static esp_err_t h_admin_status(httpd_req_t *r);
 static esp_err_t h_admin_logs(httpd_req_t *r);
 static esp_err_t h_admin_config(httpd_req_t *r);
 static esp_err_t h_admin_reconfigure(httpd_req_t *r);
+static esp_err_t h_admin_credentials(httpd_req_t *r);
 static esp_err_t h_admin_reboot(httpd_req_t *r);
 static esp_err_t h_factory_reset(httpd_req_t *r);
 #if CONFIG_ENABLE_WEB_OTA
@@ -379,6 +460,7 @@ static esp_err_t start_httpd(bool captive)
         reg(P.httpd, "/api/logs", HTTP_GET, h_admin_logs);
         reg(P.httpd, "/api/config", HTTP_GET, h_admin_config);
         reg(P.httpd, "/api/reconfigure", HTTP_POST, h_admin_reconfigure);
+        reg(P.httpd, "/api/credentials", HTTP_POST, h_admin_credentials);
         reg(P.httpd, "/api/ble-scan", HTTP_GET, h_ble_scan);
         reg(P.httpd, "/api/wifi-scan", HTTP_GET, h_wifi_scan);
         reg(P.httpd, "/api/reboot", HTTP_POST, h_admin_reboot);
@@ -433,6 +515,7 @@ esp_err_t provisioning_run(app_config_t *cfg)
 
 static esp_err_t h_admin_root(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     httpd_resp_set_type(r, "text/html");
     return httpd_resp_send(r, admin_html_start,
                            admin_html_end - admin_html_start - 1);
@@ -440,6 +523,7 @@ static esp_err_t h_admin_root(httpd_req_t *r)
 
 static esp_err_t h_admin_status(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     bool ap = P.cfg->wifi_mode == APP_WIFI_AP;
     char ip[16];
     if (ap) {
@@ -482,6 +566,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
 
 static esp_err_t h_admin_logs(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     char q[40] = "";
     httpd_req_get_url_query_str(r, q, sizeof(q));
     uint64_t from = 0;
@@ -509,6 +594,7 @@ static esp_err_t h_admin_logs(httpd_req_t *r)
 
 static esp_err_t h_factory_reset(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     httpd_resp_sendstr(r, "{\"ok\":true}");
     ESP_LOGW(TAG, "factory reset requested via web");
     app_config_erase();
@@ -521,21 +607,24 @@ static esp_err_t h_factory_reset(httpd_req_t *r)
 
 static esp_err_t h_admin_config(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     char def_ap[33];
     wifi_mgr_default_ap_ssid(def_ap, sizeof(def_ap));
-    char out[420];
+    char out[560];   /* grows with ssid + ap_ssid + user */
     snprintf(out, sizeof(out),
              "{\"ble_addr\":\"%s\",\"ble_name\":\"%s\",\"has_user_id\":%s,"
              "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
              "\"wifi_mode\":\"%s\",\"wifi_ssid\":\"%s\",\"has_wifi_pass\":%s,"
-             "\"ap_ssid\":\"%s\",\"has_ap_pass\":%s,\"default_ap_ssid\":\"%s\"}",
+             "\"ap_ssid\":\"%s\",\"has_ap_pass\":%s,\"default_ap_ssid\":\"%s\","
+             "\"auth_user\":\"%s\",\"auth_set\":%s}",
              P.cfg->ble_addr, P.cfg->ble_name,
              P.cfg->ef_user_id[0] ? "true" : "false",
              P.cfg->ups_name, P.cfg->nut_port, P.cfg->low_pct, P.cfg->poll_ms,
              P.cfg->wifi_mode == APP_WIFI_AP ? "ap" : "station",
              P.cfg->wifi_ssid, P.cfg->wifi_pass[0] ? "true" : "false",
              P.cfg->ap_ssid[0] ? P.cfg->ap_ssid : def_ap,
-             P.cfg->ap_pass[0] ? "true" : "false", def_ap);
+             P.cfg->ap_pass[0] ? "true" : "false", def_ap,
+             P.cfg->auth_user, P.cfg->auth_set ? "true" : "false");
     return send_json(r, out);
 }
 
@@ -545,8 +634,65 @@ static void reboot_after_delay(void *arg)
     esp_restart();
 }
 
+/* POST /api/credentials — change the admin login. Requires the current
+ * password so a hijacked open session can't lock the owner out. */
+static esp_err_t h_admin_credentials(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    int len = r->content_len;
+    if (len <= 0 || len > 1024) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
+    }
+    char *body = malloc(len + 1);
+    if (!body) {
+        return httpd_resp_send_500(r);
+    }
+    int got = 0;
+    while (got < len) {
+        int k = httpd_req_recv(r, body + got, len - got);
+        if (k <= 0) { free(body); return httpd_resp_send_500(r); }
+        got += k;
+    }
+    body[len] = '\0';
+
+    char user[33] = "", cur[128] = "", pass[128] = "";
+    form_get(body, "auth_user", user, sizeof(user));
+    form_get(body, "current_pass", cur, sizeof(cur));
+    form_get(body, "auth_pass", pass, sizeof(pass));
+    memset(body, 0, len);
+    free(body);
+
+    if (P.cfg->auth_set && !app_config_check_password(P.cfg, cur)) {
+        memset(pass, 0, sizeof(pass));
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                   "current password is wrong");
+    }
+    if (pass[0] == '\0') {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                   "a password is required");
+    }
+    if (user[0] == '\0') {
+        strlcpy(user, "admin", sizeof(user));
+    }
+
+    P.pending = *P.cfg;
+    strlcpy(P.pending.auth_user, user, sizeof(P.pending.auth_user));
+    app_config_set_password(&P.pending, pass);
+    memset(pass, 0, sizeof(pass));
+    memset(cur, 0, sizeof(cur));
+
+    *P.cfg = P.pending;
+    if (app_config_save(P.cfg) != ESP_OK) {
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "could not save config");
+    }
+    ESP_LOGW(TAG, "admin credentials changed (user '%s')", P.cfg->auth_user);
+    return send_json(r, "{\"ok\":true}");
+}
+
 static esp_err_t h_admin_reconfigure(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     int len = r->content_len;
     if (len <= 0 || len > 1024) {
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
@@ -686,6 +832,7 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
 
 static esp_err_t h_admin_reboot(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     ESP_LOGW(TAG, "reboot requested via web");
     send_json(r, "{\"ok\":true}");
     xTaskCreate(reboot_after_delay, "reboot", 2048, NULL, 5, NULL);
@@ -702,6 +849,7 @@ static void reboot_task(void *arg)
 /* POST /api/ota  — body is a raw app image; header X-Confirm: FLASH */
 static esp_err_t h_ota(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     char confirm[16] = "";
     httpd_req_get_hdr_value_str(r, "X-Confirm", confirm, sizeof(confirm));
     if (strcmp(confirm, "FLASH") != 0) {

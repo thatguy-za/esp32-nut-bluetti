@@ -4,12 +4,14 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
+#include "esp_random.h"
+#include "mbedtls/sha256.h"
 
 static const char *TAG = "app_config";
 
 #define CFG_NS      "efnut"
 #define CFG_KEY     "cfg"
-#define CFG_VERSION 3u
+#define CFG_VERSION 4u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -31,6 +33,8 @@ void app_config_defaults(app_config_t *cfg)
     cfg->nut_port = CONFIG_NUT_TCP_PORT;
     cfg->poll_ms  = CONFIG_ECOFLOW_POLL_INTERVAL_MS;
     cfg->low_pct  = CONFIG_NUT_BATTERY_LOW_PCT;
+    strlcpy(cfg->auth_user, "admin", sizeof(cfg->auth_user));
+    cfg->auth_set = false;           /* setup must choose a password */
     cfg->provisioned = false;
 
     /* A blank SSID from Kconfig means "must provision". */
@@ -105,4 +109,49 @@ esp_err_t app_config_erase(void)
     nvs_close(h);
     ESP_LOGW(TAG, "erase config: %s", esp_err_to_name(err));
     return err;
+}
+
+/* ---- admin password ------------------------------------------------ */
+
+static void hash_password(const uint8_t salt[16], const char *password,
+                          uint8_t out[32])
+{
+    mbedtls_sha256_context c;
+    mbedtls_sha256_init(&c);
+    mbedtls_sha256_starts(&c, 0);            /* 0 = SHA-256, not SHA-224 */
+    mbedtls_sha256_update(&c, salt, 16);
+    mbedtls_sha256_update(&c, (const uint8_t *)password, strlen(password));
+    mbedtls_sha256_finish(&c, out);
+    mbedtls_sha256_free(&c);
+}
+
+void app_config_set_password(app_config_t *cfg, const char *password)
+{
+    if (!password || password[0] == '\0') {
+        memset(cfg->auth_salt, 0, sizeof(cfg->auth_salt));
+        memset(cfg->auth_hash, 0, sizeof(cfg->auth_hash));
+        cfg->auth_set = false;
+        return;
+    }
+    esp_fill_random(cfg->auth_salt, sizeof(cfg->auth_salt));
+    hash_password(cfg->auth_salt, password, cfg->auth_hash);
+    cfg->auth_set = true;
+}
+
+bool app_config_check_password(const app_config_t *cfg, const char *password)
+{
+    if (!cfg->auth_set) {
+        return true;              /* nothing set yet: nothing to enforce */
+    }
+    if (!password) {
+        return false;
+    }
+    uint8_t want[32];
+    hash_password(cfg->auth_salt, password, want);
+    /* Constant time: never leak how much of the hash matched. */
+    uint8_t diff = 0;
+    for (size_t i = 0; i < sizeof(want); i++) {
+        diff |= want[i] ^ cfg->auth_hash[i];
+    }
+    return diff == 0;
 }

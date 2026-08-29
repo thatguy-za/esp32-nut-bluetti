@@ -1,12 +1,13 @@
 # Host tests
 
 Portable-logic tests that run without ESP-IDF or hardware. `make` builds and
-runs all three C suites:
+runs all four C suites:
 
 | Suite | Covers |
 | --- | --- |
 | `ef_logic_test` | CRC-8 / CRC-16, inner-packet build+parse, XOR payload deobfuscation, protobuf field scanner, frame reassembly across split notifications |
 | `ef_river3_test` | **5 real `DisplayPropertyUpload` packets captured from a River 3 UPS** (via [`rabits/ha-ef-ble`](https://github.com/rabits/ha-ef-ble)), decoded through the actual C code and checked against ha-ef-ble's documented values (SOC 75 %, AC-in 43.76 W, load 56 W, discharging 2 W, 33 °C, backup mode, runtime 3807/3827 min) |
+| `auth_test` | admin password hashing + verification and Basic-auth header parsing: salted SHA-256 (checked against the SHA-256("abc") vector), wrong/empty/wrong-case rejection, salt uniqueness, no length or character restrictions, passwords containing `:` |
 | `nut_server_test` | drives the real `nut_server.c` over a loopback socket: `LIST UPS/VAR`, `GET VAR`, `GET UPSDESC/NUMLOGINS`, the `upsmon` primary handshake (`USERNAME`/`PASSWORD`/`LOGIN`/`PRIMARY`), empty `LIST CLIENT/RW`, error replies |
 
 ## Crypto cross-check (optional)

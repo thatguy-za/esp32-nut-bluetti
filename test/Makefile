@@ -12,10 +12,11 @@ UECC_DEFS := -DuECC_SUPPORTS_secp160r1=1 -DuECC_SUPPORTS_secp192r1=0 \
              -DuECC_SUPPORTS_secp256k1=0 -DuECC_SUPPORT_COMPRESSED_POINT=0
 
 .PHONY: all clean xcheck
-all: ef_logic_test ef_river3_test nut_server_test
+all: ef_logic_test ef_river3_test nut_server_test auth_test
 	./ef_logic_test
 	./ef_river3_test
 	./nut_server_test
+	./auth_test
 
 ef_logic_test: ef_logic_test.c ef_stub.c $(EF)/ef_frame.c $(EF)/ef_proto.c
 	$(CC) $(CFLAGS) $(INC) $^ -lm -o $@
@@ -26,8 +27,11 @@ ef_river3_test: ef_river3_test.c ef_stub.c $(EF)/ef_frame.c $(EF)/ef_proto.c
 nut_server_test: nut_server_test.c $(NUT)/nut_server.c
 	$(CC) $(CFLAGS) -Ishim -I$(NUT)/include $^ -lpthread -o $@
 
+auth_test: auth_test.c
+	$(CC) $(CFLAGS) $^ -o $@
+
 xcheck: xcheck_helper.c $(UECC)/uECC.c
 	$(CC) $(CFLAGS) -w -I$(UECC) $(UECC_DEFS) $^ -o $@
 
 clean:
-	rm -rf ef_logic_test ef_river3_test nut_server_test xcheck *.dSYM
+	rm -rf ef_logic_test ef_river3_test nut_server_test auth_test xcheck *.dSYM

@@ -6,6 +6,6 @@ idf_component_register(
     INCLUDE_DIRS "include"
     
     REQUIRES esp_http_server app_config wifi_mgr ecoflow_ble
-    PRIV_REQUIRES esp_wifi lwip esp_timer app_update esp_app_format
+    PRIV_REQUIRES esp_wifi lwip esp_timer app_update esp_app_format mbedtls
     EMBED_TXTFILES "portal.html" "admin.html"
 )

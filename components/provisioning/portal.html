@@ -39,43 +39,66 @@
 </head>
 <body>
 <h1>EcoFlow NUT Bridge</h1>
-<p class="sub">First, get the bridge onto a network. Once it's there, its own
-  page will walk you through the EcoFlow unit and NUT.</p>
+<p class="sub" id="sub">Step 1 of 2 — get the bridge onto a network.</p>
 
 <form id="f">
-  <div class="modes">
-    <label><input type="radio" name="wifi_mode" value="sta" checked>
-      Join my Wi-Fi
-      <div class="hint">Recommended</div></label>
-    <label><input type="radio" name="wifi_mode" value="ap">
-      Run its own AP
-      <div class="hint">No network needed</div></label>
+  <!-- ---------- step 1: network ---------- -->
+  <div id="step1">
+    <div class="modes">
+      <label><input type="radio" name="wifi_mode" value="sta" checked>
+        Join my Wi-Fi
+        <div class="hint">Recommended</div></label>
+      <label><input type="radio" name="wifi_mode" value="ap">
+        Run its own AP
+        <div class="hint">No network needed</div></label>
+    </div>
+
+    <fieldset id="staBox">
+      <legend>Join a Wi-Fi network</legend>
+      <label for="ssid">Network</label>
+      <select id="ssid" name="ssid"></select>
+      <button type="button" class="secondary" id="wifiScan">Rescan networks</button>
+      <div class="hint" id="wifiHint">Scanning…</div>
+      <label for="pass">Password</label>
+      <input id="pass" name="pass" type="password" autocomplete="off">
+      <div class="hint">Leave blank for an open network.</div>
+    </fieldset>
+
+    <fieldset id="apBox" hidden>
+      <legend>Run as an access point</legend>
+      <div class="hint">The bridge keeps its own Wi-Fi network up and you connect
+        to it directly. Your NUT clients must join this network too.</div>
+      <label for="apSsid">Network name (SSID)</label>
+      <input id="apSsid" name="ap_ssid" autocomplete="off" maxlength="32">
+      <label for="apPass">Password</label>
+      <input id="apPass" name="ap_pass" type="password" autocomplete="off"
+             minlength="8" maxlength="63">
+      <div class="hint">At least 8 characters, or leave blank for an open network.</div>
+    </fieldset>
+
+    <button type="button" id="next">Next</button>
   </div>
 
-  <fieldset id="staBox">
-    <legend>Join a Wi-Fi network</legend>
-    <label for="ssid">Network</label>
-    <select id="ssid" name="ssid"></select>
-    <button type="button" class="secondary" id="wifiScan">Rescan networks</button>
-    <div class="hint" id="wifiHint">Scanning…</div>
-    <label for="pass">Password</label>
-    <input id="pass" name="pass" type="password" autocomplete="off">
-    <div class="hint">Leave blank for an open network.</div>
-  </fieldset>
+  <!-- ---------- step 2: admin login ---------- -->
+  <div id="step2" hidden>
+    <fieldset>
+      <legend>Admin login</legend>
+      <div class="hint">This protects the bridge's own page — the one you'll use
+        to set up the EcoFlow unit, read logs and update firmware.</div>
+      <label for="authUser">Username</label>
+      <input id="authUser" name="auth_user" autocomplete="off" value="admin"
+             maxlength="32">
+      <label for="authPass">Password</label>
+      <input id="authPass" name="auth_pass" type="password" autocomplete="new-password"
+             required>
+      <label for="authPass2">Confirm password</label>
+      <input id="authPass2" type="password" autocomplete="new-password" required>
+      <div class="hint">Any password you like, but you have to set one.</div>
+    </fieldset>
 
-  <fieldset id="apBox" hidden>
-    <legend>Run as an access point</legend>
-    <div class="hint">The bridge keeps its own Wi-Fi network up and you connect
-      to it directly. Your NUT clients must join this network too.</div>
-    <label for="apSsid">Network name (SSID)</label>
-    <input id="apSsid" name="ap_ssid" autocomplete="off" maxlength="32">
-    <label for="apPass">Password</label>
-    <input id="apPass" name="ap_pass" type="password" autocomplete="off"
-           minlength="8" maxlength="63">
-    <div class="hint">At least 8 characters, or leave blank for an open network.</div>
-  </fieldset>
-
-  <button type="submit" id="save">Save &amp; continue</button>
+    <button type="button" class="secondary" id="back">Back</button>
+    <button type="submit" id="save">Save &amp; finish</button>
+  </div>
 </form>
 
 <div id="status"></div>
@@ -138,6 +161,29 @@ async function scanWifi() {
 }
 $('#wifiScan').onclick = scanWifi;
 
+/* ---- wizard steps ---- */
+function goStep(n) {
+  $('#step1').hidden = n !== 1;
+  $('#step2').hidden = n !== 2;
+  $('#sub').textContent = n === 1
+    ? 'Step 1 of 2 — get the bridge onto a network.'
+    : 'Step 2 of 2 — set the login for the bridge’s own page.';
+  statusEl.className = '';
+  window.scrollTo(0, 0);
+}
+$('#next').onclick = () => {
+  const ap = document.querySelector('input[name=wifi_mode]:checked').value === 'ap';
+  if (ap) {
+    const p = $('#apPass').value;
+    if (p && p.length < 8) { show('AP password must be at least 8 characters.', 'err'); return; }
+  } else if (!$('#ssid').value) {
+    show('Pick a Wi-Fi network first.', 'err'); return;
+  }
+  goStep(2);
+  $('#authPass').focus();
+};
+$('#back').onclick = () => goStep(1);
+
 /* ---- submit ---- */
 $('#f').onsubmit = async ev => {
   ev.preventDefault();
@@ -146,11 +192,9 @@ $('#f').onsubmit = async ev => {
   if (ap) { fd.delete('ssid'); fd.delete('pass'); }
   else    { fd.delete('ap_ssid'); fd.delete('ap_pass'); }
 
-  if (ap) {
-    const p = (fd.get('ap_pass') || '');
-    if (p && p.length < 8) { show('AP password must be at least 8 characters.', 'err'); return; }
-  } else if (!fd.get('ssid')) {
-    show('Pick a Wi-Fi network first.', 'err'); return;
+  if (!fd.get('auth_pass')) { show('Set an admin password.', 'err'); return; }
+  if (fd.get('auth_pass') !== $('#authPass2').value) {
+    show('The two passwords don’t match.', 'err'); return;
   }
 
   $('#save').disabled = true;
@@ -168,7 +212,8 @@ $('#f').onsubmit = async ev => {
     show(`Saved. The bridge is rebooting into access-point mode.<br><br>` +
          `Join <b>${name}</b>, then open ` +
          `<a id="goto" href="http://192.168.4.1/">http://192.168.4.1/</a> ` +
-         `to set up your EcoFlow unit and NUT.`, 'ok');
+         `and sign in as <b>${fd.get('auth_user') || 'admin'}</b> to set up your ` +
+         `EcoFlow unit and NUT.`, 'ok');
     return;
   }
 
@@ -181,7 +226,8 @@ $('#f').onsubmit = async ev => {
       show(`Connected. The bridge is now on your network at <b>${s.ip}</b>.<br><br>` +
            `Reconnect this device to your normal Wi-Fi, then open ` +
            `<a id="goto" href="http://${s.ip}/">http://${s.ip}/</a> ` +
-           `to set up your EcoFlow unit and NUT.<br>` +
+           `and sign in as <b>${fd.get('auth_user') || 'admin'}</b> to set up your ` +
+           `EcoFlow unit and NUT.<br>` +
            `<span class="hint">This setup network is shutting down now.</span>`, 'ok');
       return;
     }

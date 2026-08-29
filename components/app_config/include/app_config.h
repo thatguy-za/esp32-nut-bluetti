@@ -33,6 +33,14 @@ typedef struct {
     uint16_t nut_port;
     uint16_t poll_ms;
     uint8_t  low_pct;
+
+    /* Admin-page login. The password is never stored in the clear: only a
+     * random salt and SHA-256(salt || password) are kept. */
+    char     auth_user[33];
+    uint8_t  auth_salt[16];
+    uint8_t  auth_hash[32];
+    bool     auth_set;       /* a password has been chosen                 */
+
     bool     provisioned;    /* set true once Wi-Fi setup has succeeded    */
 } app_config_t;
 
@@ -48,6 +56,14 @@ esp_err_t app_config_save(const app_config_t *cfg);
 
 /* Wipe the stored blob so the next boot re-enters provisioning. */
 esp_err_t app_config_erase(void);
+
+/* Choose the admin password: generates a fresh salt and stores the hash.
+ * An empty password clears auth_set (leaves the UI unprotected). */
+void app_config_set_password(app_config_t *cfg, const char *password);
+
+/* Constant-time check of a candidate password against the stored hash.
+ * Returns true when auth is unset (nothing to check yet). */
+bool app_config_check_password(const app_config_t *cfg, const char *password);
 
 #ifdef __cplusplus
 }
