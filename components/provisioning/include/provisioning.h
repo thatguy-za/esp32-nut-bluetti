@@ -15,7 +15,7 @@ extern "C" {
  *     provisioned = true),
  *   - the SoftAP / portal / DNS server are torn down,
  *   - the STA link is already up.
- * Requires wifi_mgr_init() and ecoflow_ble_host_init() beforehand.
+ * Requires wifi_mgr_init() and bluetti_ble_host_init() beforehand.
  */
 esp_err_t provisioning_run(app_config_t *cfg);
 

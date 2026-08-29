@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EcoFlow NUT Bridge setup</title>
+<title>BLUETTI NUT Bridge setup</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -38,7 +38,7 @@
 </style>
 </head>
 <body>
-<h1>EcoFlow NUT Bridge</h1>
+<h1>BLUETTI NUT Bridge</h1>
 <p class="sub" id="sub">Step 1 of 2 — get the bridge onto a network.</p>
 
 <form id="f">
@@ -84,7 +84,7 @@
     <fieldset>
       <legend>Admin login</legend>
       <div class="hint">This protects the bridge's own page — the one you'll use
-        to set up the EcoFlow unit, read logs and update firmware.</div>
+        to set up the BLUETTI unit, read logs and update firmware.</div>
       <label for="authUser">Username</label>
       <input id="authUser" name="auth_user" autocomplete="off" value="admin"
              maxlength="32">
@@ -213,7 +213,7 @@ $('#f').onsubmit = async ev => {
          `Join <b>${name}</b>, then open ` +
          `<a id="goto" href="http://192.168.4.1/">http://192.168.4.1/</a> ` +
          `and sign in as <b>${fd.get('auth_user') || 'admin'}</b> to set up your ` +
-         `EcoFlow unit and NUT.`, 'ok');
+         `BLUETTI unit and NUT.`, 'ok');
     return;
   }
 
@@ -227,7 +227,7 @@ $('#f').onsubmit = async ev => {
            `Reconnect this device to your normal Wi-Fi, then open ` +
            `<a id="goto" href="http://${s.ip}/">http://${s.ip}/</a> ` +
            `and sign in as <b>${fd.get('auth_user') || 'admin'}</b> to set up your ` +
-           `EcoFlow unit and NUT.<br>` +
+           `BLUETTI unit and NUT.<br>` +
            `<span class="hint">This setup network is shutting down now.</span>`, 'ok');
       return;
     }

@@ -30,7 +30,7 @@
 
 static const char *TAG = "nut_server";
 
-#define NUT_SERVER_VERSION "esp32-nut-ecoflow 0.1.0"
+#define NUT_SERVER_VERSION "esp32-nut-bluetti 0.1.0"
 #define CLIENT_RX_BUF      512
 #define CLIENT_TX_BUF      1024
 #define CLIENT_TASK_STACK  5120
@@ -546,7 +546,7 @@ int nut_server_start(const nut_server_config_t *config)
     }
     strlcpy(s.ups_name, config->ups_name ? config->ups_name : "ups",
             sizeof(s.ups_name));
-    strlcpy(s.ups_desc, config->ups_desc ? config->ups_desc : "EcoFlow via ESP32",
+    strlcpy(s.ups_desc, config->ups_desc ? config->ups_desc : "BLUETTI via ESP32",
             sizeof(s.ups_desc));
 
     s.lock = xSemaphoreCreateMutex();
@@ -555,13 +555,13 @@ int nut_server_start(const nut_server_config_t *config)
     }
 
     /* Seed the mandatory NUT variables so clients see a coherent UPS
-     * even before the first EcoFlow poll completes. */
-    nut_server_set_var("device.mfr", "EcoFlow");
+     * even before the first BLUETTI poll completes. */
+    nut_server_set_var("device.mfr", "BLUETTI");
     nut_server_set_var("device.model", s.ups_desc);
     nut_server_set_var("device.type", "ups");
-    nut_server_set_var("driver.name", "esp32-nut-ecoflow");
+    nut_server_set_var("driver.name", "esp32-nut-bluetti");
     nut_server_set_var("driver.version", NUT_SERVER_VERSION);
-    nut_server_set_var("ups.mfr", "EcoFlow");
+    nut_server_set_var("ups.mfr", "BLUETTI");
     nut_server_set_var("ups.model", s.ups_desc);
     nut_server_set_var("ups.status", "OFF");
     nut_server_set_var("battery.charge", "0");

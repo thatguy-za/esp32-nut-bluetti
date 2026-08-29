@@ -1,4 +1,4 @@
-menu "EcoFlow NUT Bridge"
+menu "BLUETTI NUT Bridge"
 
     comment "These are first-boot DEFAULTS only. The captive-portal setup"
     comment "writes the real values to NVS on first run."
@@ -35,33 +35,27 @@ menu "EcoFlow NUT Bridge"
             web UI beyond a typed confirmation, so disable this if the device
             might sit on an untrusted network.
 
-    config ECOFLOW_BLE_ADDRESS
-        string "EcoFlow BLE address"
+    config BLUETTI_BLE_ADDRESS
+        string "BLUETTI BLE address"
         default ""
         help
-            MAC address of the EcoFlow unit, e.g. AA:BB:CC:DD:EE:FF.
+            MAC address of the BLUETTI unit, e.g. AA:BB:CC:DD:EE:FF.
             Leave empty to connect by advertised name instead.
 
-    config ECOFLOW_BLE_NAME
-        string "EcoFlow BLE advertised name (fallback)"
+    config BLUETTI_BLE_NAME
+        string "BLUETTI BLE advertised name (fallback)"
         default "EF-R3"
         help
-            Used when ECOFLOW_BLE_ADDRESS is empty: connect to the first
+            Used when BLUETTI_BLE_ADDRESS is empty: connect to the first
             advertiser whose name starts with this prefix. River 3 is "EF-R3".
 
-    config ECOFLOW_USER_ID
-        string "Default EcoFlow account user id"
-        default ""
-        help
-            Required by the River 3 (and other "V2" units) BLE auth. Usually
-            set through the captive-portal setup instead of here.
 
-    config ECOFLOW_POLL_INTERVAL_MS
-        int "EcoFlow poll interval (ms)"
+    config BLUETTI_POLL_INTERVAL_MS
+        int "BLUETTI poll interval (ms)"
         default 5000
 
-    config ECOFLOW_BLE_TRACE
-        bool "Trace the EcoFlow BLE handshake (verbose, logs derived keys)"
+    config BLUETTI_BLE_TRACE
+        bool "Trace the BLUETTI BLE handshake (verbose, logs derived keys)"
         default n
         help
             Hex-dumps every handshake stage at INFO level — our/device public
@@ -71,7 +65,7 @@ menu "EcoFlow NUT Bridge"
 
     config NUT_UPS_NAME
         string "NUT UPS name"
-        default "ecoflow"
+        default "bluetti"
         help
             Name NUT clients use: upsc <name>@<esp32-ip>.
 

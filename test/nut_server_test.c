@@ -51,7 +51,7 @@ static bool verify(const char *user, const char *pass, void *ctx)
 int main(void)
 {
     nut_server_config_t cfg = {
-        .ups_name = "ecoflow", .ups_desc = "EcoFlow River 3 UPS (245Wh)",
+        .ups_name = "bluetti", .ups_desc = "BLUETTI River 3 UPS (245Wh)",
         .tcp_port = 3493, .max_clients = 4,
     };
     if (nut_server_start(&cfg) != 0) { fprintf(stderr, "start failed\n"); return 1; }
@@ -68,30 +68,30 @@ int main(void)
     if (fd < 0) return 1;
 
     char b[2048];
-    OKF(strstr(cmd(fd, "VER", b, sizeof b), "esp32-nut-ecoflow") != NULL, "VER -> %s", b);
+    OKF(strstr(cmd(fd, "VER", b, sizeof b), "esp32-nut-bluetti") != NULL, "VER -> %s", b);
     OKF(strcmp(cmd(fd, "NETVER", b, sizeof b), "1.3\n") == 0, "NETVER -> %s", b);
 
     cmd(fd, "LIST UPS", b, sizeof b);
-    OKF(strstr(b, "UPS ecoflow \"EcoFlow River 3 UPS (245Wh)\"") &&
+    OKF(strstr(b, "UPS bluetti \"BLUETTI River 3 UPS (245Wh)\"") &&
         strstr(b, "BEGIN LIST UPS") && strstr(b, "END LIST UPS"), "LIST UPS -> %s", b);
 
-    cmd(fd, "LIST VAR ecoflow", b, sizeof b);
-    OKF(strstr(b, "VAR ecoflow battery.charge \"75\"") &&
-        strstr(b, "VAR ecoflow ups.status \"OL\"") &&
-        strstr(b, "VAR ecoflow ups.model \"River 3 UPS (245Wh)\"") &&
-        strstr(b, "VAR ecoflow battery.temperature \"33.0\"") &&
-        strstr(b, "END LIST VAR ecoflow"), "LIST VAR has expected vars");
+    cmd(fd, "LIST VAR bluetti", b, sizeof b);
+    OKF(strstr(b, "VAR bluetti battery.charge \"75\"") &&
+        strstr(b, "VAR bluetti ups.status \"OL\"") &&
+        strstr(b, "VAR bluetti ups.model \"River 3 UPS (245Wh)\"") &&
+        strstr(b, "VAR bluetti battery.temperature \"33.0\"") &&
+        strstr(b, "END LIST VAR bluetti"), "LIST VAR has expected vars");
 
-    OKF(strcmp(cmd(fd, "GET VAR ecoflow battery.charge", b, sizeof b),
-               "VAR ecoflow battery.charge \"75\"\n") == 0, "GET VAR -> %s", b);
-    OKF(strcmp(cmd(fd, "GET VAR ecoflow no.such.var", b, sizeof b),
+    OKF(strcmp(cmd(fd, "GET VAR bluetti battery.charge", b, sizeof b),
+               "VAR bluetti battery.charge \"75\"\n") == 0, "GET VAR -> %s", b);
+    OKF(strcmp(cmd(fd, "GET VAR bluetti no.such.var", b, sizeof b),
                "ERR VAR-NOT-SUPPORTED\n") == 0, "GET unknown var -> %s", b);
     OKF(strcmp(cmd(fd, "GET VAR wrongups ups.status", b, sizeof b),
                "ERR UNKNOWN-UPS\n") == 0, "GET wrong ups -> %s", b);
-    OKF(strstr(cmd(fd, "GET UPSDESC ecoflow", b, sizeof b),
-               "UPSDESC ecoflow \"EcoFlow River 3 UPS (245Wh)\"") != NULL, "GET UPSDESC");
-    OKF(strcmp(cmd(fd, "GET NUMLOGINS ecoflow", b, sizeof b),
-               "NUMLOGINS ecoflow 0\n") == 0, "GET NUMLOGINS -> %s", b);
+    OKF(strstr(cmd(fd, "GET UPSDESC bluetti", b, sizeof b),
+               "UPSDESC bluetti \"BLUETTI River 3 UPS (245Wh)\"") != NULL, "GET UPSDESC");
+    OKF(strcmp(cmd(fd, "GET NUMLOGINS bluetti", b, sizeof b),
+               "NUMLOGINS bluetti 0\n") == 0, "GET NUMLOGINS -> %s", b);
 
     /* upsmon handshake with no login configured: anyone may LOGIN. */
     OKF(strcmp(cmd(fd, "USERNAME upsmon", b, sizeof b), "OK\n") == 0, "USERNAME");
@@ -100,13 +100,13 @@ int main(void)
                "ERR ALREADY-SET-USERNAME\n") == 0, "USERNAME twice rejected");
     OKF(strcmp(cmd(fd, "PASSWORD again", b, sizeof b),
                "ERR ALREADY-SET-PASSWORD\n") == 0, "PASSWORD twice rejected");
-    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "OK\n") == 0, "LOGIN (no auth set)");
-    OKF(strcmp(cmd(fd, "PRIMARY ecoflow", b, sizeof b), "OK\n") == 0, "PRIMARY");
-    OKF(strcmp(cmd(fd, "MASTER ecoflow", b, sizeof b), "OK\n") == 0, "MASTER (legacy)");
+    OKF(strcmp(cmd(fd, "LOGIN bluetti", b, sizeof b), "OK\n") == 0, "LOGIN (no auth set)");
+    OKF(strcmp(cmd(fd, "PRIMARY bluetti", b, sizeof b), "OK\n") == 0, "PRIMARY");
+    OKF(strcmp(cmd(fd, "MASTER bluetti", b, sizeof b), "OK\n") == 0, "MASTER (legacy)");
 
-    OKF(strstr(cmd(fd, "LIST CLIENT ecoflow", b, sizeof b), "BEGIN LIST CLIENT ecoflow") &&
-        strstr(b, "END LIST CLIENT ecoflow"), "LIST CLIENT (empty)");
-    OKF(strstr(cmd(fd, "LIST RW ecoflow", b, sizeof b), "END LIST RW ecoflow") != NULL, "LIST RW (empty)");
+    OKF(strstr(cmd(fd, "LIST CLIENT bluetti", b, sizeof b), "BEGIN LIST CLIENT bluetti") &&
+        strstr(b, "END LIST CLIENT bluetti"), "LIST CLIENT (empty)");
+    OKF(strstr(cmd(fd, "LIST RW bluetti", b, sizeof b), "END LIST RW bluetti") != NULL, "LIST RW (empty)");
 
     OKF(strcmp(cmd(fd, "FROBNICATE", b, sizeof b), "ERR UNKNOWN-COMMAND\n") == 0, "unknown cmd");
 
@@ -118,44 +118,44 @@ int main(void)
     fd = sock_connect();
     OKF(fd >= 0, "reconnect with auth configured");
     /* Reads must stay anonymous: upsc cannot send credentials. */
-    OKF(strstr(cmd(fd, "LIST UPS", b, sizeof b), "UPS ecoflow") != NULL,
+    OKF(strstr(cmd(fd, "LIST UPS", b, sizeof b), "UPS bluetti") != NULL,
         "LIST UPS still anonymous");
-    OKF(strcmp(cmd(fd, "GET VAR ecoflow battery.charge", b, sizeof b),
-               "VAR ecoflow battery.charge \"75\"\n") == 0,
+    OKF(strcmp(cmd(fd, "GET VAR bluetti battery.charge", b, sizeof b),
+               "VAR bluetti battery.charge \"75\"\n") == 0,
         "GET VAR still anonymous");
-    OKF(strstr(cmd(fd, "LIST VAR ecoflow", b, sizeof b), "ups.status") != NULL,
+    OKF(strstr(cmd(fd, "LIST VAR bluetti", b, sizeof b), "ups.status") != NULL,
         "LIST VAR still anonymous");
     /* But LOGIN without credentials is refused. */
-    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "ERR ACCESS-DENIED\n") == 0,
+    OKF(strcmp(cmd(fd, "LOGIN bluetti", b, sizeof b), "ERR ACCESS-DENIED\n") == 0,
         "LOGIN with no credentials denied");
     close(fd);
 
     fd = sock_connect();
     cmd(fd, "USERNAME upsmon", b, sizeof b);
     cmd(fd, "PASSWORD wrong", b, sizeof b);
-    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "ERR ACCESS-DENIED\n") == 0,
+    OKF(strcmp(cmd(fd, "LOGIN bluetti", b, sizeof b), "ERR ACCESS-DENIED\n") == 0,
         "LOGIN with wrong password denied");
     close(fd);
 
     fd = sock_connect();
     cmd(fd, "USERNAME wronguser", b, sizeof b);
     cmd(fd, "PASSWORD s3cret", b, sizeof b);
-    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "ERR ACCESS-DENIED\n") == 0,
+    OKF(strcmp(cmd(fd, "LOGIN bluetti", b, sizeof b), "ERR ACCESS-DENIED\n") == 0,
         "LOGIN with wrong username denied");
     close(fd);
 
     fd = sock_connect();
     cmd(fd, "USERNAME upsmon", b, sizeof b);
     cmd(fd, "PASSWORD s3cret", b, sizeof b);
-    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "OK\n") == 0,
+    OKF(strcmp(cmd(fd, "LOGIN bluetti", b, sizeof b), "OK\n") == 0,
         "LOGIN with correct credentials accepted");
-    OKF(strcmp(cmd(fd, "PRIMARY ecoflow", b, sizeof b), "OK\n") == 0,
+    OKF(strcmp(cmd(fd, "PRIMARY bluetti", b, sizeof b), "OK\n") == 0,
         "PRIMARY with correct credentials accepted");
     close(fd);
 
     /* Credentials must not leak between connections. */
     fd = sock_connect();
-    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "ERR ACCESS-DENIED\n") == 0,
+    OKF(strcmp(cmd(fd, "LOGIN bluetti", b, sizeof b), "ERR ACCESS-DENIED\n") == 0,
         "a new connection starts unauthenticated");
     close(fd);
 

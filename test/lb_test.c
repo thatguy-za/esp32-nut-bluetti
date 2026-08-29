@@ -1,5 +1,5 @@
 /* The LB (low battery) decision. Mirrors the logic in main.c's
- * publish_nut_from_ecoflow(): LB is raised when the charge drops to the
+ * publish_nut_from_bluetti(): LB is raised when the charge drops to the
  * percentage threshold OR the remaining runtime drops to the runtime
  * threshold, because percentage alone is misleading under load. */
 #include <stdio.h>

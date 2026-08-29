@@ -1,6 +1,6 @@
 /*
  * Captive-portal provisioning (setup mode) and a small admin server
- * (normal mode) for the EcoFlow NUT bridge.
+ * (normal mode) for the BLUETTI NUT bridge.
  */
 
 #include "provisioning.h"
@@ -26,7 +26,7 @@
 #include "mbedtls/base64.h"
 
 #include "wifi_mgr.h"
-#include "ecoflow_ble.h"
+#include "bluetti_ble.h"
 #include "notify.h"
 
 static const char *TAG = "provisioning";
@@ -50,14 +50,9 @@ static struct {
     char               detail[96];
     EventGroupHandle_t  done;        /* BIT0 set when provisioning done   */
 
-    /* transient EcoFlow login (never persisted) */
-    char               ef_email[80];
-    char               ef_pass[80];
-    char               ef_region[16];
-
     /* BLE scan results, filled from the BLE host task */
     SemaphoreHandle_t   ble_lock;
-    ecoflow_scan_entry_t ble[24];
+    bluetti_scan_entry_t ble[24];
     int                 ble_n;
 } P;
 
@@ -203,7 +198,7 @@ static esp_err_t send_401(httpd_req_t *r)
 {
     httpd_resp_set_status(r, "401 Unauthorized");
     httpd_resp_set_hdr(r, "WWW-Authenticate",
-                       "Basic realm=\"EcoFlow NUT Bridge\", charset=\"UTF-8\"");
+                       "Basic realm=\"BLUETTI NUT Bridge\", charset=\"UTF-8\"");
     httpd_resp_set_type(r, "text/plain");
     return httpd_resp_sendstr(r, "Authentication required");
 }
@@ -217,7 +212,7 @@ static esp_err_t send_401(httpd_req_t *r)
 
 /* ---- BLE scan glue -------------------------------------------------- */
 
-static void ble_scan_cb(const ecoflow_scan_entry_t *e, void *user)
+static void ble_scan_cb(const bluetti_scan_entry_t *e, void *user)
 {
     xSemaphoreTake(P.ble_lock, portMAX_DELAY);
     if (P.ble_n < (int)(sizeof(P.ble) / sizeof(P.ble[0]))) {
@@ -234,24 +229,24 @@ static esp_err_t h_ble_scan(httpd_req_t *r)
     httpd_req_get_url_query_str(r, q, sizeof(q));
     bool poll_only = strstr(q, "poll=1") != NULL;
 
-    if (!poll_only && !ecoflow_ble_scanning()) {
+    if (!poll_only && !bluetti_ble_scanning()) {
         xSemaphoreTake(P.ble_lock, portMAX_DELAY);
         P.ble_n = 0;
         xSemaphoreGive(P.ble_lock);
-        ecoflow_ble_scan(7000, ble_scan_cb, NULL);
+        bluetti_ble_scan(7000, ble_scan_cb, NULL);
     }
 
     char *buf = malloc(2048);
     if (!buf) return httpd_resp_send_500(r);
     int o = snprintf(buf, 2048, "{\"scanning\":%s,\"devices\":[",
-                     ecoflow_ble_scanning() ? "true" : "false");
+                     bluetti_ble_scanning() ? "true" : "false");
 
     xSemaphoreTake(P.ble_lock, portMAX_DELAY);
     for (int i = 0; i < P.ble_n && o < 1900; i++) {
         o += snprintf(buf + o, 2048 - o,
-                      "%s{\"addr\":\"%s\",\"name\":\"%s\",\"rssi\":%d,\"ecoflow\":%s}",
+                      "%s{\"addr\":\"%s\",\"name\":\"%s\",\"rssi\":%d,\"bluetti\":%s}",
                       i ? "," : "", P.ble[i].addr, P.ble[i].name,
-                      P.ble[i].rssi, P.ble[i].looks_like_ecoflow ? "true" : "false");
+                      P.ble[i].rssi, P.ble[i].looks_like_bluetti ? "true" : "false");
     }
     xSemaphoreGive(P.ble_lock);
 
@@ -313,7 +308,7 @@ static void connect_task(void *arg)
 }
 
 /* Setup mode only handles Wi-Fi: join a network, or become an AP. The
- * EcoFlow unit and NUT are configured afterwards from the admin page. */
+ * BLUETTI unit and NUT are configured afterwards from the admin page. */
 static esp_err_t h_provision(httpd_req_t *r)
 {
     int len = r->content_len;
@@ -516,7 +511,7 @@ static esp_err_t start_httpd(bool captive)
     }
 
     if (captive) {
-        /* Setup mode is Wi-Fi only; EcoFlow + NUT come later on the admin page. */
+        /* Setup mode is Wi-Fi only; BLUETTI + NUT come later on the admin page. */
         reg(P.httpd, "/", HTTP_GET, h_root);
         reg(P.httpd, "/api/wifi-scan", HTTP_GET, h_wifi_scan);
         reg(P.httpd, "/api/provision", HTTP_POST, h_provision);
@@ -579,7 +574,7 @@ esp_err_t provisioning_run(app_config_t *cfg)
 
     /* Give the browser a moment to fetch the final status, then tear down. */
     vTaskDelay(pdMS_TO_TICKS(1500));
-    ecoflow_ble_scan_stop();
+    bluetti_ble_scan_stop();
     httpd_stop(P.httpd);
     P.httpd = NULL;
     dns_server_stop();
@@ -613,8 +608,8 @@ static esp_err_t h_admin_status(httpd_req_t *r)
         wifi_mgr_sta_gw(gw, sizeof(gw));
         wifi_mgr_sta_dns(dns, sizeof(dns));
     }
-    ecoflow_state_t st;
-    bool have = ecoflow_ble_get_state(&st);
+    bluetti_state_t st;
+    bool have = bluetti_ble_get_state(&st);
     const esp_app_desc_t *app = esp_app_get_description();
 #if CONFIG_ENABLE_WEB_OTA
     const bool ota = true;
@@ -639,14 +634,13 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              app->version, app->date, app->time, ota ? "true" : "false",
              P.cfg->ups_name, P.cfg->nut_port,
              P.cfg->ble_addr[0] ? P.cfg->ble_addr : P.cfg->ble_name,
-             ecoflow_ble_connected() ? "true" : "false",
+             bluetti_ble_connected() ? "true" : "false",
              have && st.valid ? "true" : "false",
              have ? st.soc_pct : 0,
              have && st.ac_input_present ? "true" : "false",
              have && st.charging ? "true" : "false",
              have && st.model[0] ? st.model : "",
-             (P.cfg->ble_addr[0] || P.cfg->ble_name[0]) &&
-                 P.cfg->ef_user_id[0] ? "true" : "false");
+             (P.cfg->ble_addr[0] || P.cfg->ble_name[0]) ? "true" : "false");
     return send_json(r, out);
 }
 
@@ -689,7 +683,7 @@ static esp_err_t h_factory_reset(httpd_req_t *r)
     return ESP_OK;
 }
 
-/* ---- live reconfiguration (EcoFlow / NUT / Wi-Fi) ---------------- */
+/* ---- live reconfiguration (BLUETTI / NUT / Wi-Fi) ---------------- */
 
 static esp_err_t h_admin_config(httpd_req_t *r)
 {
@@ -698,7 +692,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
     wifi_mgr_default_ap_ssid(def_ap, sizeof(def_ap));
     char out[1000];  /* ssid + ap_ssid + users + addressing + telegram */
     snprintf(out, sizeof(out),
-             "{\"ble_addr\":\"%s\",\"ble_name\":\"%s\",\"has_user_id\":%s,"
+             "{\"ble_addr\":\"%s\",\"ble_name\":\"%s\",\"ble_probe\":%s,"
              "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
              "\"nut_user\":\"%s\",\"nut_auth_set\":%s,"
              "\"ac_rating_w\":%u,\"runtime_low_s\":%u,"
@@ -710,7 +704,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              "\"tg_enabled\":%s,\"tg_chat\":\"%s\",\"has_tg_token\":%s,"
              "\"tg_on_power\":%s,\"tg_on_low_batt\":%s,\"tg_on_link\":%s}",
              P.cfg->ble_addr, P.cfg->ble_name,
-             P.cfg->ef_user_id[0] ? "true" : "false",
+             P.cfg->ble_probe ? "true" : "false",
              P.cfg->ups_name, P.cfg->nut_port, P.cfg->low_pct, P.cfg->poll_ms,
              P.cfg->nut_user, P.cfg->nut_auth_set ? "true" : "false",
              P.cfg->ac_rating_w, P.cfg->runtime_low_s,
@@ -815,46 +809,21 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
     char v[128], section[16] = "";
     form_get(body, "section", section, sizeof(section));
 
-    /* ---- EcoFlow unit + account ---- */
-    if (strcmp(section, "ecoflow") == 0) {
+    /* ---- BLUETTI unit + account ---- */
+    if (strcmp(section, "bluetti") == 0) {
         if (form_get(body, "ble_addr", v, sizeof(v))) {
             strlcpy(P.pending.ble_addr, v, sizeof(P.pending.ble_addr));
         }
         if (form_get(body, "ble_name", v, sizeof(v)) && v[0]) {
             strlcpy(P.pending.ble_name, v, sizeof(P.pending.ble_name));
         }
-        if (form_get(body, "ef_user_id", v, sizeof(v)) && v[0]) {
-            strlcpy(P.pending.ef_user_id, v, sizeof(P.pending.ef_user_id));
-        }
-        form_get(body, "ef_email", P.ef_email, sizeof(P.ef_email));
-        form_get(body, "ef_pass", P.ef_pass, sizeof(P.ef_pass));
-        if (!form_get(body, "ef_region", P.ef_region, sizeof(P.ef_region)) ||
-            !P.ef_region[0]) {
-            strlcpy(P.ef_region, "api", sizeof(P.ef_region));
-        }
+        P.pending.ble_probe =
+            form_get(body, "ble_probe", v, sizeof(v)) && v[0] == '1';
         free(body);
 
         if (P.pending.ble_addr[0] == '\0' && P.pending.ble_name[0] == '\0') {
             return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
                                        "pick a device or enter an address");
-        }
-        /* Resolve a fresh user id inline (blocking HTTPS) so a bad login is
-         * reported instead of silently rebooting into a broken config. */
-        if (P.ef_email[0] && P.ef_pass[0]) {
-            char err[80] = "";
-            int lr = ecoflow_resolve_user_id(P.ef_email, P.ef_pass, P.ef_region,
-                                             P.pending.ef_user_id,
-                                             sizeof(P.pending.ef_user_id),
-                                             err, sizeof(err));
-            memset(P.ef_pass, 0, sizeof(P.ef_pass));
-            if (lr != 0) {
-                return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, err);
-            }
-        }
-        memset(P.ef_pass, 0, sizeof(P.ef_pass));
-        if (P.pending.ef_user_id[0] == '\0') {
-            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
-                                       "an EcoFlow account is required");
         }
 
     /* ---- NUT server ---- */
@@ -1118,7 +1087,6 @@ esp_err_t provisioning_admin_start(const app_config_t *cfg)
     if (!P.ble_lock) {
         P.ble_lock = xSemaphoreCreateMutex();   /* used by /api/ble-scan */
     }
-    strlcpy(P.ef_region, "api", sizeof(P.ef_region));
     esp_err_t rc = start_httpd(false);
     if (rc == ESP_OK) {
         ESP_LOGI(TAG, "admin server on :80");

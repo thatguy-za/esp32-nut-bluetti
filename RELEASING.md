@@ -25,7 +25,7 @@ git push origin main "v$V"
 rm -rf build && ./tools/package.sh      # builds + names the artifacts by version
 
 gh release create "v$V" --prerelease --notes-file NOTES.md \
-  "dist/esp32-nut-ecoflow-$V-factory.bin" "dist/esp32-nut-ecoflow-$V.bin"
+  "dist/esp32-nut-bluetti-$V-factory.bin" "dist/esp32-nut-bluetti-$V.bin"
 ```
 
 `tools/package.sh` prints the size and SHA-256 of each artifact (put them in the
@@ -35,8 +35,8 @@ Artifacts:
 
 | file | use |
 | --- | --- |
-| `esp32-nut-ecoflow-<version>-factory.bin` | first flash over USB, at offset `0x0` |
-| `esp32-nut-ecoflow-<version>.bin` | app only — the web OTA update upload |
+| `esp32-nut-bluetti-<version>-factory.bin` | first flash over USB, at offset `0x0` |
+| `esp32-nut-bluetti-<version>.bin` | app only — the web OTA update upload |
 
 ## Rules
 

@@ -12,8 +12,8 @@ extern "C" {
 #define NUT_VAR_VALUE_LEN 64
 
 typedef struct {
-    const char *ups_name;      /* e.g. "ecoflow" */
-    const char *ups_desc;      /* e.g. "EcoFlow Delta 2" */
+    const char *ups_name;      /* e.g. "bluetti" */
+    const char *ups_desc;      /* e.g. "BLUETTI Delta 2" */
     uint16_t    tcp_port;      /* usually 3493 */
     uint8_t     max_clients;   /* concurrent NUT connections */
 } nut_server_config_t;

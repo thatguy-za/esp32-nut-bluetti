@@ -26,7 +26,7 @@ esp_err_t wifi_mgr_ap_start(const char *ssid, const char *pass);
 /* Drop the SoftAP, return to STA-only. */
 esp_err_t wifi_mgr_ap_stop(void);
 
-/* Default SoftAP SSID for this board: "esp-nut-ecoflow-XXXX" (MAC tail). */
+/* Default SoftAP SSID for this board: "esp-nut-bluetti-XXXX" (MAC tail). */
 void wifi_mgr_default_ap_ssid(char *buf, size_t len);
 
 /* AP-mode address (the SoftAP's own IP), or "0.0.0.0" when down. */

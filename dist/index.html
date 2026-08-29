@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Flash esp32-nut-ecoflow</title>
+<title>Flash esp32-nut-bluetti</title>
 <style>
   :root { color-scheme: light dark; }
   body { font: 16px/1.6 system-ui, sans-serif; max-width: 34rem;
@@ -21,11 +21,11 @@
 </style>
 </head>
 <body>
-<h1>esp32-nut-ecoflow</h1>
+<h1>esp32-nut-bluetti</h1>
 <p class="sub">Web installer &middot;
-  <a href="https://github.com/thatguy-za/esp32-nut-ecoflow">source &amp; docs</a></p>
+  <a href="https://github.com/thatguy-za/esp32-nut-bluetti">source &amp; docs</a></p>
 
-<p class="warn"><strong>Work in progress.</strong> The EcoFlow River&nbsp;3 BLE
+<p class="warn"><strong>Work in progress.</strong> The BLUETTI River&nbsp;3 BLE
 handshake has not yet been confirmed on real hardware.</p>
 
 <p>Plug an <strong>ESP32-S3 (≥4&nbsp;MB flash)</strong> into this computer, then:</p>
@@ -38,14 +38,14 @@ Later updates go over Wi-Fi from the device's own admin page — no cable.</p>
 
 <h2>After flashing</h2>
 <ol>
-  <li>The device starts an open Wi-Fi network <code>esp-nut-ecoflow-XXXX</code>.
+  <li>The device starts an open Wi-Fi network <code>esp-nut-bluetti-XXXX</code>.
       Join it; the setup page should open automatically (or browse to
       <code>http://192.168.4.1/</code>).</li>
   <li>Choose <strong>Join my Wi-Fi</strong> and pick your network — or
       <strong>Run its own AP</strong> to keep it standalone.</li>
   <li>Save. The page hands you the bridge's new address; open it.</li>
-  <li>On the <strong>EcoFlow</strong> tab, scan and pick your River&nbsp;3, then
-      enter your EcoFlow account (email + password once, or paste your user id).</li>
+  <li>On the <strong>BLUETTI</strong> tab, scan and pick your River&nbsp;3, then
+      enter your BLUETTI account (email + password once, or paste your user id).</li>
   <li>Point your NUT clients at that address, port <code>3493</code>.</li>
 </ol>
 

@@ -20,7 +20,7 @@ typedef struct {
     char chat_id[24];     /* user or group id; groups are negative   */
     bool on_power;        /* mains lost / restored                   */
     bool on_low_batt;     /* battery crossed the low threshold       */
-    bool on_link;         /* EcoFlow BLE link lost / restored        */
+    bool on_link;         /* BLUETTI BLE link lost / restored        */
 } notify_config_t;
 
 /* Start the worker. `label` prefixes every message so several bridges in

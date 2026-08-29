@@ -243,7 +243,7 @@ void notify_ups_status(const char *status, int soc_pct, int runtime_min)
         case PWR_OFFLINE:
             if (cfg.on_link) {
                 notify_send("\xE2\x9A\xA0\xEF\xB8\x8F Lost contact with the "
-                            "EcoFlow unit — UPS status is unknown.");
+                            "BLUETTI unit — UPS status is unknown.");
             }
             break;
         default:
@@ -251,7 +251,7 @@ void notify_ups_status(const char *status, int soc_pct, int runtime_min)
         }
     } else if (was == PWR_OFFLINE && now != PWR_OFFLINE && cfg.on_link &&
                guard_allows(now)) {
-        notify_send("\xE2\x9C\x85 EcoFlow unit is back.");
+        notify_send("\xE2\x9C\x85 BLUETTI unit is back.");
     }
 
     /* Low battery is its own edge, independent of the mains transition. */

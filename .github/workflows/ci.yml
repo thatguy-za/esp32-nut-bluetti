@@ -34,5 +34,5 @@ jobs:
           target: esp32s3
       - name: firmware size
         run: |
-          test -f build/esp32-nut-ecoflow.bin
-          ls -l build/esp32-nut-ecoflow.bin
+          test -f build/esp32-nut-bluetti.bin
+          ls -l build/esp32-nut-bluetti.bin

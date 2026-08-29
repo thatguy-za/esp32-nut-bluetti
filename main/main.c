@@ -1,5 +1,5 @@
 /*
- * esp32-nut-ecoflow
+ * esp32-nut-bluetti
  *
  * Boot flow:
  *   1. load config from NVS
@@ -9,7 +9,7 @@
  *          -> run the captive-portal setup, which blocks until the user
  *             supplies working Wi-Fi credentials
  *      else -> connect STA with the stored credentials
- *   5. start NUT server + EcoFlow BLE client + admin web server
+ *   5. start NUT server + BLUETTI BLE client + admin web server
  */
 
 #include <string.h>
@@ -30,7 +30,7 @@
 #include "provisioning.h"
 #include "log_ring.h"
 #include "nut_server.h"
-#include "ecoflow_ble.h"
+#include "bluetti_ble.h"
 #include "notify.h"
 
 static const char *TAG = "app";
@@ -72,10 +72,10 @@ static bool reset_button_held(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* EcoFlow state  ->  NUT variables                                    */
+/* BLUETTI state  ->  NUT variables                                    */
 /* ------------------------------------------------------------------ */
 
-static void publish_nut_from_ecoflow(const ecoflow_state_t *st)
+static void publish_nut_from_bluetti(const bluetti_state_t *st)
 {
     if (!st->valid) {
         return;
@@ -107,7 +107,7 @@ static void publish_nut_from_ecoflow(const ecoflow_state_t *st)
     if (st->ac_in_watts >= 0.0f) {
         nut_server_set_var_float("input.realpower.ac", st->ac_in_watts, 0);
     }
-    nut_server_set_var("ups.type", st->backup_mode_on ? "online" : "offline");
+    nut_server_set_var("ups.type", st->ups_mode_on ? "online" : "offline");
     if (st->ac_out_watts >= 0.0f) {
         nut_server_set_var_float("output.realpower", st->ac_out_watts, 0);
     }
@@ -160,24 +160,24 @@ static void publish_nut_from_ecoflow(const ecoflow_state_t *st)
                       st->ac_input_present ? -1 : st->minutes_remaining);
 }
 
-static void ecoflow_cb(const ecoflow_state_t *state, void *user)
+static void bluetti_cb(const bluetti_state_t *state, void *user)
 {
-    publish_nut_from_ecoflow(state);
+    publish_nut_from_bluetti(state);
 }
 
 static void staleness_task(void *arg)
 {
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(5000));
-        ecoflow_state_t st;
-        bool have = ecoflow_ble_get_state(&st);
+        bluetti_state_t st;
+        bool have = bluetti_ble_get_state(&st);
         bool stale = !have ||
                      (esp_timer_get_time() - st.updated_us) > STALE_AFTER_US;
         if (stale) {
-            const char *s = ecoflow_ble_connected() ? "OL WAIT" : "OFF";
+            const char *s = bluetti_ble_connected() ? "OL WAIT" : "OFF";
             nut_server_set_status(s);
             nut_server_set_var("driver.state",
-                               ecoflow_ble_connected() ? "connected-no-data"
+                               bluetti_ble_connected() ? "connected-no-data"
                                                        : "disconnected");
             notify_ups_status(s, have ? st.soc_pct : 0, -1);
         } else {
@@ -211,7 +211,7 @@ static void start_services(const app_config_t *cfg)
 
     nut_server_config_t nut_cfg = {
         .ups_name = cfg->ups_name,
-        .ups_desc = "EcoFlow via ESP32",
+        .ups_desc = "BLUETTI via ESP32",
         .tcp_port = cfg->nut_port,
         .max_clients = 4,
     };
@@ -227,22 +227,22 @@ static void start_services(const app_config_t *cfg)
         nut_server_set_var_int("battery.runtime.low", cfg->runtime_low_s);
     }
 
-    /* The EcoFlow side is configured from the admin page after Wi-Fi setup,
+    /* The BLUETTI side is configured from the admin page after Wi-Fi setup,
      * so on a fresh device there is nothing to connect to yet. */
     bool have_target = cfg->ble_addr[0] || cfg->ble_name[0];
-    if (!have_target || cfg->ef_user_id[0] == '\0') {
-        ESP_LOGW(TAG, "EcoFlow not configured yet — open the admin page's "
-                      "Config → EcoFlow tab to finish setup");
+    if (!have_target) {
+        ESP_LOGW(TAG, "BLUETTI not configured yet — open the admin page's "
+                      "BLUETTI tab to pick your unit");
     } else {
-        ecoflow_ble_config_t ef_cfg = {
+        bluetti_ble_config_t ef_cfg = {
             .ble_address = cfg->ble_addr,
             .ble_name_prefix = cfg->ble_name,
-            .user_id = cfg->ef_user_id,
+            .probe = cfg->ble_probe,
             .poll_interval_ms = cfg->poll_ms,
             .low_battery_pct = cfg->low_pct,
         };
-        if (ecoflow_ble_start(&ef_cfg, ecoflow_cb, NULL) != 0) {
-            ESP_LOGE(TAG, "ecoflow_ble_start failed");
+        if (bluetti_ble_start(&ef_cfg, bluetti_cb, NULL) != 0) {
+            ESP_LOGE(TAG, "bluetti_ble_start failed");
         }
     }
 
@@ -282,7 +282,7 @@ void app_main(void)
         app_config_defaults(cfg);
     }
 
-    if (ecoflow_ble_host_init() != 0) {
+    if (bluetti_ble_host_init() != 0) {
         ESP_LOGW(TAG, "BLE host init incomplete; continuing");
     }
 
@@ -315,7 +315,7 @@ void app_main(void)
         ap_mode = cfg->wifi_mode == APP_WIFI_AP;
     }
 
-    /* EcoFlow's BLE auth doesn't need the clock, but the device asks for
+    /* BLUETTI's BLE auth doesn't need the clock, but the device asks for
      * time once connected; give it a real one. In AP mode there's no route
      * to an NTP server, so don't bother. */
     if (!ap_mode) {

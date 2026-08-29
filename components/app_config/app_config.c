@@ -13,7 +13,7 @@ static const char *TAG = "app_config";
 
 #define CFG_NS      "efnut"
 #define CFG_KEY     "cfg"
-#define CFG_VERSION 7u
+#define CFG_VERSION 1u   /* independent lineage from the EcoFlow fork */
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -27,7 +27,7 @@ void app_config_default_name(char *buf, size_t len)
     uint8_t mac[6] = { 0 };
     /* eFuse read: works before esp_wifi_init(), unlike esp_wifi_get_mac(). */
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    snprintf(buf, len, "esp-nut-ecoflow-%02X%02X", mac[4], mac[5]);
+    snprintf(buf, len, "esp-nut-bluetti-%02X%02X", mac[4], mac[5]);
 }
 
 void app_config_defaults(app_config_t *cfg)
@@ -36,12 +36,11 @@ void app_config_defaults(app_config_t *cfg)
     cfg->wifi_mode = APP_WIFI_STATION;   /* what nearly everyone wants */
     strlcpy(cfg->wifi_ssid, CONFIG_WIFI_SSID, sizeof(cfg->wifi_ssid));
     strlcpy(cfg->wifi_pass, CONFIG_WIFI_PASSWORD, sizeof(cfg->wifi_pass));
-    strlcpy(cfg->ble_addr, CONFIG_ECOFLOW_BLE_ADDRESS, sizeof(cfg->ble_addr));
-    strlcpy(cfg->ble_name, CONFIG_ECOFLOW_BLE_NAME, sizeof(cfg->ble_name));
-    strlcpy(cfg->ef_user_id, CONFIG_ECOFLOW_USER_ID, sizeof(cfg->ef_user_id));
+    strlcpy(cfg->ble_addr, CONFIG_BLUETTI_BLE_ADDRESS, sizeof(cfg->ble_addr));
+    strlcpy(cfg->ble_name, CONFIG_BLUETTI_BLE_NAME, sizeof(cfg->ble_name));
     strlcpy(cfg->ups_name, CONFIG_NUT_UPS_NAME, sizeof(cfg->ups_name));
     cfg->nut_port = CONFIG_NUT_TCP_PORT;
-    cfg->poll_ms  = CONFIG_ECOFLOW_POLL_INTERVAL_MS;
+    cfg->poll_ms  = CONFIG_BLUETTI_POLL_INTERVAL_MS;
     cfg->low_pct  = CONFIG_NUT_BATTERY_LOW_PCT;
     cfg->ac_rating_w = CONFIG_NUT_AC_RATING_W;
     cfg->runtime_low_s = CONFIG_NUT_RUNTIME_LOW_S;

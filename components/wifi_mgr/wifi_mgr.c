@@ -132,7 +132,7 @@ void wifi_mgr_default_ap_ssid(char *buf, size_t len)
     /* eFuse, not esp_wifi_get_mac(): callers may run before Wi-Fi starts,
      * and this must match app_config_default_name() exactly. */
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    snprintf(buf, len, "esp-nut-ecoflow-%02X%02X", mac[4], mac[5]);
+    snprintf(buf, len, "esp-nut-bluetti-%02X%02X", mac[4], mac[5]);
 }
 
 esp_err_t wifi_mgr_ap_start(const char *ssid, const char *pass)

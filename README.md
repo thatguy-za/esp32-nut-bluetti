@@ -1,55 +1,58 @@
-# esp32-nut-ecoflow
+# esp32-nut-bluetti
 
-ESP32 firmware that connects to an **EcoFlow** portable power station over
+ESP32 firmware that connects to an **BLUETTI** portable power station over
 **Bluetooth LE**, reads its battery / AC-input / load state, and exposes it on the
 network as a UPS using the **NUT** (Network UPS Tools) TCP protocol.
 
 Point your NAS, server, or Raspberry Pi's `upsmon` at the ESP32's IP on port
-`3493` and it will see the EcoFlow as a normal UPS — including `OB`
+`3493` and it will see the BLUETTI as a normal UPS — including `OB`
 (on-battery) / `OL` (online) status and battery charge, so hosts can shut
 themselves down cleanly on a mains failure.
 
 ```
  ┌───────────┐   BLE    ┌─────────┐   TCP/3493 (NUT)   ┌──────────────┐
- │  EcoFlow  │ ───────► │  ESP32  │ ─────────────────► │ upsmon /     │
+ │  BLUETTI  │ ───────► │  ESP32  │ ─────────────────► │ upsmon /     │
  │  station  │ ◄─────── │         │ ◄───────────────── │ upsc clients │
  └───────────┘          └─────────┘                    └──────────────┘
 ```
 
-> ## 🚧 Work in progress
+> ## 🚧 Early scaffolding — does not work yet
 >
-> **The end-to-end BLE handshake has never run against a real River 3.** A lot
-> *is* verified without hardware (see below) — the telemetry decoder is checked
-> against real captured River 3 packets and the crypto against the reference
-> implementation — but the live handshake (frame timing, the `ecdh_type` byte,
-> the keyinfo reply shape, write-with-response) is unproven and will likely need
-> on-device debugging (`idf.py monitor`, `info` level). Treat every release as
-> pre-release. Logs / BLE captures very welcome.
+> This is a fork of
+> [`esp32-nut-ecoflow`](https://github.com/thatguy-za/esp32-nut-ecoflow),
+> retargeted from EcoFlow to BLUETTI. Everything that is not vendor-specific —
+> the NUT server, Wi-Fi setup, admin page, OTA, alerts — is carried over and
+> working. **The BLUETTI BLE layer is a probe harness, not a driver.** It
+> connects, enumerates GATT and hex-dumps notifications so the protocol can be
+> confirmed on a real unit. Nothing is decoded yet.
 
-## Compatibility
+## Target
 
-| EcoFlow model | Serial prefix | Status |
-| --- | --- | --- |
-| **River 3**, **River 3 UPS** | `R651` `R653` `R654` `R655` | 🟡 **Target** — implemented, needs hardware testing |
-| River 3 Plus | `R633`-family | 🟡 Same protocol; likely works, model string / add-on battery not handled |
-| Delta 3 / 3 Plus / 3 Max, Delta Pro 3, Delta Pro Ultra, Smart Home Panel 2, Stream, PowerOcean | — | 🟠 Shares the BLE handshake, but a **different protobuf** — connects & authenticates, telemetry won't decode until its field map is added |
-| Delta 2 / 2 Max, River 2 / 2 Max / 2 Pro, Delta Max, Delta Pro, RIVER Pro (2nd gen) | — | 🔴 Older `encrypt_type 0/1` — different handshake and framing, **not implemented** |
-| Original DELTA / RIVER (1st gen) | — | 🔴 Different "v1" wire format |
-| PowerStream, smart plugs, most GLACIER / WAVE data | — | 🔴 No local BLE telemetry (Wi-Fi / cloud only) |
+**BLUETTI Elite 10** (128 Wh, 200 W, `EL10…`).
 
-Units bound to a **different EcoFlow account** than the `user_id` you provision
-will also refuse the BLE auth.
+The protocol groundwork is documented in [`docs/PROTOCOL.md`](docs/PROTOCOL.md):
+transport UUIDs, Modbus framing, the encrypted handshake used by newer
+firmware, and a candidate Elite 10 register map. Sources are
+[`Patrick762/bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib) and
+its open [EL10 PR #89](https://github.com/Patrick762/bluetti-bt-lib/pull/89).
+
+Two things worth knowing before relying on any of it:
+
+- The Elite 10 register map comes from an **unmerged** PR.
+- The encryption is **already solved** and uses fixed keys baked into the app,
+  so no per-device key extraction is needed — but it has not been exercised
+  from an ESP32.
 
 ## Flash it
 
-Open the **[web installer](https://thatguy-za.github.io/esp32-nut-ecoflow/)** in
+Open the **[web installer](https://thatguy-za.github.io/esp32-nut-bluetti/)** in
 Chrome, Edge, or Opera on a desktop, plug in an **ESP32-S3 (≥4 MB flash)**, and
 click **Install**. It's an [ESP Web Tools](https://esphome.github.io/esp-web-tools/)
 button pointing at the latest release — the same one-click flasher ESPHome uses.
 
 Or on **[web.esphome.io](https://web.esphome.io)**: *Connect*, then choose
-`esp32-nut-ecoflow-<version>-factory.bin` from the
-[latest release](https://github.com/thatguy-za/esp32-nut-ecoflow/releases).
+`esp32-nut-bluetti-<version>-factory.bin` from the
+[latest release](https://github.com/thatguy-za/esp32-nut-bluetti/releases).
 
 Only this first flash needs a cable. After that, updates go over the network from
 the [admin page](#admin-page). Offline / Linux / `esptool` instructions are in
@@ -60,12 +63,12 @@ boards — the BOOT button on GPIO0 for the config wipe.
 
 ## Setting it up
 
-Setup is two stages: get the bridge on a network, then point it at your EcoFlow.
+Setup is two stages: get the bridge on a network, then point it at your BLUETTI.
 
 ### 1. Network (captive portal)
 
 On first boot (or after a config wipe) the device brings up an **open Wi-Fi
-access point** named `esp-nut-ecoflow-XXXX` (`XXXX` = last 2 bytes of the MAC).
+access point** named `esp-nut-bluetti-XXXX` (`XXXX` = last 2 bytes of the MAC).
 Join it from a phone or laptop — a captive-portal DNS server redirects
 everything to the setup page, so it should pop up automatically; if not, browse
 to `http://192.168.4.1/`.
@@ -82,19 +85,19 @@ to `http://192.168.4.1/`.
 
 **Step 2 — admin login.** Choose the username (default `admin`) and a password
 for the bridge's own page. Any password is accepted, but you have to set one —
-the admin page is what configures the EcoFlow unit, reads the logs and flashes
+the admin page is what configures the BLUETTI unit, reads the logs and flashes
 firmware.
 
-### 2. EcoFlow + NUT (admin page)
+### 2. BLUETTI + NUT (admin page)
 
-Open the bridge's page and use the **EcoFlow** tab:
+Open the bridge's page and use the **BLUETTI** tab:
 
 - **Scan for devices** and pick your unit — the list shows the Bluetooth name
-  with the MAC in brackets, e.g. `EF-R3xxxx [AA:BB:CC:DD:EE:FF]`; likely EcoFlow
+  with the MAC in brackets, e.g. `EF-R3xxxx [AA:BB:CC:DD:EE:FF]`; likely BLUETTI
   units are marked ★. You can also type an address or name prefix.
-- **EcoFlow account** — the River 3 only grants Bluetooth access to its own
-  account, so the bridge needs your EcoFlow **account user id**. Enter your
-  EcoFlow email + password (used once, over HTTPS, to fetch the id — the
+- **BLUETTI account** — the River 3 only grants Bluetooth access to its own
+  account, so the bridge needs your BLUETTI **account user id**. Enter your
+  BLUETTI email + password (used once, over HTTPS, to fetch the id — the
   password is not stored) or paste the user id directly.
 
 The **NUT** tab sets the UPS name, TCP port and low-battery threshold. Saving
@@ -108,8 +111,8 @@ In normal operation the device serves a page at `http://<device-ip>/`:
 
 - **Status** — the current state, with a live tail of the device log below it
   (~12 KB ring buffer) so you can watch the BLE handshake without a serial
-  cable. Turn on `CONFIG_ECOFLOW_BLE_TRACE` for the full dump.
-- **EcoFlow** — BLE target and EcoFlow account.
+  cable. Turn on `CONFIG_BLUETTI_BLE_TRACE` for the full dump.
+- **BLUETTI** — BLE target and BLUETTI account.
 - **NUT** — UPS name, TCP port, low-battery %.
 - **Wi-Fi** — switch between joining a network and running as an access point;
   hostname; and DHCP or a static IPv4 address (address, mask, gateway, DNS).
@@ -117,7 +120,7 @@ In normal operation the device serves a page at `http://<device-ip>/`:
 - **Alerts** — Telegram push notifications for power events.
 - **Maintenance** —
   - **Firmware update**: upload a newer
-    `esp32-nut-ecoflow-<version>.bin`; it's written to the spare OTA slot and
+    `esp32-nut-bluetti-<version>.bin`; it's written to the spare OTA slot and
     the device reboots, with bootloader rollback if the new build won't come up.
     Gated by a typed `FLASH` confirmation. Disable with
     `CONFIG_ENABLE_WEB_OTA=n`.
@@ -151,7 +154,7 @@ The **Alerts** tab sends a Telegram message when something happens to the power:
 | --- | --- |
 | Mains lost / restored | on |
 | Battery low (crosses the NUT low-battery threshold) | on |
-| EcoFlow unit unreachable / back | off |
+| BLUETTI unit unreachable / back | off |
 
 Setup:
 
@@ -170,14 +173,14 @@ keeps serving NUT and drops the message rather than stalling.
 ## Using it with NUT
 
 ```bash
-upsc -l <device-ip>            # lists the UPS name (default: ecoflow)
-upsc ecoflow@<device-ip>       # dumps all variables
+upsc -l <device-ip>            # lists the UPS name (default: bluetti)
+upsc bluetti@<device-ip>       # dumps all variables
 ```
 
 `upsmon` config (`upsmon.conf`):
 
 ```
-MONITOR ecoflow@<device-ip> 1 monuser somepass slave
+MONITOR bluetti@<device-ip> 1 monuser somepass slave
 ```
 
 ### Variables
@@ -196,7 +199,7 @@ MONITOR ecoflow@<device-ip> 1 monuser somepass slave
 | `ups.realpower` / `ups.realpower.nominal` | output W / the configured AC rating |
 | `input.realpower` / `input.realpower.ac` | total input W / mains input W |
 | `output.realpower` | AC output W |
-| `ups.type` | `online` when EcoFlow's backup mode is on, else `offline` |
+| `ups.type` | `online` when BLUETTI's backup mode is on, else `offline` |
 | `ups.alarm` | device fault code, when non-zero |
 | `ups.mfr` / `ups.model` / `ups.serial` | and the `device.*` equivalents |
 | `driver.name` / `driver.version` / `driver.state` | bridge health |
@@ -222,7 +225,7 @@ trusted LAN.
 
 ### Not implemented
 
-No `SET VAR` or `INSTCMD`, so nothing can be changed on the EcoFlow through NUT
+No `SET VAR` or `INSTCMD`, so nothing can be changed on the BLUETTI through NUT
 and there is no shutdown command — which is also why `ups.delay.shutdown` is not
 published: nothing would honour it.
 
@@ -231,17 +234,17 @@ published: nothing would honour it.
 - **NUT server** — upsd-compatible, read-only; verified against a third-party
   NUT client (`LIST UPS/VAR`, `GET VAR`, `upsmon` primary handshake, …).
 - **Provisioning** — two-step captive portal (network, then admin login), with
-  EcoFlow + NUT set from the admin page afterwards; config in NVS, BOOT-button /
+  BLUETTI + NUT set from the admin page afterwards; config in NVS, BOOT-button /
   web reset.
 - **Admin auth** — HTTP Basic on every admin route; the password is stored as a
   salted SHA-256, never in the clear.
-- **EcoFlow BLE "V2" stack** — ECDH (secp160r1) key agreement, AES-128-CBC
+- **BLUETTI BLE "V2" stack** — ECDH (secp160r1) key agreement, AES-128-CBC
   session, keydata session-key derivation, both framing layers, `MD5(user_id +
   serial)` account auth, and a protobuf reader for the `pr705` telemetry
   message. Ported from [`rabits/ha-ef-ble`](https://github.com/rabits/ha-ef-ble).
 - **Web OTA** — upload firmware from the admin page; spare-slot write with
   bootloader rollback.
-- **Telegram alerts** — mains lost/restored, battery low, EcoFlow unreachable.
+- **Telegram alerts** — mains lost/restored, battery low, BLUETTI unreachable.
   Sent from a worker task so HTTPS never blocks the BLE or NUT paths.
 - **Addressing** — DHCP by default, or a static IPv4 address with gateway and
   DNS; settable hostname, sent as the DHCP client name.
@@ -277,13 +280,13 @@ idf.py build flash monitor
 
 Configuration is all runtime (the setup portal). `menuconfig` only sets
 compile-time defaults, the config-wipe GPIO, the trace flag, and
-`CONFIG_ENABLE_WEB_OTA`, under **`EcoFlow NUT Bridge`**. The version comes from
+`CONFIG_ENABLE_WEB_OTA`, under **`BLUETTI NUT Bridge`**. The version comes from
 [`version.txt`](version.txt) — see [`RELEASING.md`](RELEASING.md).
 
 ### Debugging the BLE handshake
 
-Enable **`Trace the EcoFlow BLE handshake`** in `menuconfig` (or
-`CONFIG_ECOFLOW_BLE_TRACE=y`). It hex-dumps every stage — our/device public keys,
+Enable **`Trace the BLUETTI BLE handshake`** in `menuconfig` (or
+`CONFIG_BLUETTI_BLE_TRACE=y`). It hex-dumps every stage — our/device public keys,
 shared secret, IV, session key, auth token, and every decoded inner packet — so a
 failed handshake shows exactly where it broke. Watch it on the admin page's
 **Logs** tab or `idf.py monitor`. It prints key material, so turn it off
@@ -293,21 +296,21 @@ afterwards.
 
 | Path | Role |
 | --- | --- |
-| `main/` | boot flow / EcoFlow→NUT variable mapping |
+| `main/` | boot flow / BLUETTI→NUT variable mapping |
 | `components/app_config/` | NVS-backed runtime config |
 | `components/wifi_mgr/` | station + SoftAP (open or WPA2), scan, DHCP/static IPv4 |
 | `components/notify/` | Telegram alerts (queue + worker, edge detection) |
 | `components/provisioning/` | Wi-Fi setup portal (`portal.html`), DNS server, admin page (`admin.html`), web log tail (`log_ring.c`) |
 | `components/nut_server/` | upsd-compatible TCP protocol server |
 | `components/micro_ecc/` | vendored micro-ecc (secp160r1 for the BLE handshake) |
-| `components/ecoflow_ble/` | NimBLE transport + EcoFlow V2 stack: |
-| &nbsp;&nbsp;`ecoflow_ble.c` | scan / connect / GATT / notify / TX queue |
+| `components/bluetti_ble/` | NimBLE transport + BLUETTI V2 stack: |
+| &nbsp;&nbsp;`bluetti_ble.c` | scan / connect / GATT / notify / TX queue |
 | &nbsp;&nbsp;`ef_crypto.c` | CRC, MD5, AES-128-CBC, ECDH secp160r1 |
 | &nbsp;&nbsp;`ef_frame.c` | outer `5A5A` + inner `AA` framing, reassembly |
 | &nbsp;&nbsp;`ef_session.c` | handshake state machine + telemetry dispatch |
 | &nbsp;&nbsp;`ef_proto.c` | `pr705` `DisplayPropertyUpload` field reader |
-| &nbsp;&nbsp;`ef_cloud.c` | EcoFlow account login → user id |
-| &nbsp;&nbsp;`ef_keydata.bin` | EcoFlow key table (session-key derivation) |
+| &nbsp;&nbsp;`ef_cloud.c` | BLUETTI account login → user id |
+| &nbsp;&nbsp;`ef_keydata.bin` | BLUETTI key table (session-key derivation) |
 
 ## Security
 
@@ -328,7 +331,7 @@ afterwards.
 ## Protocol notes
 
 - NUT protocol: <https://networkupstools.org/docs/developer-guide.chunked/ar01s09.html>
-- EcoFlow BLE ("V2" / `encrypt_type 7`): ECDH on secp160r1 → AES-128-CBC session,
+- BLUETTI BLE ("V2" / `encrypt_type 7`): ECDH on secp160r1 → AES-128-CBC session,
   a keydata-table + MD5 session-key derivation, then `MD5(user_id + serial)`
   account auth. Framing is `5A5A` EncPacket (AES body, CRC16) wrapping an `AA`
   Packet V2/V3 (CRC8/CRC16, XOR-obfuscated payload). Telemetry is the protobuf
@@ -336,14 +339,14 @@ afterwards.
 
 ## Credits
 
-The EcoFlow BLE protocol implementation is a C port of the reverse-engineering
+The BLUETTI BLE protocol implementation is a C port of the reverse-engineering
 work in:
 
 - [`rabits/ha-ef-ble`](https://github.com/rabits/ha-ef-ble) — the Home Assistant
   integration this borrows the handshake, framing, key table, and protobuf
   field layout from.
 - [`rabits/ef-ble-reverse`](https://github.com/rabits/ef-ble-reverse),
-  [`nielsole/ecoflow-bt-reverse-engineering`](https://github.com/nielsole/ecoflow-bt-reverse-engineering)
+  [`nielsole/bluetti-bt-reverse-engineering`](https://github.com/nielsole/bluetti-bt-reverse-engineering)
   — earlier protocol notes.
 
 Bundled third-party code: [micro-ecc](https://github.com/kmackay/micro-ecc)
@@ -351,4 +354,4 @@ Bundled third-party code: [micro-ecc](https://github.com/kmackay/micro-ecc)
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE). Not affiliated with or endorsed by EcoFlow.
+MIT — see [`LICENSE`](LICENSE). Not affiliated with or endorsed by BLUETTI.

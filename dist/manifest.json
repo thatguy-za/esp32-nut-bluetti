@@ -1,5 +1,5 @@
 {
-  "name": "esp32-nut-ecoflow",
+  "name": "esp32-nut-bluetti",
   "version": "0.2.0",
   "funding_url": "",
   "new_install_prompt_erase": true,
@@ -7,7 +7,7 @@
     {
       "chipFamily": "ESP32-S3",
       "parts": [
-        { "path": "esp32-nut-ecoflow-factory.bin", "offset": 0 }
+        { "path": "esp32-nut-bluetti-factory.bin", "offset": 0 }
       ]
     }
   ]

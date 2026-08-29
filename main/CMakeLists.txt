@@ -11,6 +11,6 @@ idf_component_register(
         wifi_mgr
         provisioning
         nut_server
-        ecoflow_ble
+        bluetti_ble
         notify
 )

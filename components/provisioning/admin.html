@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EcoFlow NUT Bridge</title>
+<title>BLUETTI NUT Bridge</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -57,10 +57,10 @@
 </style>
 </head>
 <body>
-<h1>EcoFlow NUT Bridge</h1>
+<h1>BLUETTI NUT Bridge</h1>
 <nav>
   <button data-tab="status" class="active">Status</button>
-  <button data-tab="ecoflow">EcoFlow</button>
+  <button data-tab="bluetti">BLUETTI</button>
   <button data-tab="nut">NUT</button>
   <button data-tab="wifi">Wi-Fi</button>
   <button data-tab="notify">Alerts</button>
@@ -68,7 +68,7 @@
 </nav>
 
 <div id="setupWarn" class="warn" hidden>
-  The EcoFlow unit isn't set up yet — open the <b>EcoFlow</b> tab to finish.
+  No BLUETTI unit selected yet — open the <b>BLUETTI</b> tab to pick one.
 </div>
 
 <!-- ---------------- Status ---------------- -->
@@ -86,18 +86,18 @@
       <span class="hint" id="logInfo"></span>
     </div>
     <pre id="logView">…</pre>
-    <p class="hint">Enable <code>Trace the EcoFlow BLE handshake</code> in
+    <p class="hint">Enable <code>Trace the BLUETTI BLE handshake</code> in
       <code>menuconfig</code> for the full handshake dump. Anyone on this network
       can read this — trusted LAN only.</p>
   </div>
 </section>
 
-<!-- ---------------- EcoFlow ---------------- -->
-<section id="ecoflow">
+<!-- ---------------- BLUETTI ---------------- -->
+<section id="bluetti">
   <form id="efForm">
-    <input type="hidden" name="section" value="ecoflow">
+    <input type="hidden" name="section" value="bluetti">
     <div class="box">
-      <h2>EcoFlow unit</h2>
+      <h2>BLUETTI unit</h2>
       <label for="cfgBleSel">Device</label>
       <select id="cfgBleSel"><option value="">— select —</option></select>
       <div class="row"><button type="button" class="act" id="cfgBleScan">Scan for devices</button></div>
@@ -108,26 +108,15 @@
     </div>
 
     <div class="box">
-      <h2>EcoFlow account</h2>
-      <p class="hint" id="cfgUidState"></p>
-      <details id="cfgAcctDetails">
-        <summary id="cfgAcctSummary">Set the EcoFlow account</summary>
-        <label for="cfgEmail">Email or phone</label>
-        <input id="cfgEmail" name="ef_email" autocomplete="off">
-        <label for="cfgPass">Password</label>
-        <input id="cfgPass" name="ef_pass" type="password" autocomplete="off">
-        <label for="cfgRegion">Region</label>
-        <select id="cfgRegion" name="ef_region">
-          <option value="api">Global / US</option>
-          <option value="api-e">Europe</option>
-          <option value="api-a">Asia-Pacific</option>
-          <option value="api-cn">China (phone only)</option>
-        </select>
-        <label for="cfgUid">…or paste a user id</label>
-        <input id="cfgUid" name="ef_user_id" autocomplete="off">
-        <p class="hint">The password is used once to look up your account id and
-          is not stored.</p>
-      </details>
+      <h2>Protocol <span class="sub">not implemented yet</span></h2>
+      <label class="chk"><input type="checkbox" id="cfgProbe" name="ble_probe"
+        value="1" style="width:auto"> Probe mode</label>
+      <p class="hint">The BLUETTI protocol has not been confirmed on hardware,
+        so there is no decoder yet. Probe mode connects, enumerates the GATT
+        services and characteristics, subscribes to anything that notifies, and
+        hex-dumps what arrives to the <b>Status</b> tab's log. That is what
+        tells us which protocol your unit speaks — see
+        <code>docs/PROTOCOL.md</code> for what to look for.</p>
     </div>
 
     <p><button class="act primary" id="efSave">Save &amp; reboot</button>
@@ -165,7 +154,7 @@
         the low-battery percentage <em>or</em> the remaining runtime falls to this
         many seconds — under a heavy load the runtime gets there first.</p>
       <p class="hint">Clients connect with
-        <code>upsc <span id="upscName">ecoflow</span>@<span id="upscIp">&lt;ip&gt;</span></code>.</p>
+        <code>upsc <span id="upscName">bluetti</span>@<span id="upscIp">&lt;ip&gt;</span></code>.</p>
     </div>
 
     <div class="box">
@@ -183,7 +172,7 @@
         stays anonymous, as it is on a normal NUT server, because
         <code>upsc</code> has no way to send credentials.</p>
       <p class="hint">In <code>upsmon.conf</code>:<br>
-        <code>MONITOR <span id="monName">ecoflow</span>@<span id="monIp">&lt;ip&gt;</span> 1
+        <code>MONITOR <span id="monName">bluetti</span>@<span id="monIp">&lt;ip&gt;</span> 1
         <span id="monUser">upsmon</span> &lt;password&gt; slave</code></p>
     </div>
 
@@ -294,7 +283,7 @@
       <label class="chk"><input type="checkbox" id="tgLow" name="tg_on_low_batt"
         value="1" style="width:auto"> Battery low</label><br>
       <label class="chk"><input type="checkbox" id="tgLink" name="tg_on_link"
-        value="1" style="width:auto"> EcoFlow unit unreachable / back</label>
+        value="1" style="width:auto"> BLUETTI unit unreachable / back</label>
       <p class="hint">Repeats of the same event inside a minute are suppressed,
         so a flapping supply won't spam the chat.</p>
     </div>
@@ -310,7 +299,7 @@
   <div class="box" id="otaBox" hidden>
     <h2>Firmware update</h2>
     <p>Running <code id="fwNow">?</code>. Upload a newer
-      <code>esp32-nut-ecoflow-&lt;version&gt;.bin</code>; it's written to the spare
+      <code>esp32-nut-bluetti-&lt;version&gt;.bin</code>; it's written to the spare
       slot and the device reboots. If the new build won't come up, the bootloader
       rolls back.</p>
     <div class="row">
@@ -354,7 +343,7 @@
 
   <div class="box">
     <h2>Reset</h2>
-    <p>Forget every stored setting (Wi-Fi, admin login, EcoFlow, NUT) and reboot
+    <p>Forget every stored setting (Wi-Fi, admin login, BLUETTI, NUT) and reboot
       into the setup access point.</p>
     <button class="act danger" id="reset">Reset &amp; reboot</button>
     <p class="hint" id="resetMsg"></p>
@@ -369,7 +358,7 @@ tabs.forEach(b => b.onclick = () => {
   document.querySelectorAll('section').forEach(s =>
     s.classList.toggle('active', s.id === b.dataset.tab));
   if (b.dataset.tab === 'status') pollLogs();
-  if (['ecoflow', 'nut', 'wifi', 'notify', 'maint'].includes(b.dataset.tab)) loadConfig();
+  if (['bluetti', 'nut', 'wifi', 'notify', 'maint'].includes(b.dataset.tab)) loadConfig();
 });
 
 /* ---- status ---- */
@@ -378,7 +367,7 @@ const STATUS_LABELS = {
   wifi_mode: 'Wi-Fi mode', network: 'Network', hostname: 'Hostname',
   addressing: 'Addressing', ip: 'IP address', gateway: 'Gateway', dns: 'DNS',
   fw_version: 'Firmware', fw_date: 'Built', ups: 'UPS name',
-  nut_port: 'NUT port', ble_target: 'EcoFlow target',
+  nut_port: 'NUT port', ble_target: 'BLUETTI target',
   ble_connected: 'BLE connected', telemetry_valid: 'Telemetry',
   battery_pct: 'Battery %', ac_input: 'AC input', charging: 'Charging',
   model: 'Model',
@@ -447,13 +436,13 @@ async function loadConfig() {
     cfg = await (await fetch('/api/config')).json();
     $('#cfgBleAddr').value = cfg.ble_addr || cfg.ble_name || '';
     $('#cfgUps').value = cfg.ups_name || '';
-    $('#upscName').textContent = cfg.ups_name || 'ecoflow';
+    $('#upscName').textContent = cfg.ups_name || 'bluetti';
     $('#cfgPort').value = cfg.nut_port || 3493;
     $('#cfgRating').value = cfg.ac_rating_w || 300;
     $('#cfgRtLow').value = cfg.runtime_low_s ?? 300;
     $('#nutUser').value = cfg.nut_user || 'upsmon';
     $('#monUser').textContent = cfg.nut_user || 'upsmon';
-    $('#monName').textContent = cfg.ups_name || 'ecoflow';
+    $('#monName').textContent = cfg.ups_name || 'bluetti';
     $('#nutPass').placeholder = cfg.nut_auth_set ? 'unchanged' : 'none set';
     $('#nutNoAuth').checked = !cfg.nut_auth_set;
     $('#nutAuthState').textContent = cfg.nut_auth_set
@@ -461,16 +450,7 @@ async function loadConfig() {
       : 'No login set — any client may LOGIN.';
     syncNutAuth();
     $('#cfgLow').value = cfg.low_pct || 20;
-    if (cfg.has_user_id) {
-      $('#cfgUidState').textContent =
-        'An EcoFlow account id is stored. Change it only if you switched accounts.';
-      $('#cfgAcctSummary').textContent = 'Change the EcoFlow account';
-    } else {
-      $('#cfgUidState').textContent =
-        'No EcoFlow account id stored — set one below, or the BLE auth will fail.';
-      $('#cfgAcctSummary').textContent = 'Set the EcoFlow account';
-      $('#cfgAcctDetails').open = true;
-    }
+    $('#cfgProbe').checked = !!cfg.ble_probe;
     const ap = cfg.wifi_mode === 'ap';
     document.querySelector(`input[name=wifi_mode][value=${ap ? 'ap' : 'station'}]`).checked = true;
     $('#apSsid').value = cfg.ap_ssid || cfg.default_ap_ssid || '';
@@ -481,7 +461,7 @@ async function loadConfig() {
       $('#wifiSsid').value = cfg.wifi_ssid;
     }
     $('#hostname').value = cfg.hostname || '';
-    $('#hostname').placeholder = cfg.default_ap_ssid || 'esp-nut-ecoflow';
+    $('#hostname').placeholder = cfg.default_ap_ssid || 'esp-nut-bluetti';
     const st = !!cfg.use_static_ip;
     document.querySelector(`input[name=use_static_ip][value="${st ? 1 : 0}"]`).checked = true;
     $('#staticIp').value = cfg.static_ip || '';
@@ -535,19 +515,19 @@ function wireForm(formSel, btnSel, msgSel, after) {
   };
 }
 
-/* ---- EcoFlow tab ---- */
+/* ---- BLUETTI tab ---- */
 let cfgBleTimer = null;
 async function pollCfgBle(deadline, first) {
   try {
     const d = await (await fetch('/api/ble-scan' + (first ? '' : '?poll=1'))).json();
     const sel = $('#cfgBleSel'), keep = sel.value;
     sel.innerHTML = '<option value="">— select —</option>';
-    (d.devices || []).sort((a, b) => (b.ecoflow - a.ecoflow) || (b.rssi - a.rssi))
+    (d.devices || []).sort((a, b) => (b.bluetti - a.bluetti) || (b.rssi - a.rssi))
       .forEach(dev => {
         const o = document.createElement('option');
         o.value = dev.addr;
         o.textContent = (dev.name ? `${dev.name} [${dev.addr}]` : dev.addr) +
-                        ` · ${dev.rssi} dBm` + (dev.ecoflow ? ' ★' : '');
+                        ` · ${dev.rssi} dBm` + (dev.bluetti ? ' ★' : '');
         sel.appendChild(o);
       });
     sel.value = keep;
@@ -584,9 +564,6 @@ $('#cfgBleSel').onchange = () => {
   if ($('#cfgBleSel').value) $('#cfgBleAddr').value = $('#cfgBleSel').value;
 };
 wireForm('#efForm', '#efSave', '#efMsg', fd => {
-  if (!(fd.get('ef_email') && fd.get('ef_pass'))) {
-    fd.delete('ef_email'); fd.delete('ef_pass'); fd.delete('ef_region');
-  }
   if (!fd.get('ble_addr')) {
     $('#efMsg').textContent = 'Pick a device or enter an address.';
     return false;
@@ -600,7 +577,7 @@ function syncNutAuth() {
   $('#nutPass').disabled = off;
 }
 $('#nutNoAuth').onchange = syncNutAuth;
-$('#cfgUps').oninput = () => { $('#monName').textContent = $('#cfgUps').value || 'ecoflow'; };
+$('#cfgUps').oninput = () => { $('#monName').textContent = $('#cfgUps').value || 'bluetti'; };
 $('#nutUser').oninput = () => { $('#monUser').textContent = $('#nutUser').value || 'upsmon'; };
 
 wireForm('#nutForm', '#nutSave', '#nutMsg', fd => {
@@ -712,7 +689,7 @@ $('#reset').onclick = () => {
   if (!confirm('Forget every setting and reboot into setup mode?')) return;
   fetch('/api/factory-reset', { method: 'POST' })
     .then(() => $('#resetMsg').textContent =
-      'Rebooting into setup mode — join the esp-nut-ecoflow-XXXX network.');
+      'Rebooting into setup mode — join the esp-nut-bluetti-XXXX network.');
 };
 
 /* ---- admin login ---- */

@@ -36,7 +36,7 @@ typedef struct {
     char     static_dns[16];
     char     ble_addr[18];   /* "AA:BB:CC:DD:EE:FF"; empty => use ble_name */
     char     ble_name[24];   /* advertised-name prefix fallback           */
-    char     ef_user_id[40]; /* EcoFlow account user id (BLE auth)        */
+    bool     ble_probe;      /* log GATT + notifications, decode nothing  */
     char     ups_name[32];
     uint16_t nut_port;
     uint16_t ac_rating_w;    /* continuous AC output rating, for ups.load  */
@@ -70,7 +70,7 @@ typedef struct {
     bool     provisioned;    /* set true once Wi-Fi setup has succeeded    */
 } app_config_t;
 
-/* This board's default name, "esp-nut-ecoflow-XXXX" (XXXX = last two
+/* This board's default name, "esp-nut-bluetti-XXXX" (XXXX = last two
  * bytes of the Wi-Fi MAC). Used for both the setup AP SSID and the
  * default hostname, so the device answers to one name either way.
  * Reads the MAC from eFuse, so it is valid before Wi-Fi starts. */

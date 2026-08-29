@@ -38,17 +38,17 @@ jobs:
           # Release assets carry the version in their name; the manifest
           # references a stable filename, so normalise it here.
           gh release download "$tag" -p '*-factory.bin' -D _site
-          mv _site/*-factory.bin _site/esp32-nut-ecoflow-factory.bin
+          mv _site/*-factory.bin _site/esp32-nut-bluetti-factory.bin
           cat > _site/manifest.json <<EOF
           {
-            "name": "esp32-nut-ecoflow",
+            "name": "esp32-nut-bluetti",
             "version": "${tag#v}",
             "new_install_prompt_erase": true,
             "builds": [
               {
                 "chipFamily": "ESP32-S3",
                 "parts": [
-                  { "path": "esp32-nut-ecoflow-factory.bin", "offset": 0 }
+                  { "path": "esp32-nut-bluetti-factory.bin", "offset": 0 }
                 ]
               }
             ]
