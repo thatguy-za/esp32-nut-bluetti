@@ -391,6 +391,12 @@ async function refreshStatus() {
       .join('');
     $('#statusTable').innerHTML = rows;
     $('#setupWarn').hidden = !!j.configured;
+    /* Name the tab after the device, so several bridges are told apart in
+       a row of tabs. Falls back to the static title before the first poll
+       lands, or if the hostname is somehow empty. */
+    if (j.hostname) {
+      document.title = j.hostname;
+    }
     $('#upscIp').textContent = j.ip || '<ip>';
     $('#monIp').textContent = j.ip || '<ip>';
     if (j.ota) {
