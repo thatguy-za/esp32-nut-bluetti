@@ -1,0 +1,14 @@
+{
+  "name": "esp32-nut-ecoflow",
+  "version": "0.2.0",
+  "funding_url": "",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "esp32-nut-ecoflow-factory.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

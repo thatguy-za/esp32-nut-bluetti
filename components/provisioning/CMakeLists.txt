@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "provisioning.c"
+        "dns_server.c"
+    INCLUDE_DIRS "include"
+    REQUIRES esp_http_server app_config wifi_mgr ecoflow_ble
+    PRIV_REQUIRES esp_wifi lwip esp_timer
+    EMBED_TXTFILES "portal.html"
+)

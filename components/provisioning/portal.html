@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EcoFlow NUT Bridge setup</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 1.25rem;
+         max-width: 32rem; margin-inline: auto; }
+  h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
+  p.sub { margin: 0 0 1.25rem; opacity: .7; }
+  fieldset { border: 1px solid #8884; border-radius: .6rem; margin: 0 0 1rem;
+             padding: .9rem 1rem 1.1rem; }
+  legend { padding: 0 .4rem; font-weight: 600; }
+  label { display: block; margin: .6rem 0 .2rem; font-size: .9rem; }
+  input, select, button { width: 100%; padding: .55rem .6rem; font-size: 1rem;
+          border-radius: .45rem; border: 1px solid #8886; background: Canvas;
+          color: CanvasText; }
+  .row { display: flex; gap: .6rem; }
+  .row > * { flex: 1; }
+  button { cursor: pointer; font-weight: 600; border-color: transparent;
+           background: #2563eb; color: #fff; margin-top: .4rem; }
+  button.secondary { background: #8883; color: CanvasText; }
+  button:disabled { opacity: .5; cursor: progress; }
+  .hint { font-size: .8rem; opacity: .65; margin-top: .25rem; }
+  #status { margin-top: 1rem; padding: .75rem; border-radius: .5rem;
+            background: #8882; display: none; white-space: pre-wrap; }
+  #status.show { display: block; }
+  .ok { background: #16a34a33 !important; }
+  .err { background: #dc262633 !important; }
+  details { margin-top: .4rem; }
+  summary { cursor: pointer; font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>EcoFlow NUT Bridge</h1>
+<p class="sub">First-time setup. Pick your EcoFlow unit and your Wi-Fi network.</p>
+
+<form id="f">
+  <fieldset>
+    <legend>EcoFlow unit</legend>
+    <label for="ble">Device</label>
+    <select id="ble" name="ble_addr">
+      <option value="">— scan to populate —</option>
+    </select>
+    <button type="button" class="secondary" id="bleScan">Scan for EcoFlow</button>
+    <div class="hint" id="bleHint">The unit must be powered on and within Bluetooth range.</div>
+    <details>
+      <summary>Enter a MAC address manually</summary>
+      <label for="bleManual">BLE address (AA:BB:CC:DD:EE:FF)</label>
+      <input id="bleManual" name="ble_manual" autocomplete="off"
+             pattern="([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}">
+    </details>
+  </fieldset>
+
+  <fieldset>
+    <legend>Wi-Fi</legend>
+    <label for="ssid">Network</label>
+    <input list="aps" id="ssid" name="ssid" autocomplete="off" required>
+    <datalist id="aps"></datalist>
+    <button type="button" class="secondary" id="wifiScan">Rescan networks</button>
+    <label for="pass">Password</label>
+    <input id="pass" name="pass" type="password" autocomplete="off">
+    <div class="hint">Leave blank for an open network.</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>EcoFlow account</legend>
+    <div class="hint">The River 3 only allows Bluetooth access to its own
+      account, so the bridge needs your EcoFlow account ID.</div>
+    <label><input type="radio" name="ef_mode" value="login" checked>
+      Look it up from my EcoFlow login</label>
+    <div id="efLogin">
+      <label for="efEmail">Email or phone</label>
+      <input id="efEmail" name="ef_email" autocomplete="off">
+      <label for="efPass">Password</label>
+      <input id="efPass" name="ef_pass" type="password" autocomplete="off">
+      <label for="efRegion">Region</label>
+      <select id="efRegion" name="ef_region">
+        <option value="api">Global / US</option>
+        <option value="api-e">Europe</option>
+        <option value="api-a">Asia-Pacific</option>
+        <option value="api-cn">China (phone number only)</option>
+      </select>
+      <div class="hint">Used once to fetch your account ID; the password is
+        not stored.</div>
+    </div>
+    <label><input type="radio" name="ef_mode" value="uid">
+      I already have my user ID</label>
+    <div id="efUid" hidden>
+      <label for="efUserId">EcoFlow user ID</label>
+      <input id="efUserId" name="ef_user_id" autocomplete="off">
+    </div>
+  </fieldset>
+
+  <details>
+    <summary>Advanced (NUT settings)</summary>
+    <fieldset>
+      <legend>NUT</legend>
+      <label for="ups">UPS name</label>
+      <input id="ups" name="ups_name" value="ecoflow" autocomplete="off">
+      <div class="row">
+        <div>
+          <label for="port">TCP port</label>
+          <input id="port" name="nut_port" type="number" value="3493" min="1" max="65535">
+        </div>
+        <div>
+          <label for="low">Low battery %</label>
+          <input id="low" name="low_pct" type="number" value="20" min="1" max="99">
+        </div>
+      </div>
+    </fieldset>
+  </details>
+
+  <button type="submit" id="save">Save &amp; connect</button>
+</form>
+
+<div id="status"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const statusEl = $('#status');
+function show(msg, cls) {
+  statusEl.textContent = msg;
+  statusEl.className = 'show' + (cls ? ' ' + cls : '');
+}
+
+async function j(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(url + ' -> ' + r.status);
+  return r.json();
+}
+
+async function scanWifi() {
+  $('#wifiScan').disabled = true;
+  try {
+    const d = await j('/api/wifi-scan');
+    const dl = $('#aps');
+    dl.innerHTML = '';
+    (d.aps || []).forEach(a => {
+      const o = document.createElement('option');
+      o.value = a.ssid;
+      o.label = `${a.rssi} dBm${a.lock ? ' 🔒' : ''}`;
+      dl.appendChild(o);
+    });
+  } catch (e) { show('Wi-Fi scan failed: ' + e.message, 'err'); }
+  $('#wifiScan').disabled = false;
+}
+
+let bleTimer = null;
+async function pollBle(deadline, first) {
+  try {
+    const d = await j('/api/ble-scan' + (first ? '' : '?poll=1'));
+    const sel = $('#ble');
+    const chosen = sel.value;
+    sel.innerHTML = '<option value="">— select —</option>';
+    (d.devices || [])
+      .sort((a, b) => (b.ecoflow - a.ecoflow) || (b.rssi - a.rssi))
+      .forEach(dev => {
+        const o = document.createElement('option');
+        o.value = dev.addr;
+        o.textContent = `${dev.name || dev.addr}  (${dev.rssi} dBm)` +
+                        (dev.ecoflow ? '  ★' : '');
+        sel.appendChild(o);
+      });
+    sel.value = chosen;
+    $('#bleHint').textContent = d.scanning
+      ? 'Scanning…' : `Found ${(d.devices || []).length} device(s).`;
+    if (d.scanning && Date.now() < deadline) {
+      bleTimer = setTimeout(() => pollBle(deadline, false), 1500);
+    } else {
+      $('#bleScan').disabled = false;
+    }
+  } catch (e) {
+    show('BLE scan failed: ' + e.message, 'err');
+    $('#bleScan').disabled = false;
+  }
+}
+
+$('#bleScan').onclick = () => {
+  clearTimeout(bleTimer);
+  $('#bleScan').disabled = true;
+  $('#bleHint').textContent = 'Scanning…';
+  pollBle(Date.now() + 12000, true);
+};
+$('#wifiScan').onclick = scanWifi;
+
+document.querySelectorAll('input[name=ef_mode]').forEach(r => {
+  r.onchange = () => {
+    const login = document.querySelector('input[name=ef_mode]:checked').value === 'login';
+    $('#efLogin').hidden = !login;
+    $('#efUid').hidden = login;
+  };
+});
+
+$('#f').onsubmit = async ev => {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const manual = (fd.get('ble_manual') || '').trim();
+  if (manual) fd.set('ble_addr', manual);
+  fd.delete('ble_manual');
+
+  if (fd.get('ef_mode') === 'uid') {
+    fd.delete('ef_email'); fd.delete('ef_pass'); fd.delete('ef_region');
+  } else {
+    fd.delete('ef_user_id');
+  }
+  fd.delete('ef_mode');
+
+  $('#save').disabled = true;
+  show('Saving, connecting to Wi-Fi, checking EcoFlow account…');
+  try {
+    await j('/api/provision', { method: 'POST', body: new URLSearchParams(fd) });
+  } catch (e) {
+    show('Could not submit: ' + e.message, 'err');
+    $('#save').disabled = false;
+    return;
+  }
+  const t0 = Date.now();
+  const tick = async () => {
+    let s;
+    try { s = await j('/api/status'); }
+    catch (e) { return setTimeout(tick, 1500); }   // AP may drop briefly
+    if (s.state === 'connected') {
+      show(`Connected. The bridge is now at ${s.ip} on your network.\n` +
+           `This setup network will now shut down. Point your NUT clients ` +
+           `at ${s.ip}.`, 'ok');
+      return;
+    }
+    if (s.state === 'failed') {
+      show('Setup failed: ' + (s.detail || 'check your details') +
+           '\nAdjust and try again.', 'err');
+      $('#save').disabled = false;
+      return;
+    }
+    if (Date.now() - t0 > 60000) {
+      show('Still trying… if this persists, restart the device and retry.', 'err');
+      $('#save').disabled = false;
+      return;
+    }
+    setTimeout(tick, 1500);
+  };
+  tick();
+};
+
+scanWifi();
+</script>
+</body>
+</html>
