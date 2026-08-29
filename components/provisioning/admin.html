@@ -24,6 +24,14 @@
                border: 1px solid #8886; background: #8882; color: inherit; cursor: pointer; }
   button.danger { border-color: #c00; background: #c00; color: #fff; }
   label.chk { display: inline-flex; gap: .35rem; align-items: center; }
+  #config label { display: block; margin: .7rem 0 .2rem; font-size: .85rem; opacity: .8; }
+  #config input, #config select { width: 100%; max-width: 24rem; padding: .4rem .5rem;
+    font: inherit; border: 1px solid #8886; border-radius: .35rem;
+    background: Canvas; color: CanvasText; }
+  #config input[type=number] { width: 6rem; }
+  #config h2 { margin: 1.4rem 0 .2rem; }
+  #config details { margin: .4rem 0; }
+  #config summary { cursor: pointer; font-size: .88rem; }
   table { border-collapse: collapse; width: 100%; }
   td { padding: .3rem .5rem; border-bottom: 1px solid #8883; }
   td:first-child { opacity: .7; white-space: nowrap; }
@@ -35,6 +43,7 @@
 <h1>EcoFlow NUT Bridge</h1>
 <nav>
   <button data-tab="status" class="active">Status</button>
+  <button data-tab="config">Config</button>
   <button data-tab="logs">Logs</button>
   <button data-tab="maint">Maintenance</button>
 </nav>
@@ -42,6 +51,51 @@
 <section id="status" class="active">
   <table id="statusTable"><tr><td>loading…</td><td></td></tr></table>
   <p class="hint">Auto-refreshes every 3&nbsp;s.</p>
+</section>
+
+<section id="config">
+  <form id="cfgForm">
+    <h2 style="font-size:1rem">EcoFlow unit</h2>
+    <label for="cfgBleSel">Device</label>
+    <select id="cfgBleSel"><option value="">— keep current / scan —</option></select>
+    <button type="button" class="act" id="cfgBleScan">Re-scan (drops the link briefly)</button>
+    <label for="cfgBleAddr">BLE address / name prefix</label>
+    <input id="cfgBleAddr" name="ble_addr" autocomplete="off">
+    <p class="hint" id="cfgBleHint">A <code>AA:BB:CC:DD:EE:FF</code> address, or a
+      name prefix like <code>EF-R3</code>.</p>
+
+    <h2 style="font-size:1rem">EcoFlow account</h2>
+    <p class="hint" id="cfgUidState"></p>
+    <details>
+      <summary>Change account / user id</summary>
+      <label for="cfgEmail">Email or phone</label>
+      <input id="cfgEmail" name="ef_email" autocomplete="off">
+      <label for="cfgPass">Password</label>
+      <input id="cfgPass" name="ef_pass" type="password" autocomplete="off">
+      <label for="cfgRegion">Region</label>
+      <select id="cfgRegion" name="ef_region">
+        <option value="api">Global / US</option>
+        <option value="api-e">Europe</option>
+        <option value="api-a">Asia-Pacific</option>
+        <option value="api-cn">China (phone only)</option>
+      </select>
+      <label for="cfgUid">…or paste a user id</label>
+      <input id="cfgUid" name="ef_user_id" autocomplete="off">
+    </details>
+
+    <h2 style="font-size:1rem">NUT</h2>
+    <label for="cfgUps">UPS name</label>
+    <input id="cfgUps" name="ups_name" autocomplete="off">
+    <div class="row">
+      <span><label for="cfgPort">TCP port</label>
+        <input id="cfgPort" name="nut_port" type="number" min="1" max="65535" size="6"></span>
+      <span><label for="cfgLow">Low battery %</label>
+        <input id="cfgLow" name="low_pct" type="number" min="1" max="99" size="4"></span>
+    </div>
+
+    <p><button class="act danger" id="cfgSave">Save &amp; reboot</button></p>
+    <p class="hint" id="cfgMsg"></p>
+  </form>
 </section>
 
 <section id="logs">
@@ -90,6 +144,7 @@ tabs.forEach(b => b.onclick = () => {
   document.querySelectorAll('section').forEach(s =>
     s.classList.toggle('active', s.id === b.dataset.tab));
   if (b.dataset.tab === 'logs') pollLogs();
+  if (b.dataset.tab === 'config') loadConfig();
 });
 
 /* ---- status ---- */
@@ -182,6 +237,77 @@ $('#reset').onclick = () => {
   if (!confirm('Forget config and reboot into setup mode?')) return;
   fetch('/api/factory-reset', { method: 'POST' })
     .then(() => $('#resetMsg').textContent = 'Rebooting into setup mode…');
+};
+
+/* ---- config ---- */
+let cfgLoaded = false;
+async function loadConfig() {
+  if (cfgLoaded) return;
+  try {
+    const j = await (await fetch('/api/config')).json();
+    $('#cfgBleAddr').value = j.ble_addr || j.ble_name || '';
+    $('#cfgUps').value = j.ups_name || '';
+    $('#cfgPort').value = j.nut_port || 3493;
+    $('#cfgLow').value = j.low_pct || 20;
+    $('#cfgUidState').textContent = j.has_user_id
+      ? 'An EcoFlow account id is stored. Only change it if you switched accounts.'
+      : 'No EcoFlow account id stored — set one below, or the BLE auth will fail.';
+    cfgLoaded = true;
+  } catch (e) { $('#cfgMsg').textContent = 'Could not load current config.'; }
+}
+
+let cfgBleTimer = null;
+async function pollCfgBle(deadline, first) {
+  try {
+    const d = await (await fetch('/api/ble-scan' + (first ? '' : '?poll=1'))).json();
+    const sel = $('#cfgBleSel'), keep = sel.value;
+    sel.innerHTML = '<option value="">— select —</option>';
+    (d.devices || []).sort((a, b) => (b.ecoflow - a.ecoflow) || (b.rssi - a.rssi))
+      .forEach(dev => {
+        const o = document.createElement('option');
+        o.value = dev.addr;
+        o.textContent = `${dev.name || dev.addr} (${dev.rssi} dBm)` + (dev.ecoflow ? ' ★' : '');
+        sel.appendChild(o);
+      });
+    sel.value = keep;
+    $('#cfgBleHint').textContent = d.scanning ? 'Scanning…'
+      : `Found ${(d.devices || []).length} device(s). The BLE link resumes shortly.`;
+    if (d.scanning && Date.now() < deadline)
+      cfgBleTimer = setTimeout(() => pollCfgBle(deadline, false), 1500);
+    else $('#cfgBleScan').disabled = false;
+  } catch (e) {
+    $('#cfgBleHint').textContent = 'Scan failed.';
+    $('#cfgBleScan').disabled = false;
+  }
+}
+$('#cfgBleScan').onclick = () => {
+  clearTimeout(cfgBleTimer);
+  $('#cfgBleScan').disabled = true;
+  $('#cfgBleHint').textContent = 'Scanning…';
+  pollCfgBle(Date.now() + 12000, true);
+};
+$('#cfgBleSel').onchange = () => {
+  if ($('#cfgBleSel').value) $('#cfgBleAddr').value = $('#cfgBleSel').value;
+};
+
+$('#cfgForm').onsubmit = async ev => {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  if (!(fd.get('ef_email') && fd.get('ef_pass'))) {
+    fd.delete('ef_email'); fd.delete('ef_pass'); fd.delete('ef_region');
+  }
+  if (!fd.get('ef_user_id')) fd.delete('ef_user_id');
+  $('#cfgSave').disabled = true;
+  $('#cfgMsg').textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/reconfigure', { method: 'POST', body: new URLSearchParams(fd) });
+    if (!r.ok) throw new Error(await r.text() || r.status);
+  } catch (e) {
+    $('#cfgMsg').textContent = 'Failed: ' + e.message;
+    $('#cfgSave').disabled = false;
+    return;
+  }
+  $('#cfgMsg').textContent = 'Saved. Rebooting — reload this page in ~15 s.';
 };
 </script>
 </body>

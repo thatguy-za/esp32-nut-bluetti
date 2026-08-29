@@ -86,9 +86,12 @@ your Wi-Fi and start serving NUT.
 ### Admin page
 
 In normal operation the device serves a small page at `http://<device-ip>/` with
-three tabs:
+four tabs:
 
 - **Status** — Wi-Fi IP, BLE link state, battery %, model.
+- **Config** — change the EcoFlow BLE target (re-scan and pick, or type a
+  MAC / name prefix), the EcoFlow account, and the NUT settings (UPS name, port,
+  low-battery %) without a full re-provision. Saving reboots the device.
 - **Logs** — a live tail of the device log (~12 KB ring buffer), so you can watch
   the BLE handshake without a serial cable. Turn on `CONFIG_ECOFLOW_BLE_TRACE`
   for the full dump.

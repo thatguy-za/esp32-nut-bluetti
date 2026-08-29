@@ -63,6 +63,7 @@ static struct {
     char                 name_prefix[24];
 
     ble_mode_t           mode;
+    bool                 resume_connect;   /* return to CONNECT after a scan */
     bool                 synced;
     SemaphoreHandle_t    sync_sem;
 
@@ -87,6 +88,7 @@ static struct {
 } b;
 
 static void start_connect_scan(void);
+static void start_disc(bool want_names_only);
 static int  gap_event(struct ble_gap_event *event, void *arg);
 
 /* ------------------------------------------------------------------ */
@@ -494,7 +496,9 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         if (b.session) {
             ef_session_reset(b.session);
         }
-        if (b.mode == MODE_CONNECT) {
+        if (b.mode == MODE_SCAN) {
+            start_disc(true);            /* dropped the link to make room for a scan */
+        } else if (b.mode == MODE_CONNECT) {
             start_connect_scan();
         }
         return 0;
@@ -641,20 +645,27 @@ int ecoflow_ble_host_init(void)
 
 int ecoflow_ble_scan(uint32_t duration_ms, ecoflow_scan_cb_t cb, void *user)
 {
-    if (b.mode == MODE_CONNECT) {
-        return -1;
-    }
     b.scan_cb = cb;
     b.scan_cb_user = user;
     b.seen_n = 0;
-    b.mode = MODE_SCAN;
 
-    if (b.synced) {
-        start_disc(true);
-    } /* else on_sync() will start it */
+    /* If a connect session is up, drop it for the scan and resume afterwards. */
+    b.resume_connect = (b.mode == MODE_CONNECT);
+    b.mode = MODE_SCAN;
 
     esp_timer_stop(b.scan_timer);
     esp_timer_start_once(b.scan_timer, (uint64_t)duration_ms * 1000);
+
+    if (b.connected) {
+        if (b.tick_timer) {
+            esp_timer_stop(b.tick_timer);
+        }
+        ble_gap_terminate(b.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        /* start_disc() runs from the DISCONNECT handler */
+    } else if (b.synced) {
+        ble_gap_disc_cancel();
+        start_disc(true);
+    } /* else on_sync() will start it */
     return 0;
 }
 
@@ -662,7 +673,14 @@ void ecoflow_ble_scan_stop(void)
 {
     esp_timer_stop(b.scan_timer);
     ble_gap_disc_cancel();
-    if (b.mode == MODE_SCAN) {
+    if (b.mode != MODE_SCAN) {
+        return;
+    }
+    if (b.resume_connect) {
+        b.resume_connect = false;
+        b.mode = MODE_CONNECT;
+        start_connect_scan();
+    } else {
         b.mode = MODE_IDLE;
     }
 }

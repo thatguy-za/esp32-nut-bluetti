@@ -338,6 +338,8 @@ static void reg(httpd_handle_t s, const char *uri, httpd_method_t m,
 static esp_err_t h_admin_root(httpd_req_t *r);
 static esp_err_t h_admin_status(httpd_req_t *r);
 static esp_err_t h_admin_logs(httpd_req_t *r);
+static esp_err_t h_admin_config(httpd_req_t *r);
+static esp_err_t h_admin_reconfigure(httpd_req_t *r);
 static esp_err_t h_factory_reset(httpd_req_t *r);
 #if CONFIG_ENABLE_WEB_OTA
 static esp_err_t h_ota(httpd_req_t *r);
@@ -380,6 +382,9 @@ static esp_err_t start_httpd(bool captive)
         reg(P.httpd, "/", HTTP_GET, h_admin_root);
         reg(P.httpd, "/api/status", HTTP_GET, h_admin_status);
         reg(P.httpd, "/api/logs", HTTP_GET, h_admin_logs);
+        reg(P.httpd, "/api/config", HTTP_GET, h_admin_config);
+        reg(P.httpd, "/api/reconfigure", HTTP_POST, h_admin_reconfigure);
+        reg(P.httpd, "/api/ble-scan", HTTP_GET, h_ble_scan);
         reg(P.httpd, "/api/factory-reset", HTTP_POST, h_factory_reset);
 #if CONFIG_ENABLE_WEB_OTA
         reg(P.httpd, "/api/ota", HTTP_POST, h_ota);
@@ -511,6 +516,104 @@ static esp_err_t h_factory_reset(httpd_req_t *r)
     return ESP_OK;
 }
 
+/* ---- live reconfiguration (EcoFlow target + NUT, keeps Wi-Fi) ---- */
+
+static esp_err_t h_admin_config(httpd_req_t *r)
+{
+    char out[256];
+    snprintf(out, sizeof(out),
+             "{\"ble_addr\":\"%s\",\"ble_name\":\"%s\",\"has_user_id\":%s,"
+             "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u}",
+             P.cfg->ble_addr, P.cfg->ble_name,
+             P.cfg->ef_user_id[0] ? "true" : "false",
+             P.cfg->ups_name, P.cfg->nut_port, P.cfg->low_pct, P.cfg->poll_ms);
+    return send_json(r, out);
+}
+
+static void reconfigure_task(void *arg)
+{
+    if (P.ef_email[0] && P.ef_pass[0]) {
+        char err[80] = "";
+        int lr = ecoflow_resolve_user_id(P.ef_email, P.ef_pass, P.ef_region,
+                                         P.pending.ef_user_id,
+                                         sizeof(P.pending.ef_user_id),
+                                         err, sizeof(err));
+        memset(P.ef_pass, 0, sizeof(P.ef_pass));
+        if (lr != 0) {
+            snprintf(P.detail, sizeof(P.detail), "EcoFlow login: %s", err);
+            P.state = ST_FAILED;
+            vTaskDelete(NULL);
+            return;
+        }
+    }
+    memset(P.ef_pass, 0, sizeof(P.ef_pass));
+
+    *P.cfg = P.pending;
+    P.cfg->provisioned = true;
+    app_config_save(P.cfg);
+    P.state = ST_CONNECTED;
+    ESP_LOGW(TAG, "reconfigured via web; rebooting");
+    vTaskDelay(pdMS_TO_TICKS(800));
+    esp_restart();
+}
+
+static esp_err_t h_admin_reconfigure(httpd_req_t *r)
+{
+    int len = r->content_len;
+    if (len <= 0 || len > 1024) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
+    }
+    char *body = malloc(len + 1);
+    if (!body) {
+        return httpd_resp_send_500(r);
+    }
+    int got = 0;
+    while (got < len) {
+        int k = httpd_req_recv(r, body + got, len - got);
+        if (k <= 0) { free(body); return httpd_resp_send_500(r); }
+        got += k;
+    }
+    body[len] = '\0';
+
+    P.pending = *P.cfg;
+    char v[128];
+    if (form_get(body, "ble_addr", v, sizeof(v))) {
+        strlcpy(P.pending.ble_addr, v, sizeof(P.pending.ble_addr));
+    }
+    if (form_get(body, "ble_name", v, sizeof(v)) && v[0]) {
+        strlcpy(P.pending.ble_name, v, sizeof(P.pending.ble_name));
+    }
+    if (form_get(body, "ef_user_id", v, sizeof(v)) && v[0]) {
+        strlcpy(P.pending.ef_user_id, v, sizeof(P.pending.ef_user_id));
+    }
+    if (form_get(body, "ups_name", v, sizeof(v)) && v[0]) {
+        strlcpy(P.pending.ups_name, v, sizeof(P.pending.ups_name));
+    }
+    if (form_get(body, "nut_port", v, sizeof(v)) && atoi(v) > 0) {
+        P.pending.nut_port = (uint16_t)atoi(v);
+    }
+    if (form_get(body, "low_pct", v, sizeof(v)) && atoi(v) > 0) {
+        P.pending.low_pct = (uint8_t)atoi(v);
+    }
+    form_get(body, "ef_email", P.ef_email, sizeof(P.ef_email));
+    form_get(body, "ef_pass", P.ef_pass, sizeof(P.ef_pass));
+    if (!form_get(body, "ef_region", P.ef_region, sizeof(P.ef_region)) ||
+        !P.ef_region[0]) {
+        strlcpy(P.ef_region, "api", sizeof(P.ef_region));
+    }
+    free(body);
+
+    if (P.pending.ble_addr[0] == '\0' && P.pending.ble_name[0] == '\0') {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                   "need a BLE address or name");
+    }
+
+    P.state = ST_CONNECTING;
+    P.detail[0] = '\0';
+    xTaskCreate(reconfigure_task, "reconfigure", 4096, NULL, 5, NULL);
+    return send_json(r, "{\"ok\":true}");
+}
+
 #if CONFIG_ENABLE_WEB_OTA
 static void reboot_task(void *arg)
 {
@@ -604,6 +707,10 @@ static esp_err_t h_ota(httpd_req_t *r)
 esp_err_t provisioning_admin_start(const app_config_t *cfg)
 {
     P.cfg = (app_config_t *)cfg;
+    if (!P.ble_lock) {
+        P.ble_lock = xSemaphoreCreateMutex();   /* used by /api/ble-scan */
+    }
+    strlcpy(P.ef_region, "api", sizeof(P.ef_region));
     esp_err_t rc = start_httpd(false);
     if (rc == ESP_OK) {
         ESP_LOGI(TAG, "admin server on :80");
