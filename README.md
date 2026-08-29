@@ -116,13 +116,25 @@ it starts a **captive-portal setup**:
 All settings are stored in NVS (flash), so subsequent boots connect straight to
 your Wi-Fi and start serving NUT.
 
+### Admin page
+
+In normal operation the device serves a small page at `http://<device-ip>/` with
+three tabs:
+
+- **Status** — Wi-Fi IP, BLE link state, battery %, model.
+- **Logs** — a live tail of the device log (~12 KB ring buffer), so you can watch
+  the BLE handshake without a serial cable. Turn on `CONFIG_ECOFLOW_BLE_TRACE`
+  for the full dump.
+- **Maintenance** — *Forget config & reboot* (re-provision).
+
+There is no authentication — keep it on a trusted LAN.
+
 ### Re-provisioning
 
 - **BOOT button:** hold GPIO0 to GND while resetting, keep it held ~3 s. The
   stored config is wiped and the device reboots into setup mode. (Pin and hold
   time are configurable in `menuconfig`.)
-- **Web:** browse to `http://<device-ip>/` on your LAN and use
-  **Forget config & reboot**.
+- **Web:** the Maintenance tab of the admin page.
 
 If stored Wi-Fi credentials ever stop working, the device falls back to setup
 mode on its own after a failed connect.
@@ -150,7 +162,7 @@ anyone); keep the device on a trusted LAN.
 | `main/` | boot flow / EcoFlow→NUT variable mapping |
 | `components/app_config/` | NVS-backed runtime config |
 | `components/wifi_mgr/` | STA + SoftAP + scan |
-| `components/provisioning/` | captive portal (`portal.html`), DNS server, admin page |
+| `components/provisioning/` | captive portal (`portal.html`), DNS server, admin page (`admin.html`), web log tail (`log_ring.c`) |
 | `components/nut_server/` | upsd-compatible TCP protocol server |
 | `components/micro_ecc/` | vendored micro-ecc (secp160r1 for the BLE handshake) |
 | `components/ecoflow_ble/` | NimBLE transport + EcoFlow V2 stack: |

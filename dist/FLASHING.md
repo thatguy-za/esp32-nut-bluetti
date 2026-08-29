@@ -3,8 +3,8 @@
 `esp32-nut-ecoflow-factory.bin` is a **merged factory image** for **ESP32-S3**:
 bootloader + partition table + app in one file, written at flash offset `0x0`.
 
-- size: 1,362,736 bytes
-- sha256: `c423dd23da8395e543b31f213c989eee90785dd1972a8a38a9cfe0d5c347e120`
+- size: 1,380,592 bytes
+- sha256: `a7071cd89ad9c5343992c5e95d9256df915af2b2cc7a0a8777dcdc41e943f09f`
 - chip: ESP32-S3, flash mode DIO, 80 MHz, 2 MB
 
 Use a Chromium browser (Chrome / Edge / Opera) on a desktop — flashing needs

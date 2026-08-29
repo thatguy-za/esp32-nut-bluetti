@@ -27,6 +27,7 @@
 #include "app_config.h"
 #include "wifi_mgr.h"
 #include "provisioning.h"
+#include "log_ring.h"
 #include "nut_server.h"
 #include "ecoflow_ble.h"
 
@@ -195,6 +196,8 @@ static void start_services(const app_config_t *cfg)
 
 void app_main(void)
 {
+    log_ring_init();   /* tee the log stream to the web UI, from here on */
+
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES ||
         err == ESP_ERR_NVS_NEW_VERSION_FOUND) {

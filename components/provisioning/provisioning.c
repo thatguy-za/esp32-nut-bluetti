@@ -5,6 +5,7 @@
 
 #include "provisioning.h"
 #include "dns_server.h"
+#include "log_ring.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -28,6 +29,8 @@ static const char *TAG = "provisioning";
 
 extern const char portal_html_start[] asm("_binary_portal_html_start");
 extern const char portal_html_end[]   asm("_binary_portal_html_end");
+extern const char admin_html_start[]  asm("_binary_admin_html_start");
+extern const char admin_html_end[]    asm("_binary_admin_html_end");
 
 #define AP_IP "192.168.4.1"
 
@@ -332,6 +335,7 @@ static void reg(httpd_handle_t s, const char *uri, httpd_method_t m,
 
 static esp_err_t h_admin_root(httpd_req_t *r);
 static esp_err_t h_admin_status(httpd_req_t *r);
+static esp_err_t h_admin_logs(httpd_req_t *r);
 static esp_err_t h_factory_reset(httpd_req_t *r);
 
 static esp_err_t start_httpd(bool captive)
@@ -367,6 +371,7 @@ static esp_err_t start_httpd(bool captive)
     } else {
         reg(P.httpd, "/", HTTP_GET, h_admin_root);
         reg(P.httpd, "/api/status", HTTP_GET, h_admin_status);
+        reg(P.httpd, "/api/logs", HTTP_GET, h_admin_logs);
         reg(P.httpd, "/api/factory-reset", HTTP_POST, h_factory_reset);
     }
     return ESP_OK;
@@ -420,26 +425,11 @@ esp_err_t provisioning_run(app_config_t *cfg)
 
 /* ---- public: normal-mode admin server ---------------------------- */
 
-static const char ADMIN_HTML[] =
-    "<!doctype html><meta charset=utf-8><meta name=viewport "
-    "content='width=device-width,initial-scale=1'>"
-    "<title>EcoFlow NUT Bridge</title>"
-    "<style>body{font:16px system-ui;margin:2rem auto;max-width:28rem;"
-    "padding:0 1rem}button{padding:.6rem 1rem;font-size:1rem;border-radius:.4rem;"
-    "border:1px solid #c00;background:#c00;color:#fff;cursor:pointer}</style>"
-    "<h1>EcoFlow NUT Bridge</h1><pre id=s>loading…</pre>"
-    "<h2>Re-provision</h2><p>Forget the stored Wi-Fi / EcoFlow settings and "
-    "reboot into setup mode.</p>"
-    "<button onclick=\"if(confirm('Forget config and reboot?'))"
-    "fetch('/api/factory-reset',{method:'POST'}).then(()=>s.textContent="
-    "'Rebooting into setup mode…')\">Forget config &amp; reboot</button>"
-    "<script>fetch('/api/status').then(r=>r.json()).then(j=>"
-    "s.textContent=JSON.stringify(j,null,2))</script>";
-
 static esp_err_t h_admin_root(httpd_req_t *r)
 {
     httpd_resp_set_type(r, "text/html");
-    return httpd_resp_sendstr(r, ADMIN_HTML);
+    return httpd_resp_send(r, admin_html_start,
+                           admin_html_end - admin_html_start - 1);
 }
 
 static esp_err_t h_admin_status(httpd_req_t *r)
@@ -448,16 +438,48 @@ static esp_err_t h_admin_status(httpd_req_t *r)
     wifi_mgr_sta_ip(ip, sizeof(ip));
     ecoflow_state_t st;
     bool have = ecoflow_ble_get_state(&st);
-    char out[256];
+    char out[320];
     snprintf(out, sizeof(out),
              "{\"ip\":\"%s\",\"ups\":\"%s\",\"nut_port\":%u,"
              "\"ble_target\":\"%s\",\"ble_connected\":%s,"
-             "\"battery_pct\":%d,\"telemetry_valid\":%s}",
+             "\"telemetry_valid\":%s,\"battery_pct\":%d,"
+             "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\"}",
              ip, P.cfg->ups_name, P.cfg->nut_port,
              P.cfg->ble_addr[0] ? P.cfg->ble_addr : P.cfg->ble_name,
              ecoflow_ble_connected() ? "true" : "false",
-             have ? st.soc_pct : 0, have ? "true" : "false");
+             have && st.valid ? "true" : "false",
+             have ? st.soc_pct : 0,
+             have && st.ac_input_present ? "true" : "false",
+             have && st.charging ? "true" : "false",
+             have && st.model[0] ? st.model : "");
     return send_json(r, out);
+}
+
+static esp_err_t h_admin_logs(httpd_req_t *r)
+{
+    char q[40] = "";
+    httpd_req_get_url_query_str(r, q, sizeof(q));
+    uint64_t from = 0;
+    const char *p = strstr(q, "from=");
+    if (p) {
+        from = strtoull(p + 5, NULL, 10);
+    }
+
+    char *buf = malloc(4096);
+    if (!buf) {
+        return httpd_resp_send_500(r);
+    }
+    uint64_t next = from;
+    size_t n = log_ring_read(from, buf, 4096, &next);
+
+    char hdr[24];
+    snprintf(hdr, sizeof(hdr), "%llu", (unsigned long long)next);
+    httpd_resp_set_type(r, "text/plain");
+    httpd_resp_set_hdr(r, "X-Log-Next", hdr);
+    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+    esp_err_t rc = httpd_resp_send(r, buf, n);
+    free(buf);
+    return rc;
 }
 
 static esp_err_t h_factory_reset(httpd_req_t *r)

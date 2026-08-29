@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EcoFlow NUT Bridge</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 1rem;
+         max-width: 46rem; margin-inline: auto; }
+  h1 { font-size: 1.25rem; margin: .2rem 0 1rem; }
+  nav { display: flex; gap: .3rem; border-bottom: 1px solid #8884; margin-bottom: 1rem; }
+  nav button { border: 0; background: none; color: inherit; font: inherit;
+               padding: .5rem .9rem; cursor: pointer; border-bottom: 2px solid transparent; }
+  nav button.active { border-bottom-color: #2563eb; font-weight: 600; }
+  section { display: none; }
+  section.active { display: block; }
+  pre { background: #111b; color: #d7e0e8; padding: .75rem; border-radius: .4rem;
+        overflow: auto; max-height: 62vh; font: 12px/1.45 ui-monospace, monospace;
+        white-space: pre-wrap; word-break: break-word; }
+  .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .5rem 0; }
+  button.act { padding: .45rem .8rem; font: inherit; border-radius: .35rem;
+               border: 1px solid #8886; background: #8882; color: inherit; cursor: pointer; }
+  button.danger { border-color: #c00; background: #c00; color: #fff; }
+  label.chk { display: inline-flex; gap: .35rem; align-items: center; }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: .3rem .5rem; border-bottom: 1px solid #8883; }
+  td:first-child { opacity: .7; white-space: nowrap; }
+  .hint { font-size: .82rem; opacity: .65; }
+  code { background: #8882; padding: .05em .3em; border-radius: .25em; }
+</style>
+</head>
+<body>
+<h1>EcoFlow NUT Bridge</h1>
+<nav>
+  <button data-tab="status" class="active">Status</button>
+  <button data-tab="logs">Logs</button>
+  <button data-tab="maint">Maintenance</button>
+</nav>
+
+<section id="status" class="active">
+  <table id="statusTable"><tr><td>loading…</td><td></td></tr></table>
+  <p class="hint">Auto-refreshes every 3&nbsp;s.</p>
+</section>
+
+<section id="logs">
+  <div class="row">
+    <label class="chk"><input type="checkbox" id="follow" checked> Follow</label>
+    <button class="act" id="clearView">Clear view</button>
+    <button class="act" id="copyLog">Copy</button>
+    <span class="hint" id="logInfo"></span>
+  </div>
+  <pre id="logView">…</pre>
+  <p class="hint">Device log tail (~12&nbsp;KB). Enable
+    <code>Trace the EcoFlow BLE handshake</code> in <code>menuconfig</code> for the
+    full handshake dump. Anyone on this network can read this — trusted LAN only.</p>
+</section>
+
+<section id="maint">
+  <h2 style="font-size:1rem">Re-provision</h2>
+  <p>Forget the stored Wi-Fi / EcoFlow settings and reboot into setup mode.</p>
+  <button class="act danger" id="reset">Forget config &amp; reboot</button>
+  <p class="hint" id="resetMsg"></p>
+</section>
+
+<script>
+const $ = s => document.querySelector(s);
+const tabs = document.querySelectorAll('nav button');
+tabs.forEach(b => b.onclick = () => {
+  tabs.forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('section').forEach(s =>
+    s.classList.toggle('active', s.id === b.dataset.tab));
+  if (b.dataset.tab === 'logs') pollLogs();
+});
+
+/* ---- status ---- */
+async function refreshStatus() {
+  try {
+    const j = await (await fetch('/api/status')).json();
+    const rows = Object.entries(j).map(([k, v]) =>
+      `<tr><td>${k}</td><td>${String(v)}</td></tr>`).join('');
+    $('#statusTable').innerHTML = rows;
+  } catch (e) { /* keep last */ }
+}
+refreshStatus();
+setInterval(refreshStatus, 3000);
+
+/* ---- logs ---- */
+let logCursor = 0, logText = '', logTimer = null;
+async function pollLogs() {
+  clearTimeout(logTimer);
+  try {
+    const r = await fetch('/api/logs?from=' + logCursor);
+    const next = r.headers.get('X-Log-Next');
+    const chunk = await r.text();
+    if (next !== null) {
+      if (+next < logCursor) logText = '';      /* ring wrapped past us */
+      logCursor = +next;
+    }
+    if (chunk) {
+      logText = (logText + chunk).slice(-60000);
+      const v = $('#logView');
+      v.textContent = logText;
+      if ($('#follow').checked) v.scrollTop = v.scrollHeight;
+    }
+    $('#logInfo').textContent = 'at byte ' + logCursor;
+  } catch (e) {
+    $('#logInfo').textContent = 'poll error';
+  }
+  if ($('#logs').classList.contains('active'))
+    logTimer = setTimeout(pollLogs, 1500);
+}
+$('#clearView').onclick = () => { logText = ''; $('#logView').textContent = ''; };
+$('#copyLog').onclick = () => {
+  if (navigator.clipboard?.writeText) { navigator.clipboard.writeText(logText); return; }
+  const t = document.createElement('textarea');           /* plain-http fallback */
+  t.value = logText; document.body.appendChild(t); t.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  t.remove();
+};
+
+/* ---- maintenance ---- */
+$('#reset').onclick = () => {
+  if (!confirm('Forget config and reboot into setup mode?')) return;
+  fetch('/api/factory-reset', { method: 'POST' })
+    .then(() => $('#resetMsg').textContent = 'Rebooting into setup mode…');
+};
+</script>
+</body>
+</html>
