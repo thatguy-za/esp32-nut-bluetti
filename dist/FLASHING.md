@@ -11,34 +11,33 @@ them after downloading.
 Use a Chromium browser (Chrome / Edge / Opera) on a desktop — flashing needs
 Web Serial, which Firefox and Safari don't support.
 
-## Option A — ESP Web Tools install button (this folder)
+## Option A — hosted web installer (easiest)
 
-Drop `esp32-nut-ecoflow-factory.bin` from the
-[GitHub release](https://github.com/thatguy-za/esp32-nut-ecoflow/releases) into
-this `dist/` folder (it is not checked into git), host the folder on any static
-host (GitHub Pages, Netlify, `python3 -m http.server`, …), and open `index.html`.
-It renders an **Install** button backed by
-[ESP Web Tools](https://esphome.github.io/esp-web-tools/) reading `manifest.json`.
-Click it, pick the serial port, done — it erases flash and writes the image.
+<https://thatguy-za.github.io/esp32-nut-ecoflow/> — a one-click
+[ESP Web Tools](https://esphome.github.io/esp-web-tools/) **Install** button that
+pulls the current release. Nothing to download or host.
 
-## Option B — Espressif's web flasher (no hosting needed)
+## Option B — web.esphome.io
 
-1. Go to <https://espressif.github.io/esptool-js/>.
-2. **Connect**, pick the board's serial port.
-3. Add file `esp32-nut-ecoflow-factory.bin` at **Flash Address `0x0`**.
-4. **Program**.
+**Connect**, pick the serial port, then choose `esp32-nut-ecoflow-factory.bin`
+from the [release](https://github.com/thatguy-za/esp32-nut-ecoflow/releases).
 
-## Option C — esptool on the command line
+## Option C — Espressif's esptool-js (no hosting)
+
+1. <https://espressif.github.io/esptool-js/> → **Connect**, pick the port.
+2. Add `esp32-nut-ecoflow-factory.bin` at **Flash Address `0x0`**, **Program**.
+
+## Option D — esptool on the command line
 
 ```bash
 esptool --chip esp32s3 -b 460800 write-flash 0x0 esp32-nut-ecoflow-factory.bin
 ```
 
-## Note on web.esphome.io
+## Self-hosting the install button
 
-<https://web.esphome.io> is specific to ESPHome-generated firmware and won't
-flash this image through its normal UI. Use Option A or B instead — both use the
-same underlying flashing engine.
+The [`dist/`](.) folder has `index.html` + `manifest.json`. Drop the release
+`esp32-nut-ecoflow-factory.bin` beside them and serve the folder from any static
+host to get your own copy of Option A.
 
 ## First boot
 

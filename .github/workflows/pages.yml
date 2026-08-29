@@ -1,0 +1,62 @@
+name: Pages (web installer)
+
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['dist/index.html', '.github/workflows/pages.yml']
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble site from the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          echo "Latest release: $tag"
+          mkdir -p _site
+          cp dist/index.html _site/
+          gh release download "$tag" \
+            -p 'esp32-nut-ecoflow-factory.bin' -D _site
+          cat > _site/manifest.json <<EOF
+          {
+            "name": "esp32-nut-ecoflow",
+            "version": "${tag#v}",
+            "new_install_prompt_erase": true,
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  { "path": "esp32-nut-ecoflow-factory.bin", "offset": 0 }
+                ]
+              }
+            ]
+          }
+          EOF
+          ls -l _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

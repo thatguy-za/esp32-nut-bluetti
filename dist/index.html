@@ -5,36 +5,47 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Flash esp32-nut-ecoflow</title>
 <style>
-  body { font: 16px/1.6 system-ui, sans-serif; max-width: 36rem; margin: 3rem auto;
-         padding: 0 1.25rem; }
-  h1 { font-size: 1.4rem; }
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.6 system-ui, sans-serif; max-width: 34rem;
+         margin: 3rem auto; padding: 0 1.25rem; }
+  h1 { font-size: 1.35rem; margin-bottom: .2rem; }
+  h2 { font-size: 1rem; margin-top: 2rem; }
+  a { color: #2563eb; }
   code { background: #8882; padding: .1em .35em; border-radius: .3em; }
   ol { padding-left: 1.2rem; }
+  .sub { opacity: .7; margin-top: 0; }
   .note { opacity: .75; font-size: .9rem; }
+  .warn { border-left: 3px solid #d9822b; padding: .5rem .8rem; background: #d9822b1a;
+          border-radius: .3rem; font-size: .92rem; }
+  esp-web-install-button { display: inline-block; margin: .5rem 0; }
 </style>
 </head>
 <body>
-<h1>esp32-nut-ecoflow — firmware installer</h1>
+<h1>esp32-nut-ecoflow</h1>
+<p class="sub">Web installer &middot;
+  <a href="https://github.com/thatguy-za/esp32-nut-ecoflow">source &amp; docs</a></p>
 
-<p>Connect an <strong>ESP32-S3</strong> board over USB, then:</p>
+<p class="warn"><strong>Work in progress.</strong> The EcoFlow River&nbsp;3 BLE
+handshake has not yet been confirmed on real hardware.</p>
 
-<p>
-  <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
-</p>
+<p>Plug an <strong>ESP32-S3 (≥4&nbsp;MB flash)</strong> into this computer, then:</p>
 
-<p class="note">
-  Works in Chrome, Edge, or Opera on desktop (Web Serial). The installer
-  erases the flash and writes <code>esp32-nut-ecoflow-factory.bin</code> at
-  offset <code>0x0</code>.
-</p>
+<p><esp-web-install-button manifest="manifest.json"></esp-web-install-button></p>
+
+<p class="note">Needs Chrome, Edge, or Opera on desktop (Web Serial). The
+installer erases the flash and writes the firmware at offset <code>0x0</code>.
+Later updates go over Wi-Fi from the device's own admin page — no cable.</p>
 
 <h2>After flashing</h2>
 <ol>
-  <li>The device creates an open Wi-Fi network <code>ecoflow-setup-XXXX</code>.</li>
-  <li>Join it — the setup page opens automatically (or browse to
+  <li>The device starts an open Wi-Fi network <code>ecoflow-setup-XXXX</code>.
+      Join it; the setup page should open automatically (or browse to
       <code>http://192.168.4.1/</code>).</li>
-  <li>Scan for your EcoFlow unit, pick your Wi-Fi, and save.</li>
-  <li>Point your NUT clients at the device's LAN IP, port 3493.</li>
+  <li><strong>Scan for EcoFlow</strong> and pick your River&nbsp;3.</li>
+  <li><strong>EcoFlow account</strong> — enter your EcoFlow email + password
+      (used once to look up your account id; not stored) or paste the id.</li>
+  <li>Choose your <strong>Wi-Fi</strong> and save.</li>
+  <li>Point your NUT clients at the device's LAN IP, port <code>3493</code>.</li>
 </ol>
 
 <script type="module"

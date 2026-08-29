@@ -42,28 +42,18 @@ will also refuse the BLE auth.
 
 ## Flash it
 
-Grab `esp32-nut-ecoflow-factory.bin` from the
-[latest release](https://github.com/thatguy-za/esp32-nut-ecoflow/releases/latest).
-It targets an **ESP32-S3 with ≥4 MB flash** and is written at flash offset `0x0`.
-Only this first flash is over USB — after that, updates go over the network from
-the [admin page](#admin-page).
+Open the **[web installer](https://thatguy-za.github.io/esp32-nut-ecoflow/)** in
+Chrome, Edge, or Opera on a desktop, plug in an **ESP32-S3 (≥4 MB flash)**, and
+click **Install**. It's an [ESP Web Tools](https://esphome.github.io/esp-web-tools/)
+button pointing at the latest release — the same one-click flasher ESPHome uses.
 
-Flashing needs **Web Serial**, so use a Chromium browser (Chrome / Edge / Opera)
-on a desktop — not Firefox or Safari.
+Or on **[web.esphome.io](https://web.esphome.io)**: *Connect*, then choose
+`esp32-nut-ecoflow-factory.bin` from the
+[latest release](https://github.com/thatguy-za/esp32-nut-ecoflow/releases).
 
-- **[esptool-js](https://espressif.github.io/esptool-js/)** — Espressif's
-  browser flasher. *Connect*, add `esp32-nut-ecoflow-factory.bin` at address
-  `0x0`, *Program*. Nothing to install.
-- **ESP Web Tools install button** — the engine behind
-  [ESPHome's web installer](https://esphome.github.io/esp-web-tools/). Drop the
-  release `.bin` into [`dist/`](dist/), host that folder, and open `index.html`
-  for a one-click *Install*. Details in [`dist/FLASHING.md`](dist/FLASHING.md).
-- **Command line:**
-  `esptool --chip esp32s3 write-flash 0x0 esp32-nut-ecoflow-factory.bin`
-
-> [web.esphome.io](https://web.esphome.io) itself **won't** flash this — it only
-> handles ESPHome-generated firmware. Use one of the options above (they all use
-> the same underlying flashing code).
+Only this first flash needs a cable. After that, updates go over the network from
+the [admin page](#admin-page). Offline / Linux / `esptool` instructions are in
+[`dist/FLASHING.md`](dist/FLASHING.md).
 
 You also need a Wi-Fi network the monitoring hosts can reach, and — on most dev
 boards — the BOOT button on GPIO0 for the config wipe.
