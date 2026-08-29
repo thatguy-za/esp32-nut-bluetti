@@ -18,6 +18,17 @@ extern const uint8_t ef_keydata_end[]   asm("_binary_ef_keydata_bin_end");
 
 #define STAGE_TIMEOUT_US (12 * 1000 * 1000LL)
 
+/* CONFIG_ECOFLOW_BLE_TRACE dumps handshake material (including the derived
+ * keys) at INFO level — for bringing the BLE link up on new hardware. */
+#ifdef CONFIG_ECOFLOW_BLE_TRACE
+#define TRACE(msg, buf, len) \
+    ESP_LOG_BUFFER_HEXDUMP(TAG, (buf), (len), ESP_LOG_INFO)
+#define TRACEF(...) ESP_LOGI(TAG, __VA_ARGS__)
+#else
+#define TRACE(msg, buf, len) do { } while (0)
+#define TRACEF(...) do { } while (0)
+#endif
+
 struct ef_session {
     ef_sess_state_t state;
     char            err[64];
@@ -117,6 +128,8 @@ static int step_send_pubkey(ef_session_t *s)
 
     uint8_t frame[64];
     size_t flen = ef_enc_simple_encode(payload, sizeof(payload), frame);
+    TRACEF("-> pubkey exchange (%u B)", (unsigned)flen);
+    TRACE("our pubkey", s->pub, EF_ECC_PUB_LEN);
     if (send_frame(s, frame, flen) != 0) {
         fail(s, "pubkey write failed");
         return -1;
@@ -127,11 +140,14 @@ static int step_send_pubkey(ef_session_t *s)
 
 static void on_pubkey_reply(ef_session_t *s, const uint8_t *body, size_t len)
 {
+    TRACEF("<- pubkey reply (%u B)", (unsigned)len);
+    TRACE("pubkey reply", body, len);
     if (len < 3) {
         fail(s, "short pubkey reply");
         return;
     }
     int size = ecdh_type_size(body[2]);
+    TRACEF("ecdh_type=0x%02x -> keysize %d", body[2], size);
     if ((size_t)(3 + size) > len || size != EF_ECC_PUB_LEN) {
         fail(s, "unexpected ecdh curve");
         return;
@@ -144,6 +160,9 @@ static void on_pubkey_reply(ef_session_t *s, const uint8_t *body, size_t len)
     ef_md5(shared, sizeof(shared), s->iv);
     memcpy(s->key, shared, 16);
     s->have_key = true;
+    TRACE("device pubkey", &body[3], size);
+    TRACE("shared secret", shared, sizeof(shared));
+    TRACE("iv = md5(shared)", s->iv, 16);
 
     uint8_t req = 0x02;
     uint8_t frame[32];
@@ -194,6 +213,9 @@ static void on_keyinfo_reply(ef_session_t *s, const uint8_t *body, size_t len)
     uint8_t session_key[16];
     gen_session_key(seed, srand, session_key);
     memcpy(s->key, session_key, 16);
+    TRACEF("<- keyinfo reply (%u B)", (unsigned)len);
+    TRACE("keyinfo plaintext", dec, 18);
+    TRACE("session key", session_key, 16);
 
     /* getAuthStatus: encrypted empty packet */
     if (send_packet(s, 0x21, 0x35, 0x35, 0x89, 0x03, NULL, 0) != 0) {
@@ -225,6 +247,8 @@ static void send_auto_auth(ef_session_t *s)
 
     char token[32];
     hex_upper(digest, 16, token);
+    TRACEF("-> auto-auth: md5(user_id[%d] + sn '%s')", (int)strlen(s->user_id), s->sn);
+    TRACE("auth token", (const uint8_t *)token, sizeof(token));
 
     if (send_packet(s, 0x21, 0x35, 0x35, 0x86, 0x03,
                     (const uint8_t *)token, sizeof(token)) != 0) {
@@ -276,8 +300,13 @@ static void on_inner_packet(ef_session_t *s, const uint8_t *body, size_t len)
 {
     ef_packet_t *pkt = &s->sc_pkt;
     if (ef_packet_parse(body, len, pkt) != 0) {
+        TRACEF("inner packet parse failed (%u B)", (unsigned)len);
+        TRACE("bad inner", body, len < 32 ? len : 32);
         return;   /* not a packet we can read; ignore */
     }
+    TRACEF("<- pkt src=0x%02x dst=0x%02x set=0x%02x id=0x%02x plen=%u",
+           pkt->src, pkt->dst, pkt->cmd_set, pkt->cmd_id,
+           (unsigned)pkt->payload_len);
 
     if (s->state == EF_SESS_AUTH) {
         bool auth_reply = (pkt->src == 0x35 && pkt->cmd_set == 0x35 &&

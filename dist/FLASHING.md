@@ -4,7 +4,7 @@
 bootloader + partition table + app in one file, written at flash offset `0x0`.
 
 - size: 1,362,736 bytes
-- sha256: `5039869b8f046d35ed166d765dfaa8ab956019a3571dd5cf69646e01fb840ed3`
+- sha256: `c423dd23da8395e543b31f213c989eee90785dd1972a8a38a9cfe0d5c347e120`
 - chip: ESP32-S3, flash mode DIO, 80 MHz, 2 MB
 
 Use a Chromium browser (Chrome / Edge / Opera) on a desktop — flashing needs

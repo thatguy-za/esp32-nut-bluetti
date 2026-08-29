@@ -83,6 +83,14 @@ You normally do **not** need `menuconfig` — configuration happens at runtime
 through the setup portal (below). `menuconfig` only sets compile-time defaults
 and the config-wipe GPIO, under **`EcoFlow NUT Bridge`**.
 
+### Debugging the BLE handshake
+
+Enable **`Trace the EcoFlow BLE handshake`** in `menuconfig` (or
+`CONFIG_ECOFLOW_BLE_TRACE=y`) and watch `idf.py monitor`. It hex-dumps every
+stage — our/device public keys, shared secret, IV, session key, auth token, and
+every decoded inner packet — so a failed handshake shows exactly where it broke.
+It prints key material, so turn it off afterwards.
+
 ## First-run provisioning
 
 On first boot (or after a config wipe) the device has no Wi-Fi credentials, so

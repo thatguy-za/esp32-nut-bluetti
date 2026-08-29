@@ -50,6 +50,15 @@ menu "EcoFlow NUT Bridge"
         int "EcoFlow poll interval (ms)"
         default 5000
 
+    config ECOFLOW_BLE_TRACE
+        bool "Trace the EcoFlow BLE handshake (verbose, logs derived keys)"
+        default n
+        help
+            Hex-dumps every handshake stage at INFO level — our/device public
+            keys, the shared secret, IV, session key, auth token, and every
+            decoded inner packet. Use this to bring the BLE link up on new
+            hardware, then turn it back off (it prints key material).
+
     config NUT_UPS_NAME
         string "NUT UPS name"
         default "ecoflow"
