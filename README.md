@@ -63,7 +63,7 @@ boards — the BOOT button on GPIO0 for the config wipe.
 On first boot (or after a config wipe) the device has no Wi-Fi credentials, so
 it starts a **captive-portal setup**:
 
-1. It brings up an **open Wi-Fi access point** named `ecoflow-setup-XXXX`
+1. It brings up an **open Wi-Fi access point** named `esp-nut-ecoflow-XXXX`
    (`XXXX` = last 2 bytes of the MAC).
 2. Join that network with a phone or laptop. A captive-portal DNS server
    redirects everything to the setup page, so it should pop up automatically;

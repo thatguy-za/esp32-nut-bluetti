@@ -42,7 +42,7 @@ host to get your own copy of Option A.
 ## First boot
 
 The device has no Wi-Fi credentials yet, so it starts an open AP
-`ecoflow-setup-XXXX`. Join it, the captive portal opens (or browse to
+`esp-nut-ecoflow-XXXX`. Join it, the captive portal opens (or browse to
 `http://192.168.4.1/`), then:
 
 1. **Scan for EcoFlow** and pick your River 3 (`EF-R3…`).

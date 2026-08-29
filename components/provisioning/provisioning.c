@@ -394,7 +394,7 @@ static void make_ap_ssid(char *out, size_t n)
 {
     uint8_t mac[6] = { 0 };
     esp_wifi_get_mac(WIFI_IF_STA, mac);   /* STA is always up by now */
-    snprintf(out, n, "ecoflow-setup-%02X%02X", mac[4], mac[5]);
+    snprintf(out, n, "esp-nut-ecoflow-%02X%02X", mac[4], mac[5]);
 }
 
 esp_err_t provisioning_run(app_config_t *cfg)
