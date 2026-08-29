@@ -14,10 +14,10 @@ static const char *TAG = "app_config";
 #define CFG_NS      "efnut"
 #define CFG_KEY     "cfg"
 /*
- * 2: dropped the advertised-name targeting fallback. The struct shrank, so
- * a v1 blob is both the wrong size and the wrong version and is discarded —
- * a device updating from 0.2.x comes up unprovisioned and is set up again
- * from the captive portal.
+ * 2: dropped the advertised-name targeting fallback, which shrank the
+ * struct. An older blob is both the wrong size and the wrong version, so
+ * it is discarded rather than reinterpreted and the device comes up
+ * unprovisioned.
  */
 #define CFG_VERSION 2u
 
