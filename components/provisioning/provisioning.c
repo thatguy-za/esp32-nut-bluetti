@@ -441,6 +441,22 @@ static esp_err_t h_admin_root(httpd_req_t *r);
 static esp_err_t h_admin_status(httpd_req_t *r);
 static esp_err_t h_admin_logs(httpd_req_t *r);
 static esp_err_t h_admin_config(httpd_req_t *r);
+/* "AA:BB:CC:DD:EE:FF" — six hex pairs, colon separated. */
+static bool is_mac_addr(const char *s)
+{
+    if (!s || strlen(s) != 17) {
+        return false;
+    }
+    for (int i = 0; i < 17; i++) {
+        if (i % 3 == 2) {
+            if (s[i] != ':') return false;
+        } else if (!isxdigit((unsigned char)s[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static esp_err_t h_admin_reconfigure(httpd_req_t *r);
 static esp_err_t h_admin_credentials(httpd_req_t *r);
 /* POST /api/notify-test — send a Telegram message with the posted (or
@@ -633,14 +649,14 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              P.cfg->hostname,
              app->version, app->date, app->time, ota ? "true" : "false",
              P.cfg->ups_name, P.cfg->nut_port,
-             P.cfg->ble_addr[0] ? P.cfg->ble_addr : P.cfg->ble_name,
+             P.cfg->ble_addr,
              bluetti_ble_connected() ? "true" : "false",
              have && st.valid ? "true" : "false",
              have ? st.soc_pct : 0,
              have && st.ac_input_present ? "true" : "false",
              have && st.charging ? "true" : "false",
              have && st.model[0] ? st.model : "",
-             (P.cfg->ble_addr[0] || P.cfg->ble_name[0]) ? "true" : "false");
+             P.cfg->ble_addr[0] ? "true" : "false");
     return send_json(r, out);
 }
 
@@ -692,7 +708,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
     wifi_mgr_default_ap_ssid(def_ap, sizeof(def_ap));
     char out[1000];  /* ssid + ap_ssid + users + addressing + telegram */
     snprintf(out, sizeof(out),
-             "{\"ble_addr\":\"%s\",\"ble_name\":\"%s\",\"ble_probe\":%s,"
+             "{\"ble_addr\":\"%s\",\"ble_probe\":%s,"
              "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
              "\"nut_user\":\"%s\",\"nut_auth_set\":%s,"
              "\"ac_rating_w\":%u,\"runtime_low_s\":%u,"
@@ -703,7 +719,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              "\"static_mask\":\"%s\",\"static_gw\":\"%s\",\"static_dns\":\"%s\","
              "\"tg_enabled\":%s,\"tg_chat\":\"%s\",\"has_tg_token\":%s,"
              "\"tg_on_power\":%s,\"tg_on_low_batt\":%s,\"tg_on_link\":%s}",
-             P.cfg->ble_addr, P.cfg->ble_name,
+             P.cfg->ble_addr,
              P.cfg->ble_probe ? "true" : "false",
              P.cfg->ups_name, P.cfg->nut_port, P.cfg->low_pct, P.cfg->poll_ms,
              P.cfg->nut_user, P.cfg->nut_auth_set ? "true" : "false",
@@ -814,16 +830,16 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         if (form_get(body, "ble_addr", v, sizeof(v))) {
             strlcpy(P.pending.ble_addr, v, sizeof(P.pending.ble_addr));
         }
-        if (form_get(body, "ble_name", v, sizeof(v)) && v[0]) {
-            strlcpy(P.pending.ble_name, v, sizeof(P.pending.ble_name));
-        }
         P.pending.ble_probe =
             form_get(body, "ble_probe", v, sizeof(v)) && v[0] == '1';
         free(body);
 
-        if (P.pending.ble_addr[0] == '\0' && P.pending.ble_name[0] == '\0') {
+        /* The address is the only way to name a unit, so it has to be one:
+         * anything else would be stored and then silently never connect. */
+        if (!is_mac_addr(P.pending.ble_addr)) {
             return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
-                                       "pick a device or enter an address");
+                                       "pick a device, or enter its address "
+                                       "as AA:BB:CC:DD:EE:FF");
         }
 
     /* ---- NUT server ---- */

@@ -42,17 +42,6 @@ menu "BLUETTI NUT Bridge"
             MAC address of the BLUETTI unit, e.g. AA:BB:CC:DD:EE:FF.
             Leave empty to connect by advertised name instead.
 
-    config BLUETTI_BLE_NAME
-        string "BLUETTI BLE advertised name (fallback)"
-        default "EL10"
-        help
-            Used when BLUETTI_BLE_ADDRESS is empty: connect to the first
-            advertiser with this model name. Units advertise as the model
-            followed by digits, so "EL10" matches an Elite 10 but not an
-            EL100V2. Any supported model works here; the register map is
-            chosen from what the unit reports once connected, not from this.
-
-
     config BLUETTI_POLL_INTERVAL_MS
         int "BLUETTI poll interval (ms)"
         default 5000

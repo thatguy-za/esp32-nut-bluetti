@@ -246,14 +246,13 @@ static void start_services(const app_config_t *cfg)
 
     /* The BLUETTI side is configured from the admin page after Wi-Fi setup,
      * so on a fresh device there is nothing to connect to yet. */
-    bool have_target = cfg->ble_addr[0] || cfg->ble_name[0];
+    bool have_target = cfg->ble_addr[0] != '\0';
     if (!have_target) {
         ESP_LOGW(TAG, "BLUETTI not configured yet — open the admin page's "
                       "BLUETTI tab to pick your unit");
     } else {
         bluetti_ble_config_t ef_cfg = {
             .ble_address = cfg->ble_addr,
-            .ble_name_prefix = cfg->ble_name,
             .probe = cfg->ble_probe,
             .poll_interval_ms = cfg->poll_ms,
             .low_battery_pct = cfg->low_pct,
@@ -349,7 +348,7 @@ void app_main(void)
     ESP_LOGI(TAG, "online at %s (%s) — NUT ':%u' UPS '%s', BLE target '%s'",
              ip, ap_mode ? "access point" : "station",
              cfg->nut_port, cfg->ups_name,
-             cfg->ble_addr[0] ? cfg->ble_addr : cfg->ble_name);
+             cfg->ble_addr);
 
     start_services(cfg);
 

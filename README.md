@@ -37,35 +37,54 @@ themselves down cleanly on a mains failure.
 
 ## Supported models
 
-Any of the 17 BLUETTI units that speak the **V2** protocol and carry the
-portable power registers. The bridge reads the model out of the unit itself
-(register 110) and enables the fields that model actually has:
+The 17 BLUETTI units that speak the **V2** protocol and carry the portable
+power registers. Every one of them reports **state of charge**, **AC and DC
+output power** and **AC input power** — enough for a working UPS: `ups.status`,
+`battery.charge`, `ups.realpower`, `ups.load` and the `OL`/`OB`/`LB` transitions
+that drive a shutdown.
 
-| | runtime | DC in | AC in V | AC in A | AC out V |
+The columns below are the extras, which vary by model. The bridge reads the
+model out of the unit itself (register 110) and enables only the fields that
+model has, so a variable is either right or absent — never a placeholder.
+
+| Model | `battery.runtime` | DC input | `input.voltage` | `input.current` | `output.voltage` |
 | --- | :-: | :-: | :-: | :-: | :-: |
-| `AC2A` `AC2P` | | ● | | | |
-| `AC50B` | ● | | | | |
-| `AC60` `AC60P` `AP300` `PR30V2` `PR100V2` | | ● | ● | | |
-| `AC180` `AC180T` `AC70P` | | ● | ● | ● | ● |
-| `AC180P` | | ● | ● | | |
-| `AC70` `EL10` `EL100V2` `Handsfree 1` | ● | ● | ● | ● | ● |
-| `EL30V2` | ● | ● | ● | | |
+| `AC2A` | · | ● | · | · | · |
+| `AC2P` | · | ● | · | · | · |
+| `AC50B` | ● | · | · | · | · |
+| `AC60` | · | ● | ● | · | · |
+| `AC60P` | · | ● | ● | · | · |
+| `AC70` | ● | ● | ● | ● | ● |
+| `AC70P` | · | ● | ● | ● | ● |
+| `AC180` | · | ● | ● | ● | ● |
+| `AC180P` | · | ● | ● | · | · |
+| `AC180T` | · | ● | ● | ● | ● |
+| `AP300` | · | ● | ● | · | · |
+| `EL10` **★** | ● | ● | ● | ● | ● |
+| `EL30V2` | ● | ● | ● | · | · |
+| `EL100V2` | ● | ● | ● | ● | ● |
+| `Handsfree 1` | ● | ● | ● | ● | ● |
+| `PR30V2` | · | ● | ● | · | · |
+| `PR100V2` | · | ● | ● | · | · |
 
-Charge, AC/DC output power and AC input power are common to all of them; the
-columns are the extras. A model not listed still connects and reports charge
-and power, with the optional fields off — an absent register reads as zero,
-and publishing a real-looking `0 V` or a 0-minute runtime would be worse than
-publishing nothing.
+★ = the model this was developed against.
 
-**Not supported.** `EP600`, `EP760`, `EP800` and `EP2000` speak V2 but are
-grid/PV systems with an entirely different register set (three-phase grid, PV
-strings) — none of the registers below apply. `AC200L`, `AC200M`, `AC200PL`,
-`AC300`, `AC500`, `EB3A`, `EP500` and `EP500P` use the older **V1** protocol,
-which this firmware does not speak.
+A model not in this table still connects and reports charge and power, with the
+optional fields off.
 
-Development and testing has centred on the **Elite 10** (advertises as
-`EL10…`); the rest come from the same upstream field definitions but have had
-no more hardware exposure than it has, which is none.
+### Not supported
+
+| Models | Why |
+| --- | --- |
+| `EP600` `EP760` `EP800` `EP2000` | V2, but grid/PV systems — three-phase grid and PV-string registers, sharing none of the addresses above |
+| `AC200L` `AC200M` `AC200PL` `AC300` `AC500` `EB3A` `EP500` `EP500P` | The older **V1** protocol, a different framing this firmware does not speak |
+
+### A caveat on all of it
+
+Development has centred on the **Elite 10**. The other 16 come from the same
+upstream field definitions and share the same code path, but they have had
+exactly as much hardware exposure as the Elite 10 has, which is none. Nothing
+in this table has been confirmed against a physical unit.
 
 ### How it talks
 
@@ -141,7 +160,7 @@ Open the bridge's page and use the **BLUETTI** tab:
 
 - **Scan for devices** and pick your unit — the list shows the Bluetooth name
   with the MAC in brackets, e.g. `EF-R3xxxx [AA:BB:CC:DD:EE:FF]`; likely BLUETTI
-  units are marked ★. You can also type an address or name prefix.
+  units are marked ★. You can also type the address by hand.
 - **BLUETTI account** — the River 3 only grants Bluetooth access to its own
   account, so the bridge needs your BLUETTI **account user id**. Enter your
   BLUETTI email + password (used once, over HTTPS, to fetch the id — the

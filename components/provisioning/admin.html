@@ -105,14 +105,12 @@
       <label for="cfgBleSel">Device</label>
       <select id="cfgBleSel"><option value="">— select —</option></select>
       <div class="row"><button type="button" class="act" id="cfgBleScan">Scan for devices</button></div>
-      <label for="cfgBleAddr">BLE address / name prefix</label>
-      <input id="cfgBleAddr" name="ble_addr" autocomplete="off">
+      <label for="cfgBleAddr">BLE address</label>
+      <input id="cfgBleAddr" name="ble_addr" autocomplete="off"
+             placeholder="AA:BB:CC:DD:EE:FF" spellcheck="false">
       <p class="hint" id="cfgBleHint">Which unit to connect to. <b>Scan</b> and
-        pick from the list — that fills in the unit's
-        <code>AA:BB:CC:DD:EE:FF</code> address, which is exact and does not
-        change. A model name such as <code>EL10</code> also works: the bridge
-        takes the first unit advertising that name, which is enough when you
-        have only one.</p>
+        pick from the list — that fills this in for you. The address is exact
+        and does not change.</p>
     </div>
 
     <div class="box">
@@ -449,7 +447,7 @@ async function loadConfig() {
   if (cfgLoaded) return;
   try {
     cfg = await (await fetch('/api/config')).json();
-    $('#cfgBleAddr').value = cfg.ble_addr || cfg.ble_name || '';
+    $('#cfgBleAddr').value = cfg.ble_addr || '';
     $('#cfgUps').value = cfg.ups_name || '';
     $('#upscName').textContent = cfg.ups_name || 'bluetti';
     $('#cfgPort').value = cfg.nut_port || 3493;
@@ -579,8 +577,15 @@ $('#cfgBleSel').onchange = () => {
   if ($('#cfgBleSel').value) $('#cfgBleAddr').value = $('#cfgBleSel').value;
 };
 wireForm('#efForm', '#efSave', '#efMsg', fd => {
-  if (!fd.get('ble_addr')) {
-    $('#efMsg').textContent = 'Pick a device or enter an address.';
+  const addr = (fd.get('ble_addr') || '').trim();
+  if (!addr) {
+    $('#efMsg').textContent = 'Pick a device, or enter its address.';
+    return false;
+  }
+  /* Say so here rather than storing something that would just never
+     connect. The server checks this too. */
+  if (!/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(addr)) {
+    $('#efMsg').textContent = 'That is not an address — use AA:BB:CC:DD:EE:FF.';
     return false;
   }
 });

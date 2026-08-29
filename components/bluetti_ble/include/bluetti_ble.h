@@ -71,8 +71,7 @@ typedef struct {
 typedef void (*bluetti_state_cb_t)(const bluetti_state_t *state, void *user);
 
 typedef struct {
-    const char *ble_address;     /* "AA:BB:CC:DD:EE:FF" or NULL/"" */
-    const char *ble_name_prefix; /* used when address is empty     */
+    const char *ble_address;     /* "AA:BB:CC:DD:EE:FF"; required */
     uint32_t    poll_interval_ms;
     int         low_battery_pct;
     bool        probe;           /* dump GATT + notifications to the log */

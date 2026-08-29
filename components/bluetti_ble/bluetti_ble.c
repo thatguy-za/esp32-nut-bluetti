@@ -60,7 +60,6 @@ static struct {
 
     ble_addr_t           target_addr;
     bool                 have_target_addr;
-    char                 name_prefix[24];
     const bt_device_t   *device;      /* identified model, NULL until known */
 
     ble_mode_t           mode;
@@ -139,30 +138,6 @@ static bool name_looks_bluetti(const char *name, size_t len)
         }
     }
     return false;
-}
-
-/*
- * BLUETTI advertises as a model name followed by digits — upstream matches
- * ^(AC60|EL10|EL100V2|…)(\d+)$. A plain prefix test is not enough, because
- * "EL10" is also a prefix of "EL100V2…", a different unit with a different
- * register map: we would connect to it and decode nonsense. So the tail
- * after the prefix must be digits (or nothing, for an exact name).
- */
-static bool adv_name_matches_target(const struct ble_hs_adv_fields *f)
-{
-    if (b.name_prefix[0] == '\0' || f->name_len == 0) {
-        return false;
-    }
-    size_t pl = strlen(b.name_prefix);
-    if (f->name_len < pl || strncmp((const char *)f->name, b.name_prefix, pl) != 0) {
-        return false;
-    }
-    for (size_t i = pl; i < f->name_len; i++) {
-        if (f->name[i] < '0' || f->name[i] > '9') {
-            return false;
-        }
-    }
-    return true;
 }
 
 static bool seen_before(const uint8_t val[6])
@@ -467,10 +442,8 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                                         event->disc.length_data) != 0) {
                 return 0;
             }
-            bool match = b.have_target_addr
-                ? memcmp(event->disc.addr.val, b.target_addr.val, 6) == 0
-                : adv_name_matches_target(&f);
-            if (match) {
+            (void)f;
+            if (memcmp(event->disc.addr.val, b.target_addr.val, 6) == 0) {
                 ESP_LOGI(TAG, "found target, connecting");
                 try_connect(&event->disc.addr);
             }
@@ -763,19 +736,16 @@ int bluetti_ble_start(const bluetti_ble_config_t *config,
     b.state.dc_switch = BLUETTI_UNKNOWN_I;
     xSemaphoreGive(b.lock);
 
-    b.have_target_addr = false;
-    b.name_prefix[0] = '\0';
-    if (config->ble_address && config->ble_address[0] &&
-        parse_addr(config->ble_address, &b.target_addr)) {
-        b.have_target_addr = true;
-        ESP_LOGI(TAG, "target address %s", config->ble_address);
-    } else {
-        strlcpy(b.name_prefix,
-                config->ble_name_prefix && config->ble_name_prefix[0]
-                    ? config->ble_name_prefix : "BLUETTI",
-                sizeof(b.name_prefix));
-        ESP_LOGI(TAG, "target name prefix '%s'", b.name_prefix);
+    /* An address is the only way to name a unit, so a bad one is fatal
+     * rather than something to fall back from. */
+    b.have_target_addr = config->ble_address && config->ble_address[0] &&
+                         parse_addr(config->ble_address, &b.target_addr);
+    if (!b.have_target_addr) {
+        ESP_LOGE(TAG, "no usable BLE address ('%s')",
+                 config->ble_address ? config->ble_address : "");
+        return -1;
     }
+    ESP_LOGI(TAG, "target address %s", config->ble_address);
 
     if (config->probe) {
         ESP_LOGW(TAG, "PROBE MODE: GATT and notifications will be logged, "

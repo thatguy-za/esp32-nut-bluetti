@@ -100,8 +100,9 @@ hypothesis rather than fact.
 
 Upstream matches advertised names as `^(…|EL10|EL100V2|…)(\d+)$` — a model name
 followed by digits. Note that `EL10` is a prefix of `EL100V2`, a different unit
-with a different map, which is why the scanner here requires digits after the
-prefix rather than matching on the prefix alone.
+with a different map, so a plain prefix test binds the wrong model. Connecting
+is by BLE address only, which sidesteps this; the same digits-after-the-name
+rule is still used to pick the register set from the model the unit reports.
 
 | Register | Field | Type / scale |
 | --- | --- | --- |

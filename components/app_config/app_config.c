@@ -37,7 +37,6 @@ void app_config_defaults(app_config_t *cfg)
     strlcpy(cfg->wifi_ssid, CONFIG_WIFI_SSID, sizeof(cfg->wifi_ssid));
     strlcpy(cfg->wifi_pass, CONFIG_WIFI_PASSWORD, sizeof(cfg->wifi_pass));
     strlcpy(cfg->ble_addr, CONFIG_BLUETTI_BLE_ADDRESS, sizeof(cfg->ble_addr));
-    strlcpy(cfg->ble_name, CONFIG_BLUETTI_BLE_NAME, sizeof(cfg->ble_name));
     strlcpy(cfg->ups_name, CONFIG_NUT_UPS_NAME, sizeof(cfg->ups_name));
     cfg->nut_port = CONFIG_NUT_TCP_PORT;
     cfg->poll_ms  = CONFIG_BLUETTI_POLL_INTERVAL_MS;
@@ -88,7 +87,7 @@ esp_err_t app_config_load(app_config_t *cfg)
 
     *cfg = blob.cfg;
     ESP_LOGI(TAG, "loaded config: ssid='%s' ble='%s' ups='%s' provisioned=%d",
-             cfg->wifi_ssid, cfg->ble_addr[0] ? cfg->ble_addr : cfg->ble_name,
+             cfg->wifi_ssid, cfg->ble_addr,
              cfg->ups_name, cfg->provisioned);
     return ESP_OK;
 }
