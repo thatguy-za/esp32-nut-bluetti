@@ -2,8 +2,9 @@
  * NimBLE central for BLUETTI power stations.
  *
  * Connects to the unit's ff00 service, runs the "2a2a" key exchange (see
- * bt_session.c) and then polls Modbus holding registers, decoding them
- * per the Elite 10 map in bt_regs.c.
+ * bt_session.c) and then polls Modbus holding registers, decoding them per
+ * the model table in bt_regs.c. The unit names itself in register 110, so
+ * the map is chosen from what it reports rather than from configuration.
  *
  * Probe mode is kept as a diagnostic: it enumerates every service and
  * characteristic and hex-dumps notifications without decoding, which is
@@ -33,9 +34,9 @@
 
 static const char *TAG = "bluetti_ble";
 
-/* Advertised-name prefixes BLUETTI units are known to use. The Elite
- * series has not been confirmed; the probe reports whatever it sees, so
- * an unmatched name is not fatal — it just misses the ★ marker. */
+/* Loose fallback prefixes, for BLUETTI kit that is not in the supported
+ * model table — it should still appear in the picker rather than looking
+ * invisible. An unmatched name is not fatal; it just misses the ★. */
 static const char *BT_PREFIXES[] = {
     "BLUETTI", "Bluetti", "AC", "EB", "EP", "AP", "EL", "AORA", "PR", "RV",
 };
@@ -60,6 +61,7 @@ static struct {
     ble_addr_t           target_addr;
     bool                 have_target_addr;
     char                 name_prefix[24];
+    const bt_device_t   *device;      /* identified model, NULL until known */
 
     ble_mode_t           mode;
     bool                 resume_connect;
@@ -119,6 +121,17 @@ static bool parse_addr(const char *str, ble_addr_t *out)
 
 static bool name_looks_bluetti(const char *name, size_t len)
 {
+    /* A supported model is an exact answer; the loose prefixes below still
+     * surface other BLUETTI kit so it appears in the picker rather than
+     * looking like the bridge cannot see it. */
+    char buf[33];
+    if (len < sizeof(buf)) {
+        memcpy(buf, name, len);
+        buf[len] = '\0';
+        if (bt_device_lookup(buf)) {
+            return true;
+        }
+    }
     for (size_t i = 0; i < sizeof(BT_PREFIXES) / sizeof(BT_PREFIXES[0]); i++) {
         size_t pl = strlen(BT_PREFIXES[i]);
         if (len >= pl && strncmp(name, BT_PREFIXES[i], pl) == 0) {
@@ -270,7 +283,21 @@ static void session_regs(uint16_t addr, const uint8_t *data, size_t len,
     int matched;
 
     xSemaphoreTake(b.lock, portMAX_DELAY);
-    matched = bt_regs_apply(addr, data, len, &b.state);
+    matched = bt_regs_apply(b.device, addr, data, len, &b.state);
+    /* The unit names itself in register 110, so the map can be picked from
+     * what it reports rather than from what we were told to look for. */
+    if (!b.device && b.state.model[0]) {
+        b.device = bt_device_lookup(b.state.model);
+        if (b.device) {
+            ESP_LOGI(TAG, "identified as %s", b.device->name);
+        } else {
+            ESP_LOGW(TAG, "unknown model '%s' - charge and power only",
+                     b.state.model);
+            b.device = &BT_DEVICE_GENERIC;
+        }
+        /* Re-run now that the optional fields are known to be readable. */
+        bt_regs_apply(b.device, addr, data, len, &b.state);
+    }
     b.state.soc_low_pct = b.cfg.low_battery_pct;
     copy = b.state;
     xSemaphoreGive(b.lock);
@@ -287,11 +314,20 @@ static void poll_timer_cb(void *arg)
     if (!b.connected || !bt_session_ready(b.session)) {
         return;
     }
-    const bt_reg_block_t *blk = &BT_EL10_BLOCKS[b.poll_block];
-    if (bt_session_read_regs(b.session, blk->addr, blk->count) != 0) {
-        ESP_LOGW(TAG, "register read %u failed", blk->addr);
+    /* Walk to the next block this model actually has fields in, so a unit
+     * without AC metering does not spend two round trips a cycle on
+     * registers it will never answer usefully. */
+    for (size_t tries = 0; tries < BT_EL10_BLOCK_COUNT; tries++) {
+        const bt_reg_block_t *blk = &BT_EL10_BLOCKS[b.poll_block];
+        b.poll_block = (b.poll_block + 1) % (int)BT_EL10_BLOCK_COUNT;
+        if (!bt_regs_block_wanted(b.device, blk->addr)) {
+            continue;
+        }
+        if (bt_session_read_regs(b.session, blk->addr, blk->count) != 0) {
+            ESP_LOGW(TAG, "register read %u failed", blk->addr);
+        }
+        return;
     }
-    b.poll_block = (b.poll_block + 1) % (int)BT_EL10_BLOCK_COUNT;
 }
 
 /* ---- discovery: find ff01/ff02 and subscribe ---- */
@@ -449,6 +485,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             b.write_handle = b.notify_handle = b.notify_cccd = 0;
             b.poll_block = 0;
             bt_session_reset(b.session);
+        b.device = NULL;   /* re-identify on the next connect */
             ble_gattc_exchange_mtu(b.conn_handle, NULL, NULL);
             if (b.cfg.probe) {
                 ESP_LOGW(TAG, "probe mode: enumerating GATT, nothing decoded");
@@ -474,6 +511,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             esp_timer_stop(b.poll_timer);
         }
         bt_session_reset(b.session);
+        b.device = NULL;   /* re-identify on the next connect */
         if (b.mode == MODE_SCAN) {
             start_disc(true);
         } else if (b.mode == MODE_CONNECT) {
@@ -713,6 +751,7 @@ int bluetti_ble_start(const bluetti_ble_config_t *config,
 
     xSemaphoreTake(b.lock, portMAX_DELAY);
     memset(&b.state, 0, sizeof(b.state));
+    b.device = NULL;
     b.state.soc_low_pct = config->low_battery_pct;
     b.state.minutes_remaining = BLUETTI_UNKNOWN_I;
     b.state.ac_in_watts = BLUETTI_UNKNOWN_F;

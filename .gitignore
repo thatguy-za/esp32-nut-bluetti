@@ -26,4 +26,5 @@ dist/*.bin
 /test/ipv4_test
 /test/bt_frame_test
 /test/bt_regs_test
+/test/bt_device_test
 /test/lb_test

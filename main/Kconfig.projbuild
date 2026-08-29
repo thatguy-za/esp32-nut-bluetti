@@ -47,8 +47,10 @@ menu "BLUETTI NUT Bridge"
         default "EL10"
         help
             Used when BLUETTI_BLE_ADDRESS is empty: connect to the first
-            advertiser whose name starts with this prefix. The Elite 10
-            advertises as "EL10" followed by digits.
+            advertiser with this model name. Units advertise as the model
+            followed by digits, so "EL10" matches an Elite 10 but not an
+            EL100V2. Any supported model works here; the register map is
+            chosen from what the unit reports once connected, not from this.
 
 
     config BLUETTI_POLL_INTERVAL_MS
@@ -79,8 +81,8 @@ menu "BLUETTI NUT Bridge"
         default 200
         help
             Used as the 100% reference for ups.load and reported as
-            ups.realpower.nominal. The Elite 10's continuous AC rating is
-            200 W; set your unit's figure in the admin page.
+            ups.realpower.nominal. Varies by model (200 W on an Elite 10);
+            set your unit's figure in the admin page.
 
     config NUT_RUNTIME_LOW_S
         int "Default battery.runtime.low (seconds)"

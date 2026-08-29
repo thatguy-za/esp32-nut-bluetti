@@ -6,6 +6,74 @@
 
 static const char *TAG = "bt_regs";
 
+/*
+ * The V2 portable range. Flags say which optional registers each model
+ * declares upstream; the four base fields (charge, and DC/AC output and AC
+ * input power) are common to all of them.
+ *
+ *                        runtime  dc_in  ac_in_v  ac_in_a  ac_out_v */
+const bt_device_t BT_DEVICES[] = {
+    { "AC180",       false, true , true , true , true  },
+    { "AC180P",      false, true , true , false, false },
+    { "AC180T",      false, true , true , true , true  },
+    { "AC2A",        false, true , false, false, false },
+    { "AC2P",        false, true , false, false, false },
+    { "AC50B",       true , false, false, false, false },
+    { "AC60",        false, true , true , false, false },
+    { "AC60P",       false, true , true , false, false },
+    { "AC70",        true , true , true , true , true  },
+    { "AC70P",       false, true , true , true , true  },
+    { "AP300",       false, true , true , false, false },
+    { "EL10",        true , true , true , true , true  },
+    { "EL100V2",     true , true , true , true , true  },
+    { "EL30V2",      true , true , true , false, false },
+    { "Handsfree 1", true , true , true , true , true  },
+    { "PR100V2",     false, true , true , false, false },
+    { "PR30V2",      false, true , true , false, false },
+};
+const size_t BT_DEVICE_COUNT = sizeof(BT_DEVICES) / sizeof(BT_DEVICES[0]);
+
+const bt_device_t BT_DEVICE_GENERIC = {
+    "unknown", false, false, false, false, false
+};
+
+const bt_device_t *bt_device_lookup(const char *name)
+{
+    if (!name || !name[0]) {
+        return NULL;
+    }
+    for (size_t i = 0; i < BT_DEVICE_COUNT; i++) {
+        size_t n = strlen(BT_DEVICES[i].name);
+        if (strncmp(name, BT_DEVICES[i].name, n) != 0) {
+            continue;
+        }
+        /* The tail must be digits, or empty for an exact name: without
+         * this "EL10" would also claim "EL100V2...". */
+        size_t j = n;
+        while (name[j] >= '0' && name[j] <= '9') {
+            j++;
+        }
+        if (name[j] == '\0') {
+            return &BT_DEVICES[i];
+        }
+    }
+    return NULL;
+}
+
+bool bt_regs_block_wanted(const bt_device_t *dev, uint16_t addr)
+{
+    if (!dev) {
+        return true;         /* not identified yet: poll everything */
+    }
+    if (addr == REG_AC_INPUT_VOLTAGE) {
+        return dev->has_ac_in_volts || dev->has_ac_in_amps;
+    }
+    if (addr == REG_AC_OUTPUT_VOLTAGE) {
+        return dev->has_ac_out_volts;
+    }
+    return true;
+}
+
 /* Contiguous blocks covering everything the decoder uses. */
 const bt_reg_block_t BT_EL10_BLOCKS[] = {
     { 102,  16 },   /* SOC, time remaining, device type, serial */
@@ -55,17 +123,22 @@ static void swap_string(uint16_t start, const uint8_t *data, size_t len,
     }
 }
 
-int bt_regs_apply(uint16_t start_addr, const uint8_t *data, size_t len,
-                  bluetti_state_t *st)
+int bt_regs_apply(const bt_device_t *dev, uint16_t start_addr,
+                  const uint8_t *data, size_t len, bluetti_state_t *st)
 {
     int matched = 0;
     int v;
+
+    if (!dev) {
+        dev = &BT_DEVICE_GENERIC;
+    }
 
     if ((v = reg(start_addr, data, len, REG_BATTERY_SOC)) >= 0 && v <= 100) {
         st->soc_pct = v;
         matched++;
     }
-    if ((v = reg(start_addr, data, len, REG_TIME_REMAINING)) >= 0) {
+    if (dev->has_runtime &&
+        (v = reg(start_addr, data, len, REG_TIME_REMAINING)) >= 0) {
         /* 0 shows up both when full and when the estimate is unavailable;
          * treat it as unknown rather than "no runtime left". */
         st->minutes_remaining = v > 0 ? v : BLUETTI_UNKNOWN_I;
@@ -102,19 +175,22 @@ int bt_regs_apply(uint16_t start_addr, const uint8_t *data, size_t len,
         st->output_watts = (float)v + (dc > 0 ? (float)dc : 0.0f);
         matched++;
     }
-    if ((v = reg(start_addr, data, len, REG_DC_INPUT_POWER)) >= 0) {
+    if (dev->has_dc_input &&
+        (v = reg(start_addr, data, len, REG_DC_INPUT_POWER)) >= 0) {
         st->input_watts = (float)v;
         matched++;
     }
     if ((v = reg(start_addr, data, len, REG_AC_INPUT_POWER)) >= 0) {
         st->ac_in_watts = (float)v;
-        int dc = reg(start_addr, data, len, REG_DC_INPUT_POWER);
+        int dc = dev->has_dc_input
+                     ? reg(start_addr, data, len, REG_DC_INPUT_POWER) : -1;
         st->input_watts = (float)v + (dc > 0 ? (float)dc : 0.0f);
         /* No explicit mains flag in the map, so infer it from input. */
         st->ac_input_present = v > 0;
         matched++;
     }
-    if ((v = reg(start_addr, data, len, REG_AC_INPUT_VOLTAGE)) >= 0) {
+    if (dev->has_ac_in_volts &&
+        (v = reg(start_addr, data, len, REG_AC_INPUT_VOLTAGE)) >= 0) {
         /* Voltage corroborates the mains flag: a plugged-in but idle unit
          * can report 0 W while still showing line voltage. */
         st->ac_in_volts = (float)v / 10.0f;

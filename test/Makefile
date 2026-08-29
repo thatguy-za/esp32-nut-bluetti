@@ -9,13 +9,14 @@ CFLAGS  ?= -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter
 NUT     := ../components/nut_server
 
 .PHONY: all clean
-all: nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test
+all: nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test bt_device_test
 	./nut_server_test
 	./auth_test
 	./ipv4_test
 	./lb_test
 	./bt_frame_test
 	./bt_regs_test
+	./bt_device_test
 
 nut_server_test: nut_server_test.c $(NUT)/nut_server.c
 	$(CC) $(CFLAGS) -Ishim -I$(NUT)/include $^ -lpthread -o $@
@@ -35,5 +36,8 @@ bt_frame_test: bt_frame_test.c
 bt_regs_test: bt_regs_test.c
 	$(CC) $(CFLAGS) $^ -o $@
 
+bt_device_test: bt_device_test.c
+	$(CC) $(CFLAGS) $^ -o $@
+
 clean:
-	rm -rf nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test *.dSYM
+	rm -rf nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test bt_device_test *.dSYM

@@ -8,6 +8,7 @@
  */
 
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include "bluetti_ble.h"
 
@@ -33,6 +34,42 @@ extern "C" {
 #define REG_CTRL_DC           2012  /* bool                           */
 
 /*
+ * A model, and which of the optional registers it actually carries.
+ *
+ * Every V2 portable unit uses the same addresses; they differ only in which
+ * fields exist. Reading an address a model does not declare is harmless
+ * (upstream sweeps 0..20000 in blocks of ten on every V2 device), but
+ * *interpreting* one is not — an absent register reads as zero, which would
+ * publish a real-looking 0 V or a 0-minute runtime. So each optional field
+ * is gated on the model.
+ *
+ * Generated from Patrick762/bluetti-bt-lib's device definitions.
+ */
+typedef struct {
+    const char *name;             /* advertised name, digits follow      */
+    bool has_runtime;             /* 104                                 */
+    bool has_dc_input;            /* 144                                 */
+    bool has_ac_in_volts;         /* 1314                                */
+    bool has_ac_in_amps;          /* 1315                                */
+    bool has_ac_out_volts;        /* 1511                                */
+} bt_device_t;
+
+extern const bt_device_t BT_DEVICES[];
+extern const size_t      BT_DEVICE_COUNT;
+
+/*
+ * Match an advertised or self-reported name to a model. Names are a model
+ * followed by digits, so the tail after the prefix must be digits — that is
+ * what keeps "EL10" from claiming an "EL100V2". NULL if unrecognised.
+ */
+const bt_device_t *bt_device_lookup(const char *name);
+
+/* The conservative subset every supported model shares: charge and the
+ * three power readings. Used until the unit names itself, and for models
+ * not in the table. */
+extern const bt_device_t BT_DEVICE_GENERIC;
+
+/*
  * The polling plan. Modbus caps a read at 125 registers, and the device
  * is happier with small contiguous blocks, so the map is covered by a
  * handful of reads rather than one sweep.
@@ -47,8 +84,12 @@ extern const size_t         BT_EL10_BLOCK_COUNT;
 
 /* Apply one register block to the state. Returns the number of fields
  * recognised, so the caller can tell a useful frame from a stray one. */
-int bt_regs_apply(uint16_t start_addr, const uint8_t *data, size_t len,
-                  bluetti_state_t *st);
+int bt_regs_apply(const bt_device_t *dev, uint16_t start_addr,
+                  const uint8_t *data, size_t len, bluetti_state_t *st);
+
+/* Whether a block is worth polling for this model. A NULL model means we
+ * have not identified it yet, so everything is polled. */
+bool bt_regs_block_wanted(const bt_device_t *dev, uint16_t addr);
 
 #ifdef __cplusplus
 }

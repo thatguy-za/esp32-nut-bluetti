@@ -107,19 +107,23 @@
       <div class="row"><button type="button" class="act" id="cfgBleScan">Scan for devices</button></div>
       <label for="cfgBleAddr">BLE address / name prefix</label>
       <input id="cfgBleAddr" name="ble_addr" autocomplete="off">
-      <p class="hint" id="cfgBleHint">A <code>AA:BB:CC:DD:EE:FF</code> address, or a
-        name prefix like <code>EF-R3</code>.</p>
+      <p class="hint" id="cfgBleHint">Which unit to connect to. <b>Scan</b> and
+        pick from the list — that fills in the unit's
+        <code>AA:BB:CC:DD:EE:FF</code> address, which is exact and does not
+        change. A model name such as <code>EL10</code> also works: the bridge
+        takes the first unit advertising that name, which is enough when you
+        have only one.</p>
     </div>
 
     <div class="box">
-      <h2>Protocol <span class="sub">not implemented yet</span></h2>
+      <h2>Protocol <span class="sub">diagnostics</span></h2>
       <label class="chk"><input type="checkbox" id="cfgProbe" name="ble_probe"
         value="1" style="width:auto"> Probe mode</label>
-      <p class="hint">The BLUETTI protocol has not been confirmed on hardware,
-        so there is no decoder yet. Probe mode connects, enumerates the GATT
-        services and characteristics, subscribes to anything that notifies, and
-        hex-dumps what arrives to the <b>Status</b> tab's log. That is what
-        tells us which protocol your unit speaks — see
+      <p class="hint">Leave this off for normal use. The decoder has not been
+        confirmed on hardware, so if a reading looks wrong or the link never
+        reaches <b>ready</b>, probe mode connects, enumerates the GATT services
+        and characteristics, subscribes to anything that notifies, and hex-dumps
+        what arrives to the <b>Status</b> tab's log — without decoding it. See
         <code>docs/PROTOCOL.md</code> for what to look for.</p>
     </div>
 
@@ -146,9 +150,9 @@
         <span><label for="cfgRating">Continuous AC rating (W)</label>
           <input id="cfgRating" name="ac_rating_w" type="number" min="1" max="65535"
                  style="width:8rem"></span>
-        <p class="hint">200&nbsp;W on an Elite&nbsp;10. Published as
-          <code>ups.realpower.nominal</code>, and the 100% reference for
-          <code>ups.load</code>.</p>
+        <p class="hint">Your unit's figure — 200&nbsp;W on an Elite&nbsp;10.
+          Published as <code>ups.realpower.nominal</code>, and the 100%
+          reference for <code>ups.load</code>.</p>
       </div>
       <div class="row explain">
         <span><label for="cfgRtLow">Low runtime (s)</label>

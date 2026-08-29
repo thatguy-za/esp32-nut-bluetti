@@ -75,11 +75,26 @@ AES-CBC, SHA-256 and ECDSA verification. (The EcoFlow build vendored micro-ecc
 only because it needed secp160r1, which mbedtls omits. That's not a problem
 here.)
 
-## Elite 10 register map
+## Register map
 
-From [Patrick762/bluetti-bt-lib#89](https://github.com/Patrick762/bluetti-bt-lib/pull/89)
+The addresses below are the **V2 portable** map, shared by every supported
+model. From [Patrick762/bluetti-bt-lib#89](https://github.com/Patrick762/bluetti-bt-lib/pull/89)
 ("Add EL10 device"), merged upstream on 2026-08-29, plus the `BaseDeviceV2`
-common fields. Review is not hardware confirmation: as far as is known nobody
+common fields — and cross-checked against the other V2 device definitions,
+which use the same addresses.
+
+Models differ only in *which* of these registers they declare, not where the
+registers live. `BaseDeviceV2.get_full_registers_range` sweeps 0..20000 in
+blocks of ten on every V2 device, so reading an address a model does not
+declare is harmless — but interpreting one is not, since an absent register
+reads as zero. `bt_regs.c` therefore gates each optional field on the model,
+which it takes from register 110 rather than from configuration. The per-model
+table is in the README.
+
+Four V2 models are **not** supported: `EP600`, `EP760`, `EP800` and `EP2000`
+are grid/PV systems whose fields (three-phase grid, PV strings) share none of
+these addresses. The V1-protocol models are not supported either — that is a
+different framing altogether. Review is not hardware confirmation: as far as is known nobody
 has run it against a unit either, so treat the addresses as a well-reviewed
 hypothesis rather than fact.
 

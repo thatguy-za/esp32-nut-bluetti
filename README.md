@@ -35,9 +35,37 @@ themselves down cleanly on a mains failure.
 >
 > Probe mode is still there for when something does not line up.
 
-## Target
+## Supported models
 
-**BLUETTI Elite 10** (128 Wh, 200 W, advertises as `EL10…`).
+Any of the 17 BLUETTI units that speak the **V2** protocol and carry the
+portable power registers. The bridge reads the model out of the unit itself
+(register 110) and enables the fields that model actually has:
+
+| | runtime | DC in | AC in V | AC in A | AC out V |
+| --- | :-: | :-: | :-: | :-: | :-: |
+| `AC2A` `AC2P` | | ● | | | |
+| `AC50B` | ● | | | | |
+| `AC60` `AC60P` `AP300` `PR30V2` `PR100V2` | | ● | ● | | |
+| `AC180` `AC180T` `AC70P` | | ● | ● | ● | ● |
+| `AC180P` | | ● | ● | | |
+| `AC70` `EL10` `EL100V2` `Handsfree 1` | ● | ● | ● | ● | ● |
+| `EL30V2` | ● | ● | ● | | |
+
+Charge, AC/DC output power and AC input power are common to all of them; the
+columns are the extras. A model not listed still connects and reports charge
+and power, with the optional fields off — an absent register reads as zero,
+and publishing a real-looking `0 V` or a 0-minute runtime would be worse than
+publishing nothing.
+
+**Not supported.** `EP600`, `EP760`, `EP800` and `EP2000` speak V2 but are
+grid/PV systems with an entirely different register set (three-phase grid, PV
+strings) — none of the registers below apply. `AC200L`, `AC200M`, `AC200PL`,
+`AC300`, `AC500`, `EB3A`, `EP500` and `EP500P` use the older **V1** protocol,
+which this firmware does not speak.
+
+Development and testing has centred on the **Elite 10** (advertises as
+`EL10…`); the rest come from the same upstream field definitions but have had
+no more hardware exposure than it has, which is none.
 
 ### How it talks
 
@@ -53,16 +81,17 @@ is needed. mbedtls provides all of it.
 | NUT variable | Source |
 | --- | --- |
 | `battery.charge` | register 102, measured |
-| `battery.runtime` | register 104, measured (0 treated as unknown) |
+| `battery.runtime` | register 104, measured (0 treated as unknown; absent on some models) |
 | `ups.realpower` | AC + DC output power, measured |
 | `input.realpower.ac` | register 146, measured |
+| `input.voltage`, `input.current`, `output.voltage` | measured, on models that have them |
 | `ups.status` `OL`/`OB` | **inferred** from AC input power and line voltage |
 | `CHRG` | **inferred** from mains present and charge below 100% |
 | `battery.voltage`, `battery.temperature` | **absent** — no register in the map |
 
-The absent fields are the honest gap: the PR's map does not include pack
-voltage or temperature, so those NUT variables are simply not published rather
-than guessed.
+The absent fields are the honest gap: the upstream map does not include pack
+voltage or temperature for any of these models, so those NUT variables are
+simply not published rather than guessed.
 
 ## Flash it
 
