@@ -22,14 +22,21 @@ V=$(cat version.txt)
 git tag -a "v$V" -m "v$V"
 git push origin main "v$V"
 
-rm -rf build && idf.py build            # image reports v$V
-idf.py merge-bin -o esp32-nut-ecoflow-factory.bin
-# update dist/FLASHING.md size + sha256 to match
+rm -rf build && ./tools/package.sh      # builds + names the artifacts by version
 
-gh release create "v$V" --prerelease --notes-file NOTES.md
-gh release upload  "v$V" \
-  build/esp32-nut-ecoflow-factory.bin build/esp32-nut-ecoflow.bin
+gh release create "v$V" --prerelease --notes-file NOTES.md \
+  "dist/esp32-nut-ecoflow-$V-factory.bin" "dist/esp32-nut-ecoflow-$V.bin"
 ```
+
+`tools/package.sh` prints the size and SHA-256 of each artifact (put them in the
+release notes) and refuses to run if the built image doesn't report `$V`.
+
+Artifacts:
+
+| file | use |
+| --- | --- |
+| `esp32-nut-ecoflow-<version>-factory.bin` | first flash over USB, at offset `0x0` |
+| `esp32-nut-ecoflow-<version>.bin` | app only — the web OTA update upload |
 
 ## Rules
 

@@ -9,7 +9,7 @@ static const char *TAG = "app_config";
 
 #define CFG_NS      "efnut"
 #define CFG_KEY     "cfg"
-#define CFG_VERSION 2u
+#define CFG_VERSION 3u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -21,6 +21,7 @@ typedef struct {
 void app_config_defaults(app_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
+    cfg->wifi_mode = APP_WIFI_STATION;   /* what nearly everyone wants */
     strlcpy(cfg->wifi_ssid, CONFIG_WIFI_SSID, sizeof(cfg->wifi_ssid));
     strlcpy(cfg->wifi_pass, CONFIG_WIFI_PASSWORD, sizeof(cfg->wifi_pass));
     strlcpy(cfg->ble_addr, CONFIG_ECOFLOW_BLE_ADDRESS, sizeof(cfg->ble_addr));

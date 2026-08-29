@@ -48,7 +48,7 @@ click **Install**. It's an [ESP Web Tools](https://esphome.github.io/esp-web-too
 button pointing at the latest release — the same one-click flasher ESPHome uses.
 
 Or on **[web.esphome.io](https://web.esphome.io)**: *Connect*, then choose
-`esp32-nut-ecoflow-factory.bin` from the
+`esp32-nut-ecoflow-<version>-factory.bin` from the
 [latest release](https://github.com/thatguy-za/esp32-nut-ecoflow/releases).
 
 Only this first flash needs a cable. After that, updates go over the network from
@@ -58,49 +58,64 @@ the [admin page](#admin-page). Offline / Linux / `esptool` instructions are in
 You also need a Wi-Fi network the monitoring hosts can reach, and — on most dev
 boards — the BOOT button on GPIO0 for the config wipe.
 
-## First-run provisioning
+## Setting it up
 
-On first boot (or after a config wipe) the device has no Wi-Fi credentials, so
-it starts a **captive-portal setup**:
+Setup is two stages: get the bridge on a network, then point it at your EcoFlow.
 
-1. It brings up an **open Wi-Fi access point** named `esp-nut-ecoflow-XXXX`
-   (`XXXX` = last 2 bytes of the MAC).
-2. Join that network with a phone or laptop. A captive-portal DNS server
-   redirects everything to the setup page, so it should pop up automatically;
-   if not, browse to `http://192.168.4.1/`.
-3. On the page:
-   - **Scan for EcoFlow** — Bluetooth-scans for nearby devices; pick your unit
-     (EcoFlow units are marked ★). Or type its MAC manually.
-   - **EcoFlow account** — the River 3 only grants Bluetooth access to its own
-     account, so the bridge needs your EcoFlow **account user id**. Enter your
-     EcoFlow email + password (used once, over HTTPS, to fetch the id — the
-     password is not stored) or paste the user id directly if you have it.
-   - **Wi-Fi** — pick your network and enter the password.
-   - **Advanced** (optional) — UPS name, NUT port, low-battery %.
-4. **Save & connect.** The ESP32 joins your Wi-Fi. On success the page shows the
-   device's new LAN IP and the setup AP shuts down.
+### 1. Network (captive portal)
 
-All settings are stored in NVS (flash), so subsequent boots connect straight to
-your Wi-Fi and start serving NUT.
+On first boot (or after a config wipe) the device brings up an **open Wi-Fi
+access point** named `esp-nut-ecoflow-XXXX` (`XXXX` = last 2 bytes of the MAC).
+Join it from a phone or laptop — a captive-portal DNS server redirects
+everything to the setup page, so it should pop up automatically; if not, browse
+to `http://192.168.4.1/`.
+
+Pick one:
+
+- **Join my Wi-Fi** (default) — choose your network from the scanned list and
+  enter the password. On success the page shows the bridge's new LAN IP as a
+  link; reconnect your phone/laptop to your normal Wi-Fi and follow it. The
+  setup AP shuts down.
+- **Run its own AP** — name the network and set a password (8+ chars, or leave
+  blank for open). The bridge reboots hosting that network at
+  `http://192.168.4.1/`. Your NUT clients have to join it too.
+
+### 2. EcoFlow + NUT (admin page)
+
+Open the bridge's page and use the **EcoFlow** tab:
+
+- **Scan for devices** and pick your unit — the list shows the Bluetooth name
+  with the MAC in brackets, e.g. `EF-R3xxxx [AA:BB:CC:DD:EE:FF]`; likely EcoFlow
+  units are marked ★. You can also type an address or name prefix.
+- **EcoFlow account** — the River 3 only grants Bluetooth access to its own
+  account, so the bridge needs your EcoFlow **account user id**. Enter your
+  EcoFlow email + password (used once, over HTTPS, to fetch the id — the
+  password is not stored) or paste the user id directly.
+
+The **NUT** tab sets the UPS name, TCP port and low-battery threshold. Saving
+either reboots the bridge.
+
+All settings live in NVS (flash), so later boots go straight to serving NUT.
 
 ### Admin page
 
-In normal operation the device serves a small page at `http://<device-ip>/` with
-four tabs:
+In normal operation the device serves a page at `http://<device-ip>/`:
 
-- **Status** — Wi-Fi IP, BLE link state, battery %, model.
-- **Config** — change the EcoFlow BLE target (re-scan and pick, or type a
-  MAC / name prefix), the EcoFlow account, and the NUT settings (UPS name, port,
-  low-battery %) without a full re-provision. Saving reboots the device.
-- **Logs** — a live tail of the device log (~12 KB ring buffer), so you can watch
-  the BLE handshake without a serial cable. Turn on `CONFIG_ECOFLOW_BLE_TRACE`
-  for the full dump.
+- **Status** — the current state, with a live tail of the device log below it
+  (~12 KB ring buffer) so you can watch the BLE handshake without a serial
+  cable. Turn on `CONFIG_ECOFLOW_BLE_TRACE` for the full dump.
+- **EcoFlow** — BLE target and EcoFlow account.
+- **NUT** — UPS name, TCP port, low-battery %.
+- **Wi-Fi** — switch between joining a network and running as an access point,
+  with the settings for each.
 - **Maintenance** —
-  - **Firmware update**: upload a new `esp32-nut-ecoflow.bin` (or the app-only
-    `*-app.bin`); it's written to the spare OTA slot and the device reboots,
-    with bootloader rollback if the new build won't come up. Gated by a typed
-    `FLASH` confirmation. Disable with `CONFIG_ENABLE_WEB_OTA=n`.
-  - **Forget config & reboot** (re-provision).
+  - **Firmware update**: upload a newer
+    `esp32-nut-ecoflow-<version>.bin`; it's written to the spare OTA slot and
+    the device reboots, with bootloader rollback if the new build won't come up.
+    Gated by a typed `FLASH` confirmation. Disable with
+    `CONFIG_ENABLE_WEB_OTA=n`.
+  - **Restart** — reboot, keeping settings.
+  - **Re-provision** — forget everything and reboot into the setup AP.
 
 There is **no authentication** — anyone on the network can read the logs and
 (with OTA enabled) flash firmware. Keep it on a trusted LAN.
@@ -135,8 +150,9 @@ anyone); keep the device on a trusted LAN.
 
 - **NUT server** — upsd-compatible, read-only; verified against a third-party
   NUT client (`LIST UPS/VAR`, `GET VAR`, `upsmon` primary handshake, …).
-- **Provisioning** — captive-portal Wi-Fi + EcoFlow-account setup, config in NVS,
-  BOOT-button / web re-provision.
+- **Provisioning** — captive-portal Wi-Fi setup (join a network or run as an
+  AP), then EcoFlow + NUT from the admin page; config in NVS, BOOT-button / web
+  re-provision.
 - **EcoFlow BLE "V2" stack** — ECDH (secp160r1) key agreement, AES-128-CBC
   session, keydata session-key derivation, both framing layers, `MD5(user_id +
   serial)` account auth, and a protobuf reader for the `pr705` telemetry
@@ -187,8 +203,8 @@ afterwards.
 | --- | --- |
 | `main/` | boot flow / EcoFlow→NUT variable mapping |
 | `components/app_config/` | NVS-backed runtime config |
-| `components/wifi_mgr/` | STA + SoftAP + scan |
-| `components/provisioning/` | captive portal (`portal.html`), DNS server, admin page (`admin.html`), web log tail (`log_ring.c`) |
+| `components/wifi_mgr/` | station + SoftAP (open or WPA2) + scan |
+| `components/provisioning/` | Wi-Fi setup portal (`portal.html`), DNS server, admin page (`admin.html`), web log tail (`log_ring.c`) |
 | `components/nut_server/` | upsd-compatible TCP protocol server |
 | `components/micro_ecc/` | vendored micro-ecc (secp160r1 for the BLE handshake) |
 | `components/ecoflow_ble/` | NimBLE transport + EcoFlow V2 stack: |

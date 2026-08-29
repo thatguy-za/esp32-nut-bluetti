@@ -35,8 +35,10 @@ jobs:
           echo "Latest release: $tag"
           mkdir -p _site
           cp dist/index.html _site/
-          gh release download "$tag" \
-            -p 'esp32-nut-ecoflow-factory.bin' -D _site
+          # Release assets carry the version in their name; the manifest
+          # references a stable filename, so normalise it here.
+          gh release download "$tag" -p '*-factory.bin' -D _site
+          mv _site/*-factory.bin _site/esp32-nut-ecoflow-factory.bin
           cat > _site/manifest.json <<EOF
           {
             "name": "esp32-nut-ecoflow",

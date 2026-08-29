@@ -177,18 +177,23 @@ static void start_services(const app_config_t *cfg)
         ESP_LOGE(TAG, "nut_server_start failed");
     }
 
-    ecoflow_ble_config_t ef_cfg = {
-        .ble_address = cfg->ble_addr,
-        .ble_name_prefix = cfg->ble_name,
-        .user_id = cfg->ef_user_id,
-        .poll_interval_ms = cfg->poll_ms,
-        .low_battery_pct = cfg->low_pct,
-    };
-    if (cfg->ef_user_id[0] == '\0') {
-        ESP_LOGW(TAG, "no EcoFlow user_id set — BLE auth will fail; re-provision");
-    }
-    if (ecoflow_ble_start(&ef_cfg, ecoflow_cb, NULL) != 0) {
-        ESP_LOGE(TAG, "ecoflow_ble_start failed");
+    /* The EcoFlow side is configured from the admin page after Wi-Fi setup,
+     * so on a fresh device there is nothing to connect to yet. */
+    bool have_target = cfg->ble_addr[0] || cfg->ble_name[0];
+    if (!have_target || cfg->ef_user_id[0] == '\0') {
+        ESP_LOGW(TAG, "EcoFlow not configured yet — open the admin page's "
+                      "Config → EcoFlow tab to finish setup");
+    } else {
+        ecoflow_ble_config_t ef_cfg = {
+            .ble_address = cfg->ble_addr,
+            .ble_name_prefix = cfg->ble_name,
+            .user_id = cfg->ef_user_id,
+            .poll_interval_ms = cfg->poll_ms,
+            .low_battery_pct = cfg->low_pct,
+        };
+        if (ecoflow_ble_start(&ef_cfg, ecoflow_cb, NULL) != 0) {
+            ESP_LOGE(TAG, "ecoflow_ble_start failed");
+        }
     }
 
     provisioning_admin_start(cfg);
@@ -221,9 +226,14 @@ void app_main(void)
         ESP_LOGW(TAG, "BLE host init incomplete; continuing");
     }
 
-    bool need_setup = !cfg->provisioned || cfg->wifi_ssid[0] == '\0';
+    bool ap_mode = cfg->provisioned && cfg->wifi_mode == APP_WIFI_AP;
+    bool need_setup = !cfg->provisioned ||
+                      (!ap_mode && cfg->wifi_ssid[0] == '\0');
 
-    if (!need_setup) {
+    if (ap_mode) {
+        ESP_LOGI(TAG, "running as access point '%s'", cfg->ap_ssid);
+        ESP_ERROR_CHECK(wifi_mgr_ap_start(cfg->ap_ssid, cfg->ap_pass));
+    } else if (!need_setup) {
         ESP_LOGI(TAG, "connecting to '%s'", cfg->wifi_ssid);
         if (wifi_mgr_sta_connect(cfg->wifi_ssid, cfg->wifi_pass, 30000) != ESP_OK) {
             ESP_LOGW(TAG, "stored Wi-Fi failed; falling back to setup");
@@ -233,17 +243,26 @@ void app_main(void)
 
     if (need_setup) {
         ESP_ERROR_CHECK(provisioning_run(cfg));   /* blocks until connected */
+        ap_mode = cfg->wifi_mode == APP_WIFI_AP;
     }
 
     /* EcoFlow's BLE auth doesn't need the clock, but the device asks for
-     * time once connected; give it a real one. */
-    esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-    esp_netif_sntp_init(&sntp);
+     * time once connected; give it a real one. In AP mode there's no route
+     * to an NTP server, so don't bother. */
+    if (!ap_mode) {
+        esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+        esp_netif_sntp_init(&sntp);
+    }
 
     char ip[16];
-    wifi_mgr_sta_ip(ip, sizeof(ip));
-    ESP_LOGI(TAG, "online at %s — NUT ':%u' UPS '%s', BLE target '%s'",
-             ip, cfg->nut_port, cfg->ups_name,
+    if (ap_mode) {
+        wifi_mgr_ap_ip(ip, sizeof(ip));
+    } else {
+        wifi_mgr_sta_ip(ip, sizeof(ip));
+    }
+    ESP_LOGI(TAG, "online at %s (%s) — NUT ':%u' UPS '%s', BLE target '%s'",
+             ip, ap_mode ? "access point" : "station",
+             cfg->nut_port, cfg->ups_name,
              cfg->ble_addr[0] ? cfg->ble_addr : cfg->ble_name);
 
     start_services(cfg);

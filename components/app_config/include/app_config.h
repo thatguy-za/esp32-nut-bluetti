@@ -14,9 +14,18 @@ extern "C" {
  * Kconfig values are compile-time DEFAULTS only; whatever the user saves
  * through the provisioning portal wins.
  */
+/* How the bridge puts itself on the network. */
+typedef enum {
+    APP_WIFI_STATION = 0,   /* join an existing network (default)  */
+    APP_WIFI_AP      = 1,   /* run its own access point            */
+} app_wifi_mode_t;
+
 typedef struct {
-    char     wifi_ssid[33];
+    uint8_t  wifi_mode;      /* app_wifi_mode_t                           */
+    char     wifi_ssid[33];  /* station: network to join                  */
     char     wifi_pass[65];
+    char     ap_ssid[33];    /* AP mode: SSID to advertise (blank = auto) */
+    char     ap_pass[65];    /* AP mode: blank = open network             */
     char     ble_addr[18];   /* "AA:BB:CC:DD:EE:FF"; empty => use ble_name */
     char     ble_name[24];   /* advertised-name prefix fallback           */
     char     ef_user_id[40]; /* EcoFlow account user id (BLE auth)        */
@@ -24,7 +33,7 @@ typedef struct {
     uint16_t nut_port;
     uint16_t poll_ms;
     uint8_t  low_pct;
-    bool     provisioned;    /* set true once a Wi-Fi STA connect succeeds */
+    bool     provisioned;    /* set true once Wi-Fi setup has succeeded    */
 } app_config_t;
 
 /* Populate cfg from Kconfig defaults (no NVS access). */

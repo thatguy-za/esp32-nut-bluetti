@@ -10,130 +10,227 @@
   body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 1rem;
          max-width: 46rem; margin-inline: auto; }
   h1 { font-size: 1.25rem; margin: .2rem 0 1rem; }
-  nav { display: flex; gap: .3rem; border-bottom: 1px solid #8884; margin-bottom: 1rem; }
+  nav { display: flex; gap: .3rem; border-bottom: 1px solid #8884;
+        margin-bottom: 1rem; flex-wrap: wrap; }
   nav button { border: 0; background: none; color: inherit; font: inherit;
                padding: .5rem .9rem; cursor: pointer; border-bottom: 2px solid transparent; }
   nav button.active { border-bottom-color: #2563eb; font-weight: 600; }
   section { display: none; }
   section.active { display: block; }
+
+  .box { border: 1px solid #8884; border-radius: .6rem; padding: .9rem 1rem 1.1rem;
+         margin: 0 0 1rem; }
+  .box > h2 { font-size: .95rem; margin: 0 0 .6rem; }
+  .box > h2 .sub { font-weight: 400; opacity: .6; font-size: .85rem; }
+
   pre { background: #111b; color: #d7e0e8; padding: .75rem; border-radius: .4rem;
-        overflow: auto; max-height: 62vh; font: 12px/1.45 ui-monospace, monospace;
-        white-space: pre-wrap; word-break: break-word; }
+        overflow: auto; max-height: 50vh; font: 12px/1.45 ui-monospace, monospace;
+        white-space: pre-wrap; word-break: break-word; margin: 0; }
   .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .5rem 0; }
   button.act { padding: .45rem .8rem; font: inherit; border-radius: .35rem;
                border: 1px solid #8886; background: #8882; color: inherit; cursor: pointer; }
+  button.act:disabled { opacity: .5; cursor: progress; }
   button.danger { border-color: #c00; background: #c00; color: #fff; }
+  button.primary { border-color: #2563eb; background: #2563eb; color: #fff; }
   label.chk { display: inline-flex; gap: .35rem; align-items: center; }
-  #config label { display: block; margin: .7rem 0 .2rem; font-size: .85rem; opacity: .8; }
-  #config input, #config select { width: 100%; max-width: 24rem; padding: .4rem .5rem;
+  form label { display: block; margin: .7rem 0 .2rem; font-size: .85rem; opacity: .8; }
+  form input, form select { width: 100%; max-width: 24rem; padding: .4rem .5rem;
     font: inherit; border: 1px solid #8886; border-radius: .35rem;
     background: Canvas; color: CanvasText; }
-  #config input[type=number] { width: 6rem; }
-  #config h2 { margin: 1.4rem 0 .2rem; }
-  #config details { margin: .4rem 0; }
-  #config summary { cursor: pointer; font-size: .88rem; }
+  form input[type=number] { width: 6rem; }
+  form details { margin: .5rem 0; }
+  form summary { cursor: pointer; font-size: .88rem; }
+  .modes { display: flex; gap: .5rem; margin: .2rem 0 .6rem; }
+  .modes label { flex: 1; margin: 0; border: 1px solid #8886; border-radius: .5rem;
+                 padding: .5rem .6rem; cursor: pointer; font-size: .9rem; opacity: 1; }
+  .modes label:has(input:checked) { border-color: #2563eb; background: #2563eb1a; }
+  .modes input { width: auto; margin-right: .35rem; }
   table { border-collapse: collapse; width: 100%; }
   td { padding: .3rem .5rem; border-bottom: 1px solid #8883; }
   td:first-child { opacity: .7; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
   .hint { font-size: .82rem; opacity: .65; }
+  .warn { border-left: 3px solid #d9822b; background: #d9822b1a; padding: .5rem .7rem;
+          border-radius: .3rem; font-size: .88rem; margin: 0 0 1rem; }
   code { background: #8882; padding: .05em .3em; border-radius: .25em; }
+  a { color: #2563eb; }
 </style>
 </head>
 <body>
 <h1>EcoFlow NUT Bridge</h1>
 <nav>
   <button data-tab="status" class="active">Status</button>
-  <button data-tab="config">Config</button>
-  <button data-tab="logs">Logs</button>
+  <button data-tab="ecoflow">EcoFlow</button>
+  <button data-tab="nut">NUT</button>
+  <button data-tab="wifi">Wi-Fi</button>
   <button data-tab="maint">Maintenance</button>
 </nav>
 
+<div id="setupWarn" class="warn" hidden>
+  The EcoFlow unit isn't set up yet — open the <b>EcoFlow</b> tab to finish.
+</div>
+
+<!-- ---------------- Status ---------------- -->
 <section id="status" class="active">
-  <table id="statusTable"><tr><td>loading…</td><td></td></tr></table>
-  <p class="hint">Auto-refreshes every 3&nbsp;s.</p>
+  <div class="box">
+    <h2>Status <span class="sub">refreshes every 3&nbsp;s</span></h2>
+    <table id="statusTable"><tr><td>loading…</td><td></td></tr></table>
+  </div>
+  <div class="box">
+    <h2>Logs <span class="sub">device log tail, ~12&nbsp;KB</span></h2>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="follow" checked> Follow</label>
+      <button class="act" id="clearView">Clear view</button>
+      <button class="act" id="copyLog">Copy</button>
+      <span class="hint" id="logInfo"></span>
+    </div>
+    <pre id="logView">…</pre>
+    <p class="hint">Enable <code>Trace the EcoFlow BLE handshake</code> in
+      <code>menuconfig</code> for the full handshake dump. Anyone on this network
+      can read this — trusted LAN only.</p>
+  </div>
 </section>
 
-<section id="config">
-  <form id="cfgForm">
-    <h2 style="font-size:1rem">EcoFlow unit</h2>
-    <label for="cfgBleSel">Device</label>
-    <select id="cfgBleSel"><option value="">— select —</option></select>
-    <button type="button" class="act" id="cfgBleScan">Scan for devices</button>
-    <label for="cfgBleAddr">BLE address / name prefix</label>
-    <input id="cfgBleAddr" name="ble_addr" autocomplete="off">
-    <p class="hint" id="cfgBleHint">A <code>AA:BB:CC:DD:EE:FF</code> address, or a
-      name prefix like <code>EF-R3</code>.</p>
-
-    <h2 style="font-size:1rem">EcoFlow account</h2>
-    <p class="hint" id="cfgUidState"></p>
-    <details id="cfgAcctDetails">
-      <summary id="cfgAcctSummary">Set the EcoFlow account</summary>
-      <label for="cfgEmail">Email or phone</label>
-      <input id="cfgEmail" name="ef_email" autocomplete="off">
-      <label for="cfgPass">Password</label>
-      <input id="cfgPass" name="ef_pass" type="password" autocomplete="off">
-      <label for="cfgRegion">Region</label>
-      <select id="cfgRegion" name="ef_region">
-        <option value="api">Global / US</option>
-        <option value="api-e">Europe</option>
-        <option value="api-a">Asia-Pacific</option>
-        <option value="api-cn">China (phone only)</option>
-      </select>
-      <label for="cfgUid">…or paste a user id</label>
-      <input id="cfgUid" name="ef_user_id" autocomplete="off">
-    </details>
-
-    <h2 style="font-size:1rem">NUT</h2>
-    <label for="cfgUps">UPS name</label>
-    <input id="cfgUps" name="ups_name" autocomplete="off">
-    <div class="row">
-      <span><label for="cfgPort">TCP port</label>
-        <input id="cfgPort" name="nut_port" type="number" min="1" max="65535" size="6"></span>
-      <span><label for="cfgLow">Low battery %</label>
-        <input id="cfgLow" name="low_pct" type="number" min="1" max="99" size="4"></span>
+<!-- ---------------- EcoFlow ---------------- -->
+<section id="ecoflow">
+  <form id="efForm">
+    <input type="hidden" name="section" value="ecoflow">
+    <div class="box">
+      <h2>EcoFlow unit</h2>
+      <label for="cfgBleSel">Device</label>
+      <select id="cfgBleSel"><option value="">— select —</option></select>
+      <div class="row"><button type="button" class="act" id="cfgBleScan">Scan for devices</button></div>
+      <label for="cfgBleAddr">BLE address / name prefix</label>
+      <input id="cfgBleAddr" name="ble_addr" autocomplete="off">
+      <p class="hint" id="cfgBleHint">A <code>AA:BB:CC:DD:EE:FF</code> address, or a
+        name prefix like <code>EF-R3</code>.</p>
     </div>
 
-    <p><button class="act danger" id="cfgSave">Save &amp; reboot</button></p>
-    <p class="hint" id="cfgMsg"></p>
+    <div class="box">
+      <h2>EcoFlow account</h2>
+      <p class="hint" id="cfgUidState"></p>
+      <details id="cfgAcctDetails">
+        <summary id="cfgAcctSummary">Set the EcoFlow account</summary>
+        <label for="cfgEmail">Email or phone</label>
+        <input id="cfgEmail" name="ef_email" autocomplete="off">
+        <label for="cfgPass">Password</label>
+        <input id="cfgPass" name="ef_pass" type="password" autocomplete="off">
+        <label for="cfgRegion">Region</label>
+        <select id="cfgRegion" name="ef_region">
+          <option value="api">Global / US</option>
+          <option value="api-e">Europe</option>
+          <option value="api-a">Asia-Pacific</option>
+          <option value="api-cn">China (phone only)</option>
+        </select>
+        <label for="cfgUid">…or paste a user id</label>
+        <input id="cfgUid" name="ef_user_id" autocomplete="off">
+        <p class="hint">The password is used once to look up your account id and
+          is not stored.</p>
+      </details>
+    </div>
+
+    <p><button class="act primary" id="efSave">Save &amp; reboot</button>
+       <span class="hint" id="efMsg"></span></p>
   </form>
 </section>
 
-<section id="logs">
-  <div class="row">
-    <label class="chk"><input type="checkbox" id="follow" checked> Follow</label>
-    <button class="act" id="clearView">Clear view</button>
-    <button class="act" id="copyLog">Copy</button>
-    <span class="hint" id="logInfo"></span>
-  </div>
-  <pre id="logView">…</pre>
-  <p class="hint">Device log tail (~12&nbsp;KB). Enable
-    <code>Trace the EcoFlow BLE handshake</code> in <code>menuconfig</code> for the
-    full handshake dump. Anyone on this network can read this — trusted LAN only.</p>
+<!-- ---------------- NUT ---------------- -->
+<section id="nut">
+  <form id="nutForm">
+    <input type="hidden" name="section" value="nut">
+    <div class="box">
+      <h2>NUT server</h2>
+      <label for="cfgUps">UPS name</label>
+      <input id="cfgUps" name="ups_name" autocomplete="off">
+      <div class="row">
+        <span><label for="cfgPort">TCP port</label>
+          <input id="cfgPort" name="nut_port" type="number" min="1" max="65535"></span>
+        <span><label for="cfgLow">Low battery %</label>
+          <input id="cfgLow" name="low_pct" type="number" min="1" max="99"></span>
+      </div>
+      <p class="hint">Clients connect with
+        <code>upsc <span id="upscName">ecoflow</span>@<span id="upscIp">&lt;ip&gt;</span></code>.</p>
+    </div>
+    <p><button class="act primary" id="nutSave">Save &amp; reboot</button>
+       <span class="hint" id="nutMsg"></span></p>
+  </form>
 </section>
 
+<!-- ---------------- Wi-Fi ---------------- -->
+<section id="wifi">
+  <form id="wifiForm">
+    <input type="hidden" name="section" value="wifi">
+    <div class="modes">
+      <label><input type="radio" name="wifi_mode" value="station" checked> Join a network</label>
+      <label><input type="radio" name="wifi_mode" value="ap"> Run its own AP</label>
+    </div>
+
+    <div class="box" id="wifiStaBox">
+      <h2>Station <span class="sub">join an existing network</span></h2>
+      <label for="wifiSsid">Network</label>
+      <select id="wifiSsid" name="wifi_ssid"></select>
+      <div class="row"><button type="button" class="act" id="wifiScan">Scan for networks</button>
+        <span class="hint" id="wifiHint"></span></div>
+      <label for="wifiPass">Password</label>
+      <input id="wifiPass" name="wifi_pass" type="password" autocomplete="off"
+             placeholder="unchanged">
+      <label class="chk" style="margin-top:.5rem"><input type="checkbox" id="wifiOpen"
+        name="wifi_open" value="1" style="width:auto"> Open network (no password)</label>
+    </div>
+
+    <div class="box" id="wifiApBox">
+      <h2>Access point <span class="sub">the bridge hosts its own network</span></h2>
+      <label for="apSsid">Network name (SSID)</label>
+      <input id="apSsid" name="ap_ssid" autocomplete="off" maxlength="32">
+      <label for="apPass">Password</label>
+      <input id="apPass" name="ap_pass" type="password" autocomplete="off"
+             maxlength="63" placeholder="unchanged">
+      <label class="chk" style="margin-top:.5rem"><input type="checkbox" id="apOpen"
+        name="ap_open" value="1" style="width:auto"> Open network (no password)</label>
+      <p class="hint">At least 8 characters. NUT clients must join this network.</p>
+    </div>
+
+    <p><button class="act danger" id="wifiSave">Save &amp; reboot</button>
+       <span class="hint" id="wifiMsg"></span></p>
+    <p class="hint">Changing this reboots the bridge and moves it to a different
+      address — you'll need to reconnect there.</p>
+  </form>
+</section>
+
+<!-- ---------------- Maintenance ---------------- -->
 <section id="maint">
-  <div id="otaBox" hidden>
-    <h2 style="font-size:1rem">Firmware update</h2>
-    <p>Running <code id="fwNow">?</code>. Upload a new
-      <code>esp32-nut-ecoflow.bin</code> (or the app-only
-      <code>*-app.bin</code>); it's written to the spare slot and the device
-      reboots. If the new build won't come up, the bootloader rolls back.</p>
+  <div class="box" id="otaBox" hidden>
+    <h2>Firmware update</h2>
+    <p>Running <code id="fwNow">?</code>. Upload a newer
+      <code>esp32-nut-ecoflow-&lt;version&gt;.bin</code>; it's written to the spare
+      slot and the device reboots. If the new build won't come up, the bootloader
+      rolls back.</p>
     <div class="row">
-      <input type="file" id="fwFile" accept=".bin,application/octet-stream">
+      <input type="file" id="fwFile" accept=".bin,application/octet-stream" style="max-width:24rem">
     </div>
     <div class="row">
       <span>Type <code>FLASH</code> to confirm:</span>
-      <input id="fwConfirm" size="8" autocomplete="off">
+      <input id="fwConfirm" size="8" autocomplete="off" style="width:6rem">
       <button class="act danger" id="fwGo" disabled>Update</button>
     </div>
     <progress id="fwProg" value="0" max="100" style="width:100%;display:none"></progress>
     <p class="hint" id="fwMsg"></p>
   </div>
 
-  <h2 style="font-size:1rem">Re-provision</h2>
-  <p>Forget the stored Wi-Fi / EcoFlow settings and reboot into setup mode.</p>
-  <button class="act danger" id="reset">Forget config &amp; reboot</button>
-  <p class="hint" id="resetMsg"></p>
+  <div class="box">
+    <h2>Restart</h2>
+    <p>Reboot the bridge. Settings are kept.</p>
+    <button class="act" id="reboot">Reboot</button>
+    <p class="hint" id="rebootMsg"></p>
+  </div>
+
+  <div class="box">
+    <h2>Re-provision</h2>
+    <p>Forget every stored setting (Wi-Fi, EcoFlow, NUT) and reboot into the
+      setup access point.</p>
+    <button class="act danger" id="reset">Forget config &amp; reboot</button>
+    <p class="hint" id="resetMsg"></p>
+  </div>
 </section>
 
 <script>
@@ -143,19 +240,31 @@ tabs.forEach(b => b.onclick = () => {
   tabs.forEach(x => x.classList.toggle('active', x === b));
   document.querySelectorAll('section').forEach(s =>
     s.classList.toggle('active', s.id === b.dataset.tab));
-  if (b.dataset.tab === 'logs') pollLogs();
-  if (b.dataset.tab === 'config') loadConfig();
+  if (b.dataset.tab === 'status') pollLogs();
+  if (['ecoflow', 'nut', 'wifi'].includes(b.dataset.tab)) loadConfig();
 });
 
 /* ---- status ---- */
 let lastStatus = {};
+const STATUS_LABELS = {
+  wifi_mode: 'Wi-Fi mode', network: 'Network', ip: 'IP address',
+  fw_version: 'Firmware', fw_date: 'Built', ups: 'UPS name',
+  nut_port: 'NUT port', ble_target: 'EcoFlow target',
+  ble_connected: 'BLE connected', telemetry_valid: 'Telemetry',
+  battery_pct: 'Battery %', ac_input: 'AC input', charging: 'Charging',
+  model: 'Model',
+};
 async function refreshStatus() {
   try {
     const j = await (await fetch('/api/status')).json();
     lastStatus = j;
-    const rows = Object.entries(j).map(([k, v]) =>
-      `<tr><td>${k}</td><td>${String(v)}</td></tr>`).join('');
+    const rows = Object.entries(j)
+      .filter(([k]) => k in STATUS_LABELS)
+      .map(([k, v]) => `<tr><td>${STATUS_LABELS[k]}</td><td>${String(v) || '—'}</td></tr>`)
+      .join('');
     $('#statusTable').innerHTML = rows;
+    $('#setupWarn').hidden = !!j.configured;
+    $('#upscIp').textContent = j.ip || '<ip>';
     if (j.ota) {
       $('#otaBox').hidden = false;
       $('#fwNow').textContent = (j.fw_version || '?') + ' (' + (j.fw_date || '') + ')';
@@ -164,6 +273,237 @@ async function refreshStatus() {
 }
 refreshStatus();
 setInterval(refreshStatus, 3000);
+
+/* ---- logs ---- */
+let logCursor = 0, logText = '', logTimer = null;
+async function pollLogs() {
+  clearTimeout(logTimer);
+  try {
+    const r = await fetch('/api/logs?from=' + logCursor);
+    const next = r.headers.get('X-Log-Next');
+    const chunk = await r.text();
+    if (next !== null) {
+      if (+next < logCursor) logText = '';      /* ring wrapped past us */
+      logCursor = +next;
+    }
+    if (chunk) {
+      logText = (logText + chunk).slice(-60000);
+      const v = $('#logView');
+      v.textContent = logText;
+      if ($('#follow').checked) v.scrollTop = v.scrollHeight;
+    }
+    $('#logInfo').textContent = 'at byte ' + logCursor;
+  } catch (e) {
+    $('#logInfo').textContent = 'poll error';
+  }
+  if ($('#status').classList.contains('active'))
+    logTimer = setTimeout(pollLogs, 1500);
+}
+pollLogs();
+$('#clearView').onclick = () => { logText = ''; $('#logView').textContent = ''; };
+$('#copyLog').onclick = () => {
+  if (navigator.clipboard?.writeText) { navigator.clipboard.writeText(logText); return; }
+  const t = document.createElement('textarea');           /* plain-http fallback */
+  t.value = logText; document.body.appendChild(t); t.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  t.remove();
+};
+
+/* ---- shared config load ---- */
+let cfgLoaded = false, cfgScanned = false, wifiScanned = false, cfg = {};
+async function loadConfig() {
+  if (cfgLoaded) return;
+  try {
+    cfg = await (await fetch('/api/config')).json();
+    $('#cfgBleAddr').value = cfg.ble_addr || cfg.ble_name || '';
+    $('#cfgUps').value = cfg.ups_name || '';
+    $('#upscName').textContent = cfg.ups_name || 'ecoflow';
+    $('#cfgPort').value = cfg.nut_port || 3493;
+    $('#cfgLow').value = cfg.low_pct || 20;
+    if (cfg.has_user_id) {
+      $('#cfgUidState').textContent =
+        'An EcoFlow account id is stored. Change it only if you switched accounts.';
+      $('#cfgAcctSummary').textContent = 'Change the EcoFlow account';
+    } else {
+      $('#cfgUidState').textContent =
+        'No EcoFlow account id stored — set one below, or the BLE auth will fail.';
+      $('#cfgAcctSummary').textContent = 'Set the EcoFlow account';
+      $('#cfgAcctDetails').open = true;
+    }
+    const ap = cfg.wifi_mode === 'ap';
+    document.querySelector(`input[name=wifi_mode][value=${ap ? 'ap' : 'station'}]`).checked = true;
+    $('#apSsid').value = cfg.ap_ssid || cfg.default_ap_ssid || '';
+    if (cfg.wifi_ssid) {
+      const o = document.createElement('option');
+      o.value = cfg.wifi_ssid; o.textContent = cfg.wifi_ssid + ' (current)';
+      $('#wifiSsid').appendChild(o);
+      $('#wifiSsid').value = cfg.wifi_ssid;
+    }
+    $('#wifiPass').placeholder = cfg.has_wifi_pass ? 'unchanged' : 'none set';
+    $('#apPass').placeholder = cfg.has_ap_pass ? 'unchanged' : 'none set';
+    syncWifiMode();
+    cfgLoaded = true;
+  } catch (e) { $('#efMsg').textContent = 'Could not load current config.'; }
+}
+
+/* ---- generic section submit ---- */
+function wireForm(formSel, btnSel, msgSel, after) {
+  $(formSel).onsubmit = async ev => {
+    ev.preventDefault();
+    const fd = new FormData(ev.target);
+    for (const [k, v] of [...fd.entries()]) if (v === '') fd.delete(k);
+    fd.set('section', new FormData(ev.target).get('section'));
+    if (after && after(fd) === false) return;
+    $(btnSel).disabled = true;
+    $(msgSel).textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/reconfigure',
+        { method: 'POST', body: new URLSearchParams(fd) });
+      if (!r.ok) {
+        let why = '';
+        try { why = (await r.text()).trim(); } catch (e) {}
+        if (!why || why.length > 120 || why.includes('<')) why = 'HTTP ' + r.status;
+        throw new Error(why);
+      }
+    } catch (e) {
+      $(msgSel).textContent = 'Failed: ' + e.message;
+      $(btnSel).disabled = false;
+      return;
+    }
+    $(msgSel).textContent = 'Saved. Rebooting — reload in ~15 s.';
+  };
+}
+
+/* ---- EcoFlow tab ---- */
+let cfgBleTimer = null;
+async function pollCfgBle(deadline, first) {
+  try {
+    const d = await (await fetch('/api/ble-scan' + (first ? '' : '?poll=1'))).json();
+    const sel = $('#cfgBleSel'), keep = sel.value;
+    sel.innerHTML = '<option value="">— select —</option>';
+    (d.devices || []).sort((a, b) => (b.ecoflow - a.ecoflow) || (b.rssi - a.rssi))
+      .forEach(dev => {
+        const o = document.createElement('option');
+        o.value = dev.addr;
+        o.textContent = (dev.name ? `${dev.name} [${dev.addr}]` : dev.addr) +
+                        ` · ${dev.rssi} dBm` + (dev.ecoflow ? ' ★' : '');
+        sel.appendChild(o);
+      });
+    sel.value = keep;
+    if (d.scanning) {
+      $('#cfgBleHint').textContent = 'Scanning…';
+      if (Date.now() < deadline)
+        cfgBleTimer = setTimeout(() => pollCfgBle(deadline, false), 1500);
+      else finishBleScan();
+    } else {
+      $('#cfgBleHint').textContent = `Found ${(d.devices || []).length} device(s).`;
+      finishBleScan();
+    }
+  } catch (e) {
+    $('#cfgBleHint').textContent = 'Scan failed.';
+    finishBleScan();
+  }
+}
+function finishBleScan() {
+  cfgScanned = true;
+  const b = $('#cfgBleScan');
+  b.disabled = false;
+  b.textContent = 'Re-scan';
+}
+$('#cfgBleScan').onclick = () => {
+  clearTimeout(cfgBleTimer);
+  $('#cfgBleScan').disabled = true;
+  $('#cfgBleScan').textContent = cfgScanned ? 'Re-scanning…' : 'Scanning…';
+  $('#cfgBleHint').textContent = lastStatus.ble_connected
+    ? 'Scanning… (the BLE link drops during the scan and resumes after)'
+    : 'Scanning…';
+  pollCfgBle(Date.now() + 12000, true);
+};
+$('#cfgBleSel').onchange = () => {
+  if ($('#cfgBleSel').value) $('#cfgBleAddr').value = $('#cfgBleSel').value;
+};
+wireForm('#efForm', '#efSave', '#efMsg', fd => {
+  if (!(fd.get('ef_email') && fd.get('ef_pass'))) {
+    fd.delete('ef_email'); fd.delete('ef_pass'); fd.delete('ef_region');
+  }
+  if (!fd.get('ble_addr')) {
+    $('#efMsg').textContent = 'Pick a device or enter an address.';
+    return false;
+  }
+});
+
+/* ---- NUT tab ---- */
+wireForm('#nutForm', '#nutSave', '#nutMsg');
+
+/* ---- Wi-Fi tab ---- */
+function syncWifiMode() {
+  const ap = document.querySelector('input[name=wifi_mode]:checked').value === 'ap';
+  $('#wifiApBox').style.display = ap ? '' : 'none';
+  $('#wifiStaBox').style.display = ap ? 'none' : '';
+}
+document.querySelectorAll('input[name=wifi_mode]').forEach(r => r.onchange = syncWifiMode);
+syncWifiMode();   /* don't show both boxes before /api/config lands */
+$('#wifiOpen').onchange = () => { $('#wifiPass').disabled = $('#wifiOpen').checked; };
+$('#apOpen').onchange = () => { $('#apPass').disabled = $('#apOpen').checked; };
+
+async function scanWifiNets() {
+  const b = $('#wifiScan');
+  b.disabled = true;
+  b.textContent = wifiScanned ? 'Re-scanning…' : 'Scanning…';
+  $('#wifiHint').textContent = 'Scanning…';
+  try {
+    const d = await (await fetch('/api/wifi-scan')).json();
+    const sel = $('#wifiSsid'), keep = sel.value;
+    sel.innerHTML = '';
+    (d.aps || []).forEach(a => {
+      const o = document.createElement('option');
+      o.value = a.ssid;
+      o.textContent = `${a.ssid} · ${a.rssi} dBm` + (a.lock ? ' 🔒' : '');
+      sel.appendChild(o);
+    });
+    if (keep && [...sel.options].some(o => o.value === keep)) sel.value = keep;
+    $('#wifiHint').textContent = `${(d.aps || []).length} network(s).`;
+  } catch (e) {
+    $('#wifiHint').textContent = 'Scan failed.';
+  }
+  wifiScanned = true;
+  b.disabled = false;
+  b.textContent = 'Re-scan';
+}
+$('#wifiScan').onclick = scanWifiNets;
+
+wireForm('#wifiForm', '#wifiSave', '#wifiMsg', fd => {
+  const ap = fd.get('wifi_mode') === 'ap';
+  if (ap) { fd.delete('wifi_ssid'); fd.delete('wifi_pass'); fd.delete('wifi_open'); }
+  else    { fd.delete('ap_ssid'); fd.delete('ap_pass'); fd.delete('ap_open'); }
+  const p = fd.get(ap ? 'ap_pass' : 'wifi_pass');
+  if (ap && p && p.length < 8) {
+    $('#wifiMsg').textContent = 'AP password must be at least 8 characters.';
+    return false;
+  }
+  if (!ap && !fd.get('wifi_ssid')) {
+    $('#wifiMsg').textContent = 'Pick a network (scan first).';
+    return false;
+  }
+  const where = ap ? `the AP "${fd.get('ap_ssid') || 'the bridge'}"`
+                   : `network "${fd.get('wifi_ssid')}"`;
+  return confirm(`Switch the bridge to ${where} and reboot?`);
+});
+
+/* ---- maintenance ---- */
+$('#reboot').onclick = () => {
+  if (!confirm('Reboot the bridge?')) return;
+  $('#reboot').disabled = true;
+  fetch('/api/reboot', { method: 'POST' })
+    .then(() => $('#rebootMsg').textContent = 'Rebooting — reload in ~15 s.')
+    .catch(() => $('#rebootMsg').textContent = 'Rebooting — reload in ~15 s.');
+};
+$('#reset').onclick = () => {
+  if (!confirm('Forget every setting and reboot into setup mode?')) return;
+  fetch('/api/factory-reset', { method: 'POST' })
+    .then(() => $('#resetMsg').textContent =
+      'Rebooting into setup mode — join the esp-nut-ecoflow-XXXX network.');
+};
 
 /* ---- firmware update ---- */
 function otaReady() {
@@ -193,143 +533,10 @@ $('#fwGo').onclick = () => {
     }
   };
   x.onerror = () => {
-    /* the device may reboot before responding — treat as probably-ok */
     $('#fwMsg').textContent = 'Connection dropped (device may be rebooting). '
       + 'Reload in ~20 s to check the version.';
   };
   x.send(f);
-};
-
-/* ---- logs ---- */
-let logCursor = 0, logText = '', logTimer = null;
-async function pollLogs() {
-  clearTimeout(logTimer);
-  try {
-    const r = await fetch('/api/logs?from=' + logCursor);
-    const next = r.headers.get('X-Log-Next');
-    const chunk = await r.text();
-    if (next !== null) {
-      if (+next < logCursor) logText = '';      /* ring wrapped past us */
-      logCursor = +next;
-    }
-    if (chunk) {
-      logText = (logText + chunk).slice(-60000);
-      const v = $('#logView');
-      v.textContent = logText;
-      if ($('#follow').checked) v.scrollTop = v.scrollHeight;
-    }
-    $('#logInfo').textContent = 'at byte ' + logCursor;
-  } catch (e) {
-    $('#logInfo').textContent = 'poll error';
-  }
-  if ($('#logs').classList.contains('active'))
-    logTimer = setTimeout(pollLogs, 1500);
-}
-$('#clearView').onclick = () => { logText = ''; $('#logView').textContent = ''; };
-$('#copyLog').onclick = () => {
-  if (navigator.clipboard?.writeText) { navigator.clipboard.writeText(logText); return; }
-  const t = document.createElement('textarea');           /* plain-http fallback */
-  t.value = logText; document.body.appendChild(t); t.select();
-  try { document.execCommand('copy'); } catch (e) {}
-  t.remove();
-};
-
-/* ---- maintenance ---- */
-$('#reset').onclick = () => {
-  if (!confirm('Forget config and reboot into setup mode?')) return;
-  fetch('/api/factory-reset', { method: 'POST' })
-    .then(() => $('#resetMsg').textContent = 'Rebooting into setup mode…');
-};
-
-/* ---- config ---- */
-let cfgLoaded = false, cfgScanned = false;
-async function loadConfig() {
-  if (cfgLoaded) return;
-  try {
-    const j = await (await fetch('/api/config')).json();
-    $('#cfgBleAddr').value = j.ble_addr || j.ble_name || '';
-    $('#cfgUps').value = j.ups_name || '';
-    $('#cfgPort').value = j.nut_port || 3493;
-    $('#cfgLow').value = j.low_pct || 20;
-    if (j.has_user_id) {
-      $('#cfgUidState').textContent =
-        'An EcoFlow account id is stored. Change it only if you switched accounts.';
-      $('#cfgAcctSummary').textContent = 'Change the EcoFlow account';
-    } else {
-      $('#cfgUidState').textContent =
-        'No EcoFlow account id stored — set one below, or the BLE auth will fail.';
-      $('#cfgAcctSummary').textContent = 'Set the EcoFlow account';
-      $('#cfgAcctDetails').open = true;
-    }
-    cfgLoaded = true;
-  } catch (e) { $('#cfgMsg').textContent = 'Could not load current config.'; }
-}
-
-let cfgBleTimer = null;
-async function pollCfgBle(deadline, first) {
-  try {
-    const d = await (await fetch('/api/ble-scan' + (first ? '' : '?poll=1'))).json();
-    const sel = $('#cfgBleSel'), keep = sel.value;
-    sel.innerHTML = '<option value="">— select —</option>';
-    (d.devices || []).sort((a, b) => (b.ecoflow - a.ecoflow) || (b.rssi - a.rssi))
-      .forEach(dev => {
-        const o = document.createElement('option');
-        o.value = dev.addr;
-        o.textContent = `${dev.name || dev.addr} (${dev.rssi} dBm)` + (dev.ecoflow ? ' ★' : '');
-        sel.appendChild(o);
-      });
-    sel.value = keep;
-    if (d.scanning) {
-      $('#cfgBleHint').textContent = 'Scanning…';
-      if (Date.now() < deadline)
-        cfgBleTimer = setTimeout(() => pollCfgBle(deadline, false), 1500);
-      else finishScan();
-    } else {
-      $('#cfgBleHint').textContent = `Found ${(d.devices || []).length} device(s).`;
-      finishScan();
-    }
-  } catch (e) {
-    $('#cfgBleHint').textContent = 'Scan failed.';
-    finishScan();
-  }
-}
-function finishScan() {
-  cfgScanned = true;
-  const b = $('#cfgBleScan');
-  b.disabled = false;
-  b.textContent = 'Re-scan';
-}
-$('#cfgBleScan').onclick = () => {
-  clearTimeout(cfgBleTimer);
-  $('#cfgBleScan').disabled = true;
-  $('#cfgBleScan').textContent = cfgScanned ? 'Re-scanning…' : 'Scanning…';
-  $('#cfgBleHint').textContent = lastStatus.ble_connected
-    ? 'Scanning… (the BLE link drops during the scan and resumes after)'
-    : 'Scanning…';
-  pollCfgBle(Date.now() + 12000, true);
-};
-$('#cfgBleSel').onchange = () => {
-  if ($('#cfgBleSel').value) $('#cfgBleAddr').value = $('#cfgBleSel').value;
-};
-
-$('#cfgForm').onsubmit = async ev => {
-  ev.preventDefault();
-  const fd = new FormData(ev.target);
-  if (!(fd.get('ef_email') && fd.get('ef_pass'))) {
-    fd.delete('ef_email'); fd.delete('ef_pass'); fd.delete('ef_region');
-  }
-  if (!fd.get('ef_user_id')) fd.delete('ef_user_id');
-  $('#cfgSave').disabled = true;
-  $('#cfgMsg').textContent = 'Saving…';
-  try {
-    const r = await fetch('/api/reconfigure', { method: 'POST', body: new URLSearchParams(fd) });
-    if (!r.ok) throw new Error(await r.text() || r.status);
-  } catch (e) {
-    $('#cfgMsg').textContent = 'Failed: ' + e.message;
-    $('#cfgSave').disabled = false;
-    return;
-  }
-  $('#cfgMsg').textContent = 'Saved. Rebooting — reload this page in ~15 s.';
 };
 </script>
 </body>

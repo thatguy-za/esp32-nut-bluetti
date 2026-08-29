@@ -2,6 +2,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -20,6 +21,7 @@ static const char *TAG = "wifi_mgr";
 static EventGroupHandle_t s_events;
 static esp_netif_t       *s_sta_netif;
 static esp_netif_t       *s_ap_netif;
+static bool               s_ap_up;
 static bool               s_inited;
 static bool               s_want_connect;
 static int                s_retries;
@@ -79,18 +81,36 @@ esp_err_t wifi_mgr_init(void)
     return ESP_OK;
 }
 
-esp_err_t wifi_mgr_ap_start(const char *ssid)
+void wifi_mgr_default_ap_ssid(char *buf, size_t len)
+{
+    uint8_t mac[6] = { 0 };
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    snprintf(buf, len, "esp-nut-ecoflow-%02X%02X", mac[4], mac[5]);
+}
+
+esp_err_t wifi_mgr_ap_start(const char *ssid, const char *pass)
 {
     if (!s_ap_netif) {
         s_ap_netif = esp_netif_create_default_wifi_ap();
     }
 
+    char fallback[33];
+    if (!ssid || !ssid[0]) {
+        wifi_mgr_default_ap_ssid(fallback, sizeof(fallback));
+        ssid = fallback;
+    }
+    /* WPA2-PSK needs >= 8 chars; anything shorter is treated as "open". */
+    bool secured = pass && strlen(pass) >= 8;
+
     wifi_config_t ap = { 0 };
     strlcpy((char *)ap.ap.ssid, ssid, sizeof(ap.ap.ssid));
-    ap.ap.ssid_len = strlen(ssid);
+    ap.ap.ssid_len = strlen((char *)ap.ap.ssid);
     ap.ap.channel = 1;
     ap.ap.max_connection = 4;
-    ap.ap.authmode = WIFI_AUTH_OPEN;
+    ap.ap.authmode = secured ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    if (secured) {
+        strlcpy((char *)ap.ap.password, pass, sizeof(ap.ap.password));
+    }
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
@@ -107,15 +127,37 @@ esp_err_t wifi_mgr_ap_start(const char *ssid)
     esp_netif_set_dns_info(s_ap_netif, ESP_NETIF_DNS_MAIN, &dns);
     esp_netif_dhcps_start(s_ap_netif);
 
-    ESP_LOGI(TAG, "SoftAP '%s' up (open), http://192.168.4.1/", ssid);
+    s_ap_up = true;
+    ESP_LOGI(TAG, "SoftAP '%s' up (%s), http://192.168.4.1/",
+             ssid, secured ? "WPA2" : "open");
     return ESP_OK;
 }
 
 esp_err_t wifi_mgr_ap_stop(void)
 {
     esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
+    s_ap_up = false;
     ESP_LOGI(TAG, "SoftAP stopped");
     return err;
+}
+
+bool wifi_mgr_ap_active(void)
+{
+    return s_ap_up;
+}
+
+void wifi_mgr_ap_ip(char *buf, size_t len)
+{
+    if (!s_ap_up || !s_ap_netif) {
+        strlcpy(buf, "0.0.0.0", len);
+        return;
+    }
+    esp_netif_ip_info_t ip;
+    if (esp_netif_get_ip_info(s_ap_netif, &ip) == ESP_OK) {
+        esp_ip4addr_ntoa(&ip.ip, buf, len);
+    } else {
+        strlcpy(buf, "192.168.4.1", len);
+    }
 }
 
 int wifi_mgr_scan(wifi_scan_entry_t *out, int max)

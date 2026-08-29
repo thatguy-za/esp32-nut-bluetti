@@ -61,6 +61,8 @@ static struct {
 
 #define DONE_BIT BIT0
 
+static void reboot_after_delay(void *arg);
+
 /* ---- tiny helpers ----------------------------------------------------- */
 
 static int hexval(char c)
@@ -207,33 +209,17 @@ static void connect_task(void *arg)
         return;
     }
 
-    /* Resolve the EcoFlow user id from a login if one wasn't pasted. */
-    if (P.pending.ef_user_id[0] == '\0' && P.ef_email[0] && P.ef_pass[0]) {
-        char err[80] = "";
-        int lr = ecoflow_resolve_user_id(P.ef_email, P.ef_pass, P.ef_region,
-                                         P.pending.ef_user_id,
-                                         sizeof(P.pending.ef_user_id),
-                                         err, sizeof(err));
-        memset(P.ef_pass, 0, sizeof(P.ef_pass));
-        if (lr != 0) {
-            snprintf(P.detail, sizeof(P.detail), "EcoFlow login: %s", err);
-            P.state = ST_FAILED;
-            vTaskDelete(NULL);
-            return;
-        }
-    }
-    memset(P.ef_pass, 0, sizeof(P.ef_pass));
-
     *P.cfg = P.pending;
     P.cfg->provisioned = true;
     app_config_save(P.cfg);
     P.state = ST_CONNECTED;
-    ESP_LOGI(TAG, "provisioned; STA connected; user_id %s",
-             P.cfg->ef_user_id[0] ? "set" : "MISSING");
+    ESP_LOGI(TAG, "provisioned; station connected");
     xEventGroupSetBits(P.done, DONE_BIT);
     vTaskDelete(NULL);
 }
 
+/* Setup mode only handles Wi-Fi: join a network, or become an AP. The
+ * EcoFlow unit and NUT are configured afterwards from the admin page. */
 static esp_err_t h_provision(httpd_req_t *r)
 {
     int len = r->content_len;
@@ -251,34 +237,42 @@ static esp_err_t h_provision(httpd_req_t *r)
     body[len] = '\0';
 
     P.pending = *P.cfg;
-    char v[128];
+    char mode[8] = "";
+    form_get(body, "wifi_mode", mode, sizeof(mode));
+    bool ap_mode = strcmp(mode, "ap") == 0;
+
+    if (ap_mode) {
+        P.pending.wifi_mode = APP_WIFI_AP;
+        form_get(body, "ap_ssid", P.pending.ap_ssid, sizeof(P.pending.ap_ssid));
+        form_get(body, "ap_pass", P.pending.ap_pass, sizeof(P.pending.ap_pass));
+        free(body);
+
+        size_t plen = strlen(P.pending.ap_pass);
+        if (plen > 0 && plen < 8) {
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                       "AP password must be 8+ characters");
+        }
+        if (P.pending.ap_ssid[0] == '\0') {
+            wifi_mgr_default_ap_ssid(P.pending.ap_ssid,
+                                     sizeof(P.pending.ap_ssid));
+        }
+
+        *P.cfg = P.pending;
+        P.cfg->provisioned = true;
+        if (app_config_save(P.cfg) != ESP_OK) {
+            return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                       "could not save config");
+        }
+        ESP_LOGW(TAG, "provisioned in AP mode as '%s'; rebooting",
+                 P.cfg->ap_ssid);
+        send_json(r, "{\"ok\":true}");
+        xTaskCreate(reboot_after_delay, "reboot", 2048, NULL, 5, NULL);
+        return ESP_OK;
+    }
+
+    P.pending.wifi_mode = APP_WIFI_STATION;
     form_get(body, "ssid", P.pending.wifi_ssid, sizeof(P.pending.wifi_ssid));
     form_get(body, "pass", P.pending.wifi_pass, sizeof(P.pending.wifi_pass));
-
-    if (form_get(body, "ble_addr", v, sizeof(v)) && v[0]) {
-        strlcpy(P.pending.ble_addr, v, sizeof(P.pending.ble_addr));
-    }
-    if (form_get(body, "ble_name", v, sizeof(v)) && v[0]) {
-        strlcpy(P.pending.ble_name, v, sizeof(P.pending.ble_name));
-    }
-    if (form_get(body, "ef_user_id", v, sizeof(v)) && v[0]) {
-        strlcpy(P.pending.ef_user_id, v, sizeof(P.pending.ef_user_id));
-    }
-    form_get(body, "ef_email", P.ef_email, sizeof(P.ef_email));
-    form_get(body, "ef_pass", P.ef_pass, sizeof(P.ef_pass));
-    if (!form_get(body, "ef_region", P.ef_region, sizeof(P.ef_region)) ||
-        !P.ef_region[0]) {
-        strlcpy(P.ef_region, "api", sizeof(P.ef_region));
-    }
-    if (form_get(body, "ups_name", v, sizeof(v)) && v[0]) {
-        strlcpy(P.pending.ups_name, v, sizeof(P.pending.ups_name));
-    }
-    if (form_get(body, "nut_port", v, sizeof(v)) && atoi(v) > 0) {
-        P.pending.nut_port = (uint16_t)atoi(v);
-    }
-    if (form_get(body, "low_pct", v, sizeof(v)) && atoi(v) > 0) {
-        P.pending.low_pct = (uint8_t)atoi(v);
-    }
     free(body);
 
     if (P.pending.wifi_ssid[0] == '\0') {
@@ -340,6 +334,7 @@ static esp_err_t h_admin_status(httpd_req_t *r);
 static esp_err_t h_admin_logs(httpd_req_t *r);
 static esp_err_t h_admin_config(httpd_req_t *r);
 static esp_err_t h_admin_reconfigure(httpd_req_t *r);
+static esp_err_t h_admin_reboot(httpd_req_t *r);
 static esp_err_t h_factory_reset(httpd_req_t *r);
 #if CONFIG_ENABLE_WEB_OTA
 static esp_err_t h_ota(httpd_req_t *r);
@@ -364,9 +359,9 @@ static esp_err_t start_httpd(bool captive)
     }
 
     if (captive) {
+        /* Setup mode is Wi-Fi only; EcoFlow + NUT come later on the admin page. */
         reg(P.httpd, "/", HTTP_GET, h_root);
         reg(P.httpd, "/api/wifi-scan", HTTP_GET, h_wifi_scan);
-        reg(P.httpd, "/api/ble-scan", HTTP_GET, h_ble_scan);
         reg(P.httpd, "/api/provision", HTTP_POST, h_provision);
         reg(P.httpd, "/api/status", HTTP_GET, h_status);
         /* OS connectivity-check endpoints -> bounce to the portal */
@@ -385,6 +380,8 @@ static esp_err_t start_httpd(bool captive)
         reg(P.httpd, "/api/config", HTTP_GET, h_admin_config);
         reg(P.httpd, "/api/reconfigure", HTTP_POST, h_admin_reconfigure);
         reg(P.httpd, "/api/ble-scan", HTTP_GET, h_ble_scan);
+        reg(P.httpd, "/api/wifi-scan", HTTP_GET, h_wifi_scan);
+        reg(P.httpd, "/api/reboot", HTTP_POST, h_admin_reboot);
         reg(P.httpd, "/api/factory-reset", HTTP_POST, h_factory_reset);
 #if CONFIG_ENABLE_WEB_OTA
         reg(P.httpd, "/api/ota", HTTP_POST, h_ota);
@@ -394,13 +391,6 @@ static esp_err_t start_httpd(bool captive)
 }
 
 /* ---- public: setup mode ------------------------------------------- */
-
-static void make_ap_ssid(char *out, size_t n)
-{
-    uint8_t mac[6] = { 0 };
-    esp_wifi_get_mac(WIFI_IF_STA, mac);   /* STA is always up by now */
-    snprintf(out, n, "esp-nut-ecoflow-%02X%02X", mac[4], mac[5]);
-}
 
 esp_err_t provisioning_run(app_config_t *cfg)
 {
@@ -412,9 +402,9 @@ esp_err_t provisioning_run(app_config_t *cfg)
         return ESP_ERR_NO_MEM;
     }
 
-    char ssid[32];
-    make_ap_ssid(ssid, sizeof(ssid));
-    ESP_ERROR_CHECK(wifi_mgr_ap_start(ssid));
+    char ssid[33];
+    wifi_mgr_default_ap_ssid(ssid, sizeof(ssid));
+    ESP_ERROR_CHECK(wifi_mgr_ap_start(ssid, NULL));   /* open, for setup */
     dns_server_start(AP_IP);
 
     esp_err_t rc = start_httpd(true);
@@ -450,8 +440,13 @@ static esp_err_t h_admin_root(httpd_req_t *r)
 
 static esp_err_t h_admin_status(httpd_req_t *r)
 {
+    bool ap = P.cfg->wifi_mode == APP_WIFI_AP;
     char ip[16];
-    wifi_mgr_sta_ip(ip, sizeof(ip));
+    if (ap) {
+        wifi_mgr_ap_ip(ip, sizeof(ip));
+    } else {
+        wifi_mgr_sta_ip(ip, sizeof(ip));
+    }
     ecoflow_state_t st;
     bool have = ecoflow_ble_get_state(&st);
     const esp_app_desc_t *app = esp_app_get_description();
@@ -460,22 +455,28 @@ static esp_err_t h_admin_status(httpd_req_t *r)
 #else
     const bool ota = false;
 #endif
-    char out[420];
+    char out[560];
     snprintf(out, sizeof(out),
-             "{\"ip\":\"%s\",\"ups\":\"%s\",\"nut_port\":%u,"
+             "{\"wifi_mode\":\"%s\",\"network\":\"%s\",\"ip\":\"%s\","
              "\"fw_version\":\"%s\",\"fw_date\":\"%s %s\",\"ota\":%s,"
+             "\"ups\":\"%s\",\"nut_port\":%u,"
              "\"ble_target\":\"%s\",\"ble_connected\":%s,"
              "\"telemetry_valid\":%s,\"battery_pct\":%d,"
-             "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\"}",
-             ip, P.cfg->ups_name, P.cfg->nut_port,
+             "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\","
+             "\"configured\":%s}",
+             ap ? "ap" : "station",
+             ap ? P.cfg->ap_ssid : P.cfg->wifi_ssid, ip,
              app->version, app->date, app->time, ota ? "true" : "false",
+             P.cfg->ups_name, P.cfg->nut_port,
              P.cfg->ble_addr[0] ? P.cfg->ble_addr : P.cfg->ble_name,
              ecoflow_ble_connected() ? "true" : "false",
              have && st.valid ? "true" : "false",
              have ? st.soc_pct : 0,
              have && st.ac_input_present ? "true" : "false",
              have && st.charging ? "true" : "false",
-             have && st.model[0] ? st.model : "");
+             have && st.model[0] ? st.model : "",
+             (P.cfg->ble_addr[0] || P.cfg->ble_name[0]) &&
+                 P.cfg->ef_user_id[0] ? "true" : "false");
     return send_json(r, out);
 }
 
@@ -516,17 +517,25 @@ static esp_err_t h_factory_reset(httpd_req_t *r)
     return ESP_OK;
 }
 
-/* ---- live reconfiguration (EcoFlow target + NUT, keeps Wi-Fi) ---- */
+/* ---- live reconfiguration (EcoFlow / NUT / Wi-Fi) ---------------- */
 
 static esp_err_t h_admin_config(httpd_req_t *r)
 {
-    char out[256];
+    char def_ap[33];
+    wifi_mgr_default_ap_ssid(def_ap, sizeof(def_ap));
+    char out[420];
     snprintf(out, sizeof(out),
              "{\"ble_addr\":\"%s\",\"ble_name\":\"%s\",\"has_user_id\":%s,"
-             "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u}",
+             "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
+             "\"wifi_mode\":\"%s\",\"wifi_ssid\":\"%s\",\"has_wifi_pass\":%s,"
+             "\"ap_ssid\":\"%s\",\"has_ap_pass\":%s,\"default_ap_ssid\":\"%s\"}",
              P.cfg->ble_addr, P.cfg->ble_name,
              P.cfg->ef_user_id[0] ? "true" : "false",
-             P.cfg->ups_name, P.cfg->nut_port, P.cfg->low_pct, P.cfg->poll_ms);
+             P.cfg->ups_name, P.cfg->nut_port, P.cfg->low_pct, P.cfg->poll_ms,
+             P.cfg->wifi_mode == APP_WIFI_AP ? "ap" : "station",
+             P.cfg->wifi_ssid, P.cfg->wifi_pass[0] ? "true" : "false",
+             P.cfg->ap_ssid[0] ? P.cfg->ap_ssid : def_ap,
+             P.cfg->ap_pass[0] ? "true" : "false", def_ap);
     return send_json(r, out);
 }
 
@@ -555,62 +564,129 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
     body[len] = '\0';
 
     P.pending = *P.cfg;
-    char v[128];
-    if (form_get(body, "ble_addr", v, sizeof(v))) {
-        strlcpy(P.pending.ble_addr, v, sizeof(P.pending.ble_addr));
-    }
-    if (form_get(body, "ble_name", v, sizeof(v)) && v[0]) {
-        strlcpy(P.pending.ble_name, v, sizeof(P.pending.ble_name));
-    }
-    if (form_get(body, "ef_user_id", v, sizeof(v)) && v[0]) {
-        strlcpy(P.pending.ef_user_id, v, sizeof(P.pending.ef_user_id));
-    }
-    if (form_get(body, "ups_name", v, sizeof(v)) && v[0]) {
-        strlcpy(P.pending.ups_name, v, sizeof(P.pending.ups_name));
-    }
-    if (form_get(body, "nut_port", v, sizeof(v)) && atoi(v) > 0) {
-        P.pending.nut_port = (uint16_t)atoi(v);
-    }
-    if (form_get(body, "low_pct", v, sizeof(v)) && atoi(v) > 0) {
-        P.pending.low_pct = (uint8_t)atoi(v);
-    }
-    form_get(body, "ef_email", P.ef_email, sizeof(P.ef_email));
-    form_get(body, "ef_pass", P.ef_pass, sizeof(P.ef_pass));
-    if (!form_get(body, "ef_region", P.ef_region, sizeof(P.ef_region)) ||
-        !P.ef_region[0]) {
-        strlcpy(P.ef_region, "api", sizeof(P.ef_region));
-    }
-    free(body);
+    char v[128], section[16] = "";
+    form_get(body, "section", section, sizeof(section));
 
-    if (P.pending.ble_addr[0] == '\0' && P.pending.ble_name[0] == '\0') {
-        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
-                                   "need a BLE address or name");
-    }
-
-    /* Resolve a fresh user id inline (blocking HTTPS) so we can report the
-     * outcome; the setup portal does this in a task only because it also
-     * waits on Wi-Fi. */
-    if (P.ef_email[0] && P.ef_pass[0]) {
-        char err[80] = "";
-        int lr = ecoflow_resolve_user_id(P.ef_email, P.ef_pass, P.ef_region,
-                                         P.pending.ef_user_id,
-                                         sizeof(P.pending.ef_user_id),
-                                         err, sizeof(err));
-        memset(P.ef_pass, 0, sizeof(P.ef_pass));
-        if (lr != 0) {
-            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, err);
+    /* ---- EcoFlow unit + account ---- */
+    if (strcmp(section, "ecoflow") == 0) {
+        if (form_get(body, "ble_addr", v, sizeof(v))) {
+            strlcpy(P.pending.ble_addr, v, sizeof(P.pending.ble_addr));
         }
+        if (form_get(body, "ble_name", v, sizeof(v)) && v[0]) {
+            strlcpy(P.pending.ble_name, v, sizeof(P.pending.ble_name));
+        }
+        if (form_get(body, "ef_user_id", v, sizeof(v)) && v[0]) {
+            strlcpy(P.pending.ef_user_id, v, sizeof(P.pending.ef_user_id));
+        }
+        form_get(body, "ef_email", P.ef_email, sizeof(P.ef_email));
+        form_get(body, "ef_pass", P.ef_pass, sizeof(P.ef_pass));
+        if (!form_get(body, "ef_region", P.ef_region, sizeof(P.ef_region)) ||
+            !P.ef_region[0]) {
+            strlcpy(P.ef_region, "api", sizeof(P.ef_region));
+        }
+        free(body);
+
+        if (P.pending.ble_addr[0] == '\0' && P.pending.ble_name[0] == '\0') {
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                       "pick a device or enter an address");
+        }
+        /* Resolve a fresh user id inline (blocking HTTPS) so a bad login is
+         * reported instead of silently rebooting into a broken config. */
+        if (P.ef_email[0] && P.ef_pass[0]) {
+            char err[80] = "";
+            int lr = ecoflow_resolve_user_id(P.ef_email, P.ef_pass, P.ef_region,
+                                             P.pending.ef_user_id,
+                                             sizeof(P.pending.ef_user_id),
+                                             err, sizeof(err));
+            memset(P.ef_pass, 0, sizeof(P.ef_pass));
+            if (lr != 0) {
+                return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, err);
+            }
+        }
+        memset(P.ef_pass, 0, sizeof(P.ef_pass));
+        if (P.pending.ef_user_id[0] == '\0') {
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                       "an EcoFlow account is required");
+        }
+
+    /* ---- NUT server ---- */
+    } else if (strcmp(section, "nut") == 0) {
+        if (form_get(body, "ups_name", v, sizeof(v)) && v[0]) {
+            strlcpy(P.pending.ups_name, v, sizeof(P.pending.ups_name));
+        }
+        if (form_get(body, "nut_port", v, sizeof(v)) && atoi(v) > 0) {
+            P.pending.nut_port = (uint16_t)atoi(v);
+        }
+        if (form_get(body, "low_pct", v, sizeof(v)) && atoi(v) > 0) {
+            P.pending.low_pct = (uint8_t)atoi(v);
+        }
+        free(body);
+
+    /* ---- Wi-Fi (station or AP) ---- */
+    } else if (strcmp(section, "wifi") == 0) {
+        char mode[8] = "";
+        form_get(body, "wifi_mode", mode, sizeof(mode));
+        bool ap = strcmp(mode, "ap") == 0;
+
+        if (ap) {
+            P.pending.wifi_mode = APP_WIFI_AP;
+            form_get(body, "ap_ssid", P.pending.ap_ssid,
+                     sizeof(P.pending.ap_ssid));
+            /* Blank password field = keep the stored one. */
+            if (form_get(body, "ap_pass", v, sizeof(v)) && v[0]) {
+                strlcpy(P.pending.ap_pass, v, sizeof(P.pending.ap_pass));
+            }
+            if (form_get(body, "ap_open", v, sizeof(v)) && v[0] == '1') {
+                P.pending.ap_pass[0] = '\0';
+            }
+            free(body);
+
+            size_t plen = strlen(P.pending.ap_pass);
+            if (plen > 0 && plen < 8) {
+                return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                           "AP password must be 8+ characters");
+            }
+            if (P.pending.ap_ssid[0] == '\0') {
+                wifi_mgr_default_ap_ssid(P.pending.ap_ssid,
+                                         sizeof(P.pending.ap_ssid));
+            }
+        } else {
+            P.pending.wifi_mode = APP_WIFI_STATION;
+            form_get(body, "wifi_ssid", P.pending.wifi_ssid,
+                     sizeof(P.pending.wifi_ssid));
+            if (form_get(body, "wifi_pass", v, sizeof(v)) && v[0]) {
+                strlcpy(P.pending.wifi_pass, v, sizeof(P.pending.wifi_pass));
+            }
+            if (form_get(body, "wifi_open", v, sizeof(v)) && v[0] == '1') {
+                P.pending.wifi_pass[0] = '\0';
+            }
+            free(body);
+
+            if (P.pending.wifi_ssid[0] == '\0') {
+                return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                           "pick a Wi-Fi network");
+            }
+        }
+    } else {
+        free(body);
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "unknown section");
     }
-    memset(P.ef_pass, 0, sizeof(P.ef_pass));
 
     *P.cfg = P.pending;
     P.cfg->provisioned = true;
-    esp_err_t se = app_config_save(P.cfg);
-    if (se != ESP_OK) {
+    if (app_config_save(P.cfg) != ESP_OK) {
         return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
                                    "could not save config");
     }
-    ESP_LOGW(TAG, "reconfigured via web; rebooting");
+    ESP_LOGW(TAG, "'%s' settings changed via web; rebooting", section);
+    send_json(r, "{\"ok\":true}");
+    xTaskCreate(reboot_after_delay, "reboot", 2048, NULL, 5, NULL);
+    return ESP_OK;
+}
+
+static esp_err_t h_admin_reboot(httpd_req_t *r)
+{
+    ESP_LOGW(TAG, "reboot requested via web");
     send_json(r, "{\"ok\":true}");
     xTaskCreate(reboot_after_delay, "reboot", 2048, NULL, 5, NULL);
     return ESP_OK;

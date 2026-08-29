@@ -19,11 +19,19 @@ typedef struct {
  * in STA mode. Safe to call once; idempotent. */
 esp_err_t wifi_mgr_init(void);
 
-/* Bring up an open SoftAP alongside STA (mode APSTA). */
-esp_err_t wifi_mgr_ap_start(const char *ssid);
+/* Bring up a SoftAP alongside STA (mode APSTA). A NULL/empty `pass` makes
+ * it an open network; otherwise WPA2-PSK (8..63 chars). */
+esp_err_t wifi_mgr_ap_start(const char *ssid, const char *pass);
 
 /* Drop the SoftAP, return to STA-only. */
 esp_err_t wifi_mgr_ap_stop(void);
+
+/* Default SoftAP SSID for this board: "esp-nut-ecoflow-XXXX" (MAC tail). */
+void wifi_mgr_default_ap_ssid(char *buf, size_t len);
+
+/* AP-mode address (the SoftAP's own IP), or "0.0.0.0" when down. */
+void wifi_mgr_ap_ip(char *buf, size_t len);
+bool wifi_mgr_ap_active(void);
 
 /* Blocking active scan. Fills out[] (up to max), returns count or -1. */
 int wifi_mgr_scan(wifi_scan_entry_t *out, int max);
