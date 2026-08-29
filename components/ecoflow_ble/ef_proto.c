@@ -168,8 +168,9 @@ int ef_proto_apply_display(const uint8_t *pb, size_t len, ecoflow_state_t *st)
         return 0;
     }
 
-    /* Derived fields. */
-    st->charging = st->ac_input_present && st->battery_watts < -1.0f;
+    /* Derived fields. `pow_get_bms` sign: negative = battery discharging,
+     * positive = charging (matches ha-ef-ble's battery_input/output split). */
+    st->charging = st->ac_input_present && st->battery_watts > 1.0f;
     if (dev_low >= 0 && dev_low > st->soc_low_pct) {
         st->soc_low_pct = dev_low;
     }

@@ -18,11 +18,13 @@ themselves down cleanly on a mains failure.
 
 > ## 🚧 Work in progress
 >
-> **This has never run against a real EcoFlow unit.** The NUT server, Wi-Fi
-> provisioning, and the BLE framing/crypto pass host unit tests and a
-> third-party NUT client, but the end-to-end BLE handshake with a River 3 is
-> unverified and will almost certainly need on-device debugging. Treat every
-> release as pre-release. Feedback / logs / captures very welcome.
+> **The end-to-end BLE handshake has never run against a real River 3.** A lot
+> *is* verified without hardware (see below) — the telemetry decoder is checked
+> against real captured River 3 packets and the crypto against the reference
+> implementation — but the live handshake (frame timing, the `ecdh_type` byte,
+> the keyinfo reply shape, write-with-response) is unproven and will likely need
+> on-device debugging (`idf.py monitor`, `info` level). Treat every release as
+> pre-release. Logs / BLE captures very welcome.
 
 ## Compatibility
 
@@ -49,8 +51,18 @@ will also refuse the BLE auth.
   serial)` account auth, and a protobuf reader for the `pr705` telemetry
   message. Ported from [`rabits/ha-ef-ble`](https://github.com/rabits/ha-ef-ble).
 
-Verified with host unit tests (framing / CRC / protobuf / packet paths) — **not**
-yet on a real River 3.
+### Verified without hardware ([`test/`](test/), runs in CI)
+
+- **Telemetry decode** — 5 real `DisplayPropertyUpload` packets captured from a
+  River 3 UPS decode through the actual C code to the exact values ha-ef-ble
+  documents (SOC, AC-in/out, load, discharge, temperature, backup mode, runtime).
+- **Crypto** — micro-ecc secp160r1 pubkey + ECDH shared secret, `md5` IV /
+  session-key / auth-token derivation, all byte-for-byte against `python-ecdsa`
+  (which is what the device interoperates with).
+- **NUT server** — full protocol conformance driven over a socket by a test
+  client, plus the `upsmon` primary handshake.
+- **Framing** — CRC-8/16, inner-packet build↔parse, XOR deobfuscation, frame
+  reassembly across split BLE notifications.
 
 ## Hardware
 

@@ -15,3 +15,10 @@ compile_commands.json
 
 # Flashable binaries are build artifacts; the installer page/manifest are tracked
 dist/*.bin
+
+# Host test binaries
+/test/ef_logic_test
+/test/ef_river3_test
+/test/nut_server_test
+/test/xcheck
+/test/*.dSYM/

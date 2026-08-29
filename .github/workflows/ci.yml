@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    name: host logic tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: C test suites
+        run: make -C test
+      - name: crypto cross-check vs python-ecdsa
+        run: |
+          python3 -m pip install --quiet ecdsa
+          make -C test xcheck
+          python3 test/xcheck.py
+
+  firmware-build:
+    name: ESP-IDF build (esp32s3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: idf.py build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32s3
+      - name: firmware size
+        run: |
+          test -f build/esp32-nut-ecoflow.bin
+          ls -l build/esp32-nut-ecoflow.bin
