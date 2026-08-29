@@ -1,27 +1,18 @@
 /*
  * NimBLE central for BLUETTI power stations.
  *
- * Probe-first: rather than guessing at a protocol that has not been
- * confirmed on an Elite 10, this connects and reports what the device
- * actually exposes. Point it at your unit with probe mode on and read
- * the admin page's Logs tab.
+ * Connects to the unit's ff00 service, runs the "2a2a" key exchange (see
+ * bt_session.c) and then polls Modbus holding registers, decoding them
+ * per the Elite 10 map in bt_regs.c.
  *
- * What to look for in that output:
- *
- *   - A Nordic-UART-style pair (6e400002 write / 6e400003 notify) with
- *     notifications that look like Modbus RTU responses — a leading
- *     slave id, function code 0x03, a byte count, then register data
- *     ending in a CRC-16/Modbus. That is the documented older-BLUETTI
- *     protocol and a decoder is straightforward from there.
- *
- *   - Notifications beginning 2A 2A, or a burst of traffic followed by
- *     the device dropping the link when we do not answer. That is the
- *     newer encrypted handshake. No public implementation derives its
- *     keys; the projects that support it lift a per-device pin, key and
- *     token out of an Android Bluetooth HCI capture.
+ * Probe mode is kept as a diagnostic: it enumerates every service and
+ * characteristic and hex-dumps notifications without decoding, which is
+ * how to confirm the protocol on a model this has not been tried against.
  */
 
 #include "bluetti_ble.h"
+#include "bt_session.h"
+#include "bt_regs.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -48,6 +39,11 @@ static const char *TAG = "bluetti_ble";
 static const char *BT_PREFIXES[] = {
     "BLUETTI", "Bluetti", "AC", "EB", "EP", "AP", "EL", "AORA", "PR", "RV",
 };
+
+/* BLUETTI's GATT service: 16-bit ff00, with ff01 notify / ff02 write. */
+static const ble_uuid16_t SVC_UUID    = BLE_UUID16_INIT(0xff00);
+static const ble_uuid16_t NOTIFY_UUID = BLE_UUID16_INIT(0xff01);
+static const ble_uuid16_t WRITE_UUID  = BLE_UUID16_INIT(0xff02);
 
 typedef enum { MODE_IDLE, MODE_SCAN, MODE_CONNECT } ble_mode_t;
 
@@ -78,12 +74,22 @@ static struct {
     uint16_t             notify_handles[8];
     int                  notify_n;
 
+    /* Characteristic handles for the BLUETTI service. */
+    uint16_t             write_handle;
+    uint16_t             notify_handle;
+    uint16_t             notify_cccd;
+
+    bt_session_t        *session;
+    int                  poll_block;    /* index into BT_EL10_BLOCKS */
+
     bluetti_state_t      state;
     SemaphoreHandle_t    lock;
     esp_timer_handle_t   scan_timer;
+    esp_timer_handle_t   poll_timer;
 } b;
 
 static void start_connect_scan(void);
+static void poll_timer_cb(void *arg);
 static void start_disc(bool report_all);
 static int  gap_event(struct ble_gap_event *event, void *arg);
 
@@ -224,6 +230,136 @@ static int on_probe_svc(uint16_t conn, const struct ble_gatt_error *err,
 }
 
 /* ------------------------------------------------------------------ */
+/* Session plumbing                                                     */
+/* ------------------------------------------------------------------ */
+
+/* Session -> radio. Write-without-response: the device does not ack. */
+static int session_tx(const uint8_t *data, size_t len, void *user)
+{
+    if (!b.connected || b.write_handle == 0) {
+        return -1;
+    }
+    int rc = ble_gattc_write_no_rsp_flat(b.conn_handle, b.write_handle,
+                                         data, len);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "write failed: %d", rc);
+        return -1;
+    }
+    return 0;
+}
+
+/* Session -> decoder, once a Modbus response passes CRC. */
+static void session_regs(uint16_t addr, const uint8_t *data, size_t len,
+                         void *user)
+{
+    bluetti_state_t copy;
+    int matched;
+
+    xSemaphoreTake(b.lock, portMAX_DELAY);
+    matched = bt_regs_apply(addr, data, len, &b.state);
+    b.state.soc_low_pct = b.cfg.low_battery_pct;
+    copy = b.state;
+    xSemaphoreGive(b.lock);
+
+    if (matched > 0 && b.state_cb) {
+        b.state_cb(&copy, b.state_cb_user);
+    }
+}
+
+/* Walk the register blocks one per tick, so a slow device never has more
+ * than one outstanding request. */
+static void poll_timer_cb(void *arg)
+{
+    if (!b.connected || !bt_session_ready(b.session)) {
+        return;
+    }
+    const bt_reg_block_t *blk = &BT_EL10_BLOCKS[b.poll_block];
+    if (bt_session_read_regs(b.session, blk->addr, blk->count) != 0) {
+        ESP_LOGW(TAG, "register read %u failed", blk->addr);
+    }
+    b.poll_block = (b.poll_block + 1) % (int)BT_EL10_BLOCK_COUNT;
+}
+
+/* ---- discovery: find ff01/ff02 and subscribe ---- */
+
+static int on_sub(uint16_t conn, const struct ble_gatt_error *err,
+                  struct ble_gatt_attr *attr, void *arg)
+{
+    if (err->status != 0) {
+        ESP_LOGE(TAG, "subscribe failed: %d", err->status);
+        return 0;
+    }
+    ESP_LOGI(TAG, "subscribed; awaiting the device challenge");
+    /* The device opens the key exchange on its own once notifications are
+     * live, so there is nothing to send here. Start the poll timer: it
+     * no-ops until the session reports ready. */
+    if (b.poll_timer) {
+        esp_timer_stop(b.poll_timer);
+        uint32_t period = b.cfg.poll_interval_ms ? b.cfg.poll_interval_ms : 5000;
+        /* Spread the blocks across the interval. */
+        esp_timer_start_periodic(b.poll_timer,
+            (uint64_t)(period / BT_EL10_BLOCK_COUNT + 1) * 1000);
+    }
+    return 0;
+}
+
+static int on_disc_notify_chr(uint16_t conn, const struct ble_gatt_error *err,
+                              const struct ble_gatt_chr *chr, void *arg)
+{
+    if (err->status == 0 && chr) {
+        b.notify_handle = chr->val_handle;
+        b.notify_cccd = chr->val_handle + 1;   /* CCCD convention */
+        return 0;
+    }
+    if (err->status == BLE_HS_EDONE) {
+        if (b.notify_cccd == 0 || b.write_handle == 0) {
+            ESP_LOGE(TAG, "ff01/ff02 not found — is this a BLUETTI? "
+                          "Try probe mode.");
+            ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
+            return 0;
+        }
+        uint8_t enable[2] = { 0x01, 0x00 };
+        if (ble_gattc_write_flat(conn, b.notify_cccd, enable, sizeof(enable),
+                                 on_sub, NULL) != 0) {
+            ESP_LOGE(TAG, "could not enable notifications");
+        }
+    }
+    return 0;
+}
+
+static int on_disc_write_chr(uint16_t conn, const struct ble_gatt_error *err,
+                             const struct ble_gatt_chr *chr, void *arg)
+{
+    if (err->status == 0 && chr) {
+        b.write_handle = chr->val_handle;
+        return 0;
+    }
+    if (err->status == BLE_HS_EDONE) {
+        ble_gattc_disc_chrs_by_uuid(conn, 1, 0xffff, &NOTIFY_UUID.u,
+                                    on_disc_notify_chr, NULL);
+    }
+    return 0;
+}
+
+static int on_disc_svc(uint16_t conn, const struct ble_gatt_error *err,
+                       const struct ble_gatt_svc *svc, void *arg)
+{
+    if (err->status == 0 && svc) {
+        ESP_LOGI(TAG, "found BLUETTI service, handles %d..%d",
+                 svc->start_handle, svc->end_handle);
+        return 0;
+    }
+    if (err->status == BLE_HS_EDONE) {
+        ble_gattc_disc_chrs_by_uuid(conn, 1, 0xffff, &WRITE_UUID.u,
+                                    on_disc_write_chr, NULL);
+    } else if (err->status != 0) {
+        ESP_LOGE(TAG, "service discovery error: %d", err->status);
+        ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* GAP events                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -296,13 +432,17 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             b.conn_handle = event->connect.conn_handle;
             b.connected = true;
             b.notify_n = 0;
+            b.write_handle = b.notify_handle = b.notify_cccd = 0;
+            b.poll_block = 0;
+            bt_session_reset(b.session);
             ble_gattc_exchange_mtu(b.conn_handle, NULL, NULL);
             if (b.cfg.probe) {
-                ESP_LOGW(TAG, "probe mode: enumerating GATT");
+                ESP_LOGW(TAG, "probe mode: enumerating GATT, nothing decoded");
                 ble_gattc_disc_all_svcs(b.conn_handle, on_probe_svc, NULL);
             } else {
-                ESP_LOGW(TAG, "connected, but no protocol decoder is "
-                              "implemented yet — enable probe mode");
+                ESP_LOGI(TAG, "connected, discovering the BLUETTI service");
+                ble_gattc_disc_svc_by_uuid(b.conn_handle, &SVC_UUID.u,
+                                           on_disc_svc, NULL);
             }
         } else {
             ESP_LOGW(TAG, "connect failed: %d", event->connect.status);
@@ -316,6 +456,10 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                                "the device expected an encrypted handshake"
                              : "");
         b.connected = false;
+        if (b.poll_timer) {
+            esp_timer_stop(b.poll_timer);
+        }
+        bt_session_reset(b.session);
         if (b.mode == MODE_SCAN) {
             start_disc(true);
         } else if (b.mode == MODE_CONNECT) {
@@ -335,10 +479,15 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         if (ble_hs_mbuf_to_flat(event->notify_rx.om, tmp, len, &len) != 0) {
             return 0;
         }
-        ESP_LOGI(TAG, "notify handle=%d len=%u",
-                 event->notify_rx.attr_handle, (unsigned)len);
-        ESP_LOG_BUFFER_HEX(TAG, tmp, len);
-        /* TODO: decode once the protocol is confirmed on hardware. */
+        if (b.cfg.probe) {
+            ESP_LOGI(TAG, "notify handle=%d len=%u",
+                     event->notify_rx.attr_handle, (unsigned)len);
+            ESP_LOG_BUFFER_HEX(TAG, tmp, len);
+            return 0;
+        }
+        if (event->notify_rx.attr_handle == b.notify_handle && b.session) {
+            bt_session_feed(b.session, tmp, len);
+        }
         return 0;
     }
 
@@ -443,6 +592,14 @@ int bluetti_ble_host_init(void)
 
     esp_timer_create_args_t st = { .callback = scan_timer_cb, .name = "bt_scan" };
     esp_timer_create(&st, &b.scan_timer);
+    esp_timer_create_args_t pt = { .callback = poll_timer_cb, .name = "bt_poll" };
+    esp_timer_create(&pt, &b.poll_timer);
+
+    b.session = bt_session_new(session_tx, session_regs, NULL);
+    if (!b.session) {
+        ESP_LOGE(TAG, "session alloc failed");
+        return -1;
+    }
 
     /* nimble_port_init() returns void on IDF <5.2 and esp_err_t on newer;
      * call it without capturing so this builds either way. */
@@ -565,6 +722,10 @@ int bluetti_ble_start(const bluetti_ble_config_t *config,
     if (config->probe) {
         ESP_LOGW(TAG, "PROBE MODE: GATT and notifications will be logged, "
                       "nothing will be decoded");
+    } else {
+        ESP_LOGI(TAG, "polling %u register blocks every %u ms",
+                 (unsigned)BT_EL10_BLOCK_COUNT,
+                 (unsigned)(config->poll_interval_ms ?: 5000));
     }
 
     b.mode = MODE_CONNECT;

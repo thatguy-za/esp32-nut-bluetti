@@ -16,32 +16,51 @@ themselves down cleanly on a mains failure.
  └───────────┘          └─────────┘                    └──────────────┘
 ```
 
-> ## 🚧 Early scaffolding — does not work yet
+> ## 🚧 Work in progress — never run against an Elite 10
 >
-> This is a fork of
-> [`esp32-nut-ecoflow`](https://github.com/thatguy-za/esp32-nut-ecoflow),
-> retargeted from EcoFlow to BLUETTI. Everything that is not vendor-specific —
-> the NUT server, Wi-Fi setup, admin page, OTA, alerts — is carried over and
-> working. **The BLUETTI BLE layer is a probe harness, not a driver.** It
-> connects, enumerates GATT and hex-dumps notifications so the protocol can be
-> confirmed on a real unit. Nothing is decoded yet.
+> A fork of [`esp32-nut-ecoflow`](https://github.com/thatguy-za/esp32-nut-ecoflow),
+> retargeted to BLUETTI. Everything vendor-independent — NUT server, Wi-Fi
+> setup, admin page, OTA, alerts — carries over and works.
+>
+> The BLUETTI BLE layer is **fully implemented but unverified**: the key
+> exchange, the AES channel, Modbus polling and the Elite 10 register decode
+> are all written, and none of it has touched real hardware. Two caveats worth
+> knowing before you trust a reading:
+>
+> - The Elite 10 register map comes from an **unmerged** PR
+>   ([bluetti-bt-lib#89](https://github.com/Patrick762/bluetti-bt-lib/pull/89)).
+> - Some NUT values are **inferred**, not measured — see below.
+>
+> Probe mode is still there for when something does not line up.
 
 ## Target
 
-**BLUETTI Elite 10** (128 Wh, 200 W, `EL10…`).
+**BLUETTI Elite 10** (128 Wh, 200 W, advertises as `EL10…`).
 
-The protocol groundwork is documented in [`docs/PROTOCOL.md`](docs/PROTOCOL.md):
-transport UUIDs, Modbus framing, the encrypted handshake used by newer
-firmware, and a candidate Elite 10 register map. Sources are
-[`Patrick762/bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib) and
-its open [EL10 PR #89](https://github.com/Patrick762/bluetti-bt-lib/pull/89).
+### How it talks
 
-Two things worth knowing before relying on any of it:
+Full detail in [`docs/PROTOCOL.md`](docs/PROTOCOL.md). In short: a `ff00`
+service with `ff01` notify / `ff02` write, carrying Modbus RTU. Newer firmware
+opens with an encrypted handshake — ECDH on secp256r1, AES-CBC, ECDSA-signed
+keys — which is implemented here. The signing keys are fixed constants from
+the vendor app rather than per-device secrets, so no pairing or packet capture
+is needed. mbedtls provides all of it.
 
-- The Elite 10 register map comes from an **unmerged** PR.
-- The encryption is **already solved** and uses fixed keys baked into the app,
-  so no per-device key extraction is needed — but it has not been exercised
-  from an ESP32.
+### What is measured and what is inferred
+
+| NUT variable | Source |
+| --- | --- |
+| `battery.charge` | register 102, measured |
+| `battery.runtime` | register 104, measured (0 treated as unknown) |
+| `ups.realpower` | AC + DC output power, measured |
+| `input.realpower.ac` | register 146, measured |
+| `ups.status` `OL`/`OB` | **inferred** from AC input power and line voltage |
+| `CHRG` | **inferred** from mains present and charge below 100% |
+| `battery.voltage`, `battery.temperature` | **absent** — no register in the map |
+
+The absent fields are the honest gap: the PR's map does not include pack
+voltage or temperature, so those NUT variables are simply not published rather
+than guessed.
 
 ## Flash it
 

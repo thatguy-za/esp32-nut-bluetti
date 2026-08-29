@@ -10,6 +10,8 @@ runs all six C suites:
 | `auth_test` | admin password hashing + verification and Basic-auth header parsing: salted SHA-256 (checked against the SHA-256("abc") vector), wrong/empty/wrong-case rejection, salt uniqueness, no length or character restrictions, passwords containing `:` |
 | `ipv4_test` | the static-addressing dotted-quad validator: valid addresses, and rejection of the lenient forms `esp_ip4addr_aton()` accepts (`192.168.1`, `0xC0.0xA8.1.1`), whitespace, signs and out-of-range octets |
 | `lb_test` | the low-battery decision: `LB` on the charge threshold **or** the runtime threshold, the heavy-load case percentage alone misses, unknown runtime, and a disabled runtime threshold |
+| `bt_frame_test` | BLUETTI wire format: CRC-16/Modbus against its known vector, the read request byte layout (big-endian address, little-endian CRC), response validation and corruption detection, the `2a2a` checksum, AES padding |
+| `bt_regs_test` | Elite 10 register decode: address bounds, swapped-string model name, mains-present and charging inference, and zero-runtime treated as unknown rather than empty |
 | `nut_server_test` | drives the real `nut_server.c` over a loopback socket: `LIST UPS/VAR`, `GET VAR`, `GET UPSDESC/NUMLOGINS`, the `upsmon` primary handshake (`USERNAME`/`PASSWORD`/`LOGIN`/`PRIMARY`), empty `LIST CLIENT/RW`, error replies; plus the optional NUT login — reads stay anonymous, wrong/missing credentials denied on `LOGIN`/`PRIMARY`, and credentials not leaking between connections |
 
 ## Crypto cross-check (optional)

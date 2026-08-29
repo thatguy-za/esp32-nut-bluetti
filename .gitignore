@@ -24,4 +24,6 @@ dist/*.bin
 /test/*.dSYM/
 /test/auth_test
 /test/ipv4_test
+/test/bt_frame_test
+/test/bt_regs_test
 /test/lb_test

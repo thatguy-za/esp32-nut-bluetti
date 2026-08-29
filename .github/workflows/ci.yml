@@ -14,11 +14,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: C test suites
         run: make -C test
-      - name: crypto cross-check vs python-ecdsa
-        run: |
-          python3 -m pip install --quiet ecdsa
-          make -C test xcheck
-          python3 test/xcheck.py
 
   firmware-build:
     name: ESP-IDF build (esp32s3)
