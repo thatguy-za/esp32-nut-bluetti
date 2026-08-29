@@ -63,6 +63,7 @@
   <button data-tab="ecoflow">EcoFlow</button>
   <button data-tab="nut">NUT</button>
   <button data-tab="wifi">Wi-Fi</button>
+  <button data-tab="notify">Alerts</button>
   <button data-tab="maint">Maintenance</button>
 </nav>
 
@@ -178,6 +179,38 @@
         name="wifi_open" value="1" style="width:auto"> Open network (no password)</label>
     </div>
 
+    <div class="box" id="wifiHostBox">
+      <h2>Hostname</h2>
+      <input id="hostname" name="hostname" autocomplete="off" maxlength="32">
+      <p class="hint" id="hostHint">Sent as the DHCP client name, so your router
+        can show the bridge by name.</p>
+    </div>
+
+    <div class="box" id="wifiIpBox">
+      <h2>IP Address</h2>
+      <div class="modes">
+        <label><input type="radio" name="use_static_ip" value="0" checked>
+          DHCP</label>
+        <label><input type="radio" name="use_static_ip" value="1">
+          Static IP</label>
+      </div>
+
+      <div id="staticBox" style="display:none">
+        <label for="staticIp">IP address</label>
+        <input id="staticIp" name="static_ip" autocomplete="off"
+               inputmode="decimal" placeholder="192.168.1.50">
+        <label for="staticMask">Subnet mask</label>
+        <input id="staticMask" name="static_mask" autocomplete="off"
+               inputmode="decimal" placeholder="255.255.255.0">
+        <label for="staticGw">Gateway</label>
+        <input id="staticGw" name="static_gw" autocomplete="off"
+               inputmode="decimal" placeholder="192.168.1.1">
+        <label for="staticDns">DNS server</label>
+        <input id="staticDns" name="static_dns" autocomplete="off"
+               inputmode="decimal" placeholder="192.168.1.1">
+      </div>
+    </div>
+
     <div class="box" id="wifiApBox">
       <h2>Access point <span class="sub">the bridge hosts its own network</span></h2>
       <label for="apSsid">Network name (SSID)</label>
@@ -194,6 +227,46 @@
        <span class="hint" id="wifiMsg"></span></p>
     <p class="hint">Changing this reboots the bridge and moves it to a different
       address — you'll need to reconnect there.</p>
+  </form>
+</section>
+
+<!-- ---------------- Alerts ---------------- -->
+<section id="notify">
+  <form id="tgForm">
+    <input type="hidden" name="section" value="notify">
+    <div class="box">
+      <h2>Telegram <span class="sub">push alerts for power events</span></h2>
+      <label class="chk"><input type="checkbox" id="tgEnabled" name="tg_enabled"
+        value="1" style="width:auto"> Send Telegram messages</label>
+
+      <label for="tgToken">Bot token</label>
+      <input id="tgToken" name="tg_token" autocomplete="off"
+             placeholder="123456789:AA…">
+      <label for="tgChat">Chat ID</label>
+      <input id="tgChat" name="tg_chat" autocomplete="off" placeholder="123456789">
+      <p class="hint">Message <a href="https://t.me/BotFather" target="_blank"
+        rel="noopener">@BotFather</a> to create a bot and get the token, then
+        message <a href="https://t.me/userinfobot" target="_blank"
+        rel="noopener">@userinfobot</a> for your chat ID. Send your bot a message
+        first, or it isn't allowed to message you. Group IDs start with
+        <code>-</code>.</p>
+    </div>
+
+    <div class="box">
+      <h2>Which events</h2>
+      <label class="chk"><input type="checkbox" id="tgPower" name="tg_on_power"
+        value="1" style="width:auto"> Mains lost / restored</label><br>
+      <label class="chk"><input type="checkbox" id="tgLow" name="tg_on_low_batt"
+        value="1" style="width:auto"> Battery low</label><br>
+      <label class="chk"><input type="checkbox" id="tgLink" name="tg_on_link"
+        value="1" style="width:auto"> EcoFlow unit unreachable / back</label>
+      <p class="hint">Repeats of the same event inside a minute are suppressed,
+        so a flapping supply won't spam the chat.</p>
+    </div>
+
+    <p><button class="act primary" id="tgSave">Save &amp; reboot</button>
+       <button type="button" class="act" id="tgTest">Send test message</button>
+       <span class="hint" id="tgMsg"></span></p>
   </form>
 </section>
 
@@ -261,13 +334,14 @@ tabs.forEach(b => b.onclick = () => {
   document.querySelectorAll('section').forEach(s =>
     s.classList.toggle('active', s.id === b.dataset.tab));
   if (b.dataset.tab === 'status') pollLogs();
-  if (['ecoflow', 'nut', 'wifi', 'maint'].includes(b.dataset.tab)) loadConfig();
+  if (['ecoflow', 'nut', 'wifi', 'notify', 'maint'].includes(b.dataset.tab)) loadConfig();
 });
 
 /* ---- status ---- */
 let lastStatus = {};
 const STATUS_LABELS = {
-  wifi_mode: 'Wi-Fi mode', network: 'Network', ip: 'IP address',
+  wifi_mode: 'Wi-Fi mode', network: 'Network', hostname: 'Hostname',
+  addressing: 'Addressing', ip: 'IP address', gateway: 'Gateway', dns: 'DNS',
   fw_version: 'Firmware', fw_date: 'Built', ups: 'UPS name',
   nut_port: 'NUT port', ble_target: 'EcoFlow target',
   ble_connected: 'BLE connected', telemetry_valid: 'Telemetry',
@@ -359,6 +433,23 @@ async function loadConfig() {
       $('#wifiSsid').appendChild(o);
       $('#wifiSsid').value = cfg.wifi_ssid;
     }
+    $('#hostname').value = cfg.hostname || '';
+    $('#hostname').placeholder = cfg.default_ap_ssid || 'esp-nut-ecoflow';
+    const st = !!cfg.use_static_ip;
+    document.querySelector(`input[name=use_static_ip][value="${st ? 1 : 0}"]`).checked = true;
+    $('#staticIp').value = cfg.static_ip || '';
+    $('#staticMask').value = cfg.static_mask || '';
+    $('#staticGw').value = cfg.static_gw || '';
+    $('#staticDns').value = cfg.static_dns || '';
+    syncStatic();
+
+    $('#tgEnabled').checked = !!cfg.tg_enabled;
+    $('#tgChat').value = cfg.tg_chat || '';
+    $('#tgToken').placeholder = cfg.has_tg_token ? 'unchanged' : '123456789:AA…';
+    $('#tgPower').checked = !!cfg.tg_on_power;
+    $('#tgLow').checked = !!cfg.tg_on_low_batt;
+    $('#tgLink').checked = !!cfg.tg_on_link;
+
     $('#credUser').value = cfg.auth_user || 'admin';
     $('#credCur').disabled = !cfg.auth_set;
     $('#credCur').placeholder = cfg.auth_set ? '' : 'no password set yet';
@@ -463,6 +554,12 @@ function syncWifiMode() {
   const ap = document.querySelector('input[name=wifi_mode]:checked').value === 'ap';
   $('#wifiApBox').style.display = ap ? '' : 'none';
   $('#wifiStaBox').style.display = ap ? 'none' : '';
+  /* The SoftAP always serves 192.168.4.1 from its own DHCP server, so
+   * there is nothing to choose; the hostname still applies. */
+  $('#wifiIpBox').style.display = ap ? 'none' : '';
+  $('#hostHint').textContent = ap
+    ? 'Identifies the device; applies if you later switch it to a network.'
+    : 'Sent as the DHCP client name, so your router can show the bridge by name.';
 }
 document.querySelectorAll('input[name=wifi_mode]').forEach(r => r.onchange = syncWifiMode);
 syncWifiMode();   /* don't show both boxes before /api/config lands */
@@ -497,8 +594,13 @@ $('#wifiScan').onclick = scanWifiNets;
 
 wireForm('#wifiForm', '#wifiSave', '#wifiMsg', fd => {
   const ap = fd.get('wifi_mode') === 'ap';
-  if (ap) { fd.delete('wifi_ssid'); fd.delete('wifi_pass'); fd.delete('wifi_open'); }
-  else    { fd.delete('ap_ssid'); fd.delete('ap_pass'); fd.delete('ap_open'); }
+  if (ap) {
+    fd.delete('wifi_ssid'); fd.delete('wifi_pass'); fd.delete('wifi_open');
+    ['use_static_ip', 'static_ip', 'static_mask', 'static_gw', 'static_dns']
+      .forEach(k => fd.delete(k));
+  } else {
+    fd.delete('ap_ssid'); fd.delete('ap_pass'); fd.delete('ap_open');
+  }
   const p = fd.get(ap ? 'ap_pass' : 'wifi_pass');
   if (ap && p && p.length < 8) {
     $('#wifiMsg').textContent = 'AP password must be at least 8 characters.';
@@ -508,9 +610,28 @@ wireForm('#wifiForm', '#wifiSave', '#wifiMsg', fd => {
     $('#wifiMsg').textContent = 'Pick a network (scan first).';
     return false;
   }
+  if (!ap && fd.get('use_static_ip') === '1') {
+    const checks = [['static_ip', 'IP address', true],
+                    ['static_mask', 'subnet mask', false],
+                    ['static_gw', 'gateway', false],
+                    ['static_dns', 'DNS server', false]];
+    for (const [k, label, required] of checks) {
+      const val = fd.get(k);
+      if (!val) {
+        if (required) { $('#wifiMsg').textContent = `Enter an ${label}.`; return false; }
+        continue;
+      }
+      if (!IPV4.test(val)) {
+        $('#wifiMsg').textContent = `The ${label} is not a valid IPv4 address.`;
+        return false;
+      }
+    }
+  }
   const where = ap ? `the AP "${fd.get('ap_ssid') || 'the bridge'}"`
                    : `network "${fd.get('wifi_ssid')}"`;
-  return confirm(`Switch the bridge to ${where} and reboot?`);
+  const addr = (!ap && fd.get('use_static_ip') === '1')
+    ? ` at ${fd.get('static_ip')}` : '';
+  return confirm(`Switch the bridge to ${where}${addr} and reboot?`);
 });
 
 /* ---- maintenance ---- */
@@ -558,6 +679,49 @@ $('#credForm').onsubmit = async ev => {
   ev.target.reset();
   $('#credUser').value = cfg.auth_user || 'admin';
   $('#credSave').disabled = false;
+};
+
+/* ---- addressing ---- */
+function syncStatic() {
+  const on = document.querySelector('input[name=use_static_ip]:checked').value === '1';
+  $('#staticBox').style.display = on ? '' : 'none';
+}
+document.querySelectorAll('input[name=use_static_ip]').forEach(r => r.onchange = syncStatic);
+syncStatic();
+
+const IPV4 = /^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
+
+/* ---- alerts ---- */
+wireForm('#tgForm', '#tgSave', '#tgMsg', fd => {
+  if (fd.get('tg_enabled') && !fd.get('tg_chat')) {
+    $('#tgMsg').textContent = 'A chat ID is required.';
+    return false;
+  }
+  if (fd.get('tg_enabled') && !fd.get('tg_token') && !cfg.has_tg_token) {
+    $('#tgMsg').textContent = 'A bot token is required.';
+    return false;
+  }
+});
+$('#tgTest').onclick = async () => {
+  const fd = new FormData();
+  if ($('#tgToken').value) fd.set('tg_token', $('#tgToken').value);
+  if ($('#tgChat').value) fd.set('tg_chat', $('#tgChat').value);
+  $('#tgTest').disabled = true;
+  $('#tgMsg').textContent = 'Sending…';
+  try {
+    const r = await fetch('/api/notify-test',
+      { method: 'POST', body: new URLSearchParams(fd) });
+    if (!r.ok) {
+      let why = '';
+      try { why = (await r.text()).trim(); } catch (e) {}
+      if (!why || why.length > 120 || why.includes('<')) why = 'HTTP ' + r.status;
+      throw new Error(why);
+    }
+    $('#tgMsg').textContent = 'Sent — check Telegram.';
+  } catch (e) {
+    $('#tgMsg').textContent = 'Failed: ' + e.message;
+  }
+  $('#tgTest').disabled = false;
 };
 
 /* ---- firmware update ---- */

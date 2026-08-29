@@ -26,6 +26,14 @@ typedef struct {
     char     wifi_pass[65];
     char     ap_ssid[33];    /* AP mode: SSID to advertise (blank = auto) */
     char     ap_pass[65];    /* AP mode: blank = open network             */
+
+    /* Station addressing. IPv4 only; DHCP unless use_static_ip. */
+    char     hostname[33];   /* DHCP client name / mDNS label             */
+    bool     use_static_ip;
+    char     static_ip[16];
+    char     static_mask[16];
+    char     static_gw[16];
+    char     static_dns[16];
     char     ble_addr[18];   /* "AA:BB:CC:DD:EE:FF"; empty => use ble_name */
     char     ble_name[24];   /* advertised-name prefix fallback           */
     char     ef_user_id[40]; /* EcoFlow account user id (BLE auth)        */
@@ -33,6 +41,14 @@ typedef struct {
     uint16_t nut_port;
     uint16_t poll_ms;
     uint8_t  low_pct;
+
+    /* Telegram notifications (see components/notify). */
+    bool     tg_enabled;
+    char     tg_token[64];
+    char     tg_chat[24];
+    bool     tg_on_power;
+    bool     tg_on_low_batt;
+    bool     tg_on_link;
 
     /* Admin-page login. The password is never stored in the clear: only a
      * random salt and SHA-256(salt || password) are kept. */
@@ -43,6 +59,12 @@ typedef struct {
 
     bool     provisioned;    /* set true once Wi-Fi setup has succeeded    */
 } app_config_t;
+
+/* This board's default name, "esp-nut-ecoflow-XXXX" (XXXX = last two
+ * bytes of the Wi-Fi MAC). Used for both the setup AP SSID and the
+ * default hostname, so the device answers to one name either way.
+ * Reads the MAC from eFuse, so it is valid before Wi-Fi starts. */
+void app_config_default_name(char *buf, size_t len);
 
 /* Populate cfg from Kconfig defaults (no NVS access). */
 void app_config_defaults(app_config_t *cfg);

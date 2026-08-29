@@ -10,6 +10,7 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_mac.h"
 #include "esp_log.h"
 
 static const char *TAG = "wifi_mgr";
@@ -84,7 +85,9 @@ esp_err_t wifi_mgr_init(void)
 void wifi_mgr_default_ap_ssid(char *buf, size_t len)
 {
     uint8_t mac[6] = { 0 };
-    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    /* eFuse, not esp_wifi_get_mac(): callers may run before Wi-Fi starts,
+     * and this must match app_config_default_name() exactly. */
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
     snprintf(buf, len, "esp-nut-ecoflow-%02X%02X", mac[4], mac[5]);
 }
 
@@ -198,6 +201,88 @@ int wifi_mgr_scan(wifi_scan_entry_t *out, int max)
     }
     free(recs);
     return n;
+}
+
+esp_err_t wifi_mgr_set_ipv4(const wifi_mgr_ipv4_t *c)
+{
+    if (!s_sta_netif || !c) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (c->hostname && c->hostname[0]) {
+        esp_err_t he = esp_netif_set_hostname(s_sta_netif, c->hostname);
+        if (he != ESP_OK) {
+            ESP_LOGW(TAG, "hostname '%s' rejected: %s",
+                     c->hostname, esp_err_to_name(he));
+        }
+    }
+
+    if (!c->use_static) {
+        /* Back to DHCP. Starting an already-started client is not an error. */
+        esp_err_t e = esp_netif_dhcpc_start(s_sta_netif);
+        if (e == ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED) {
+            e = ESP_OK;
+        }
+        ESP_LOGI(TAG, "station addressing: DHCP");
+        return e;
+    }
+
+    if (!c->ip || !c->ip[0]) {
+        ESP_LOGE(TAG, "static addressing needs an IP; staying on DHCP");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_netif_dhcpc_stop(s_sta_netif);      /* must be stopped to set a lease */
+
+    esp_netif_ip_info_t ip = { 0 };
+    ip.ip.addr = esp_ip4addr_aton(c->ip);
+    ip.netmask.addr = esp_ip4addr_aton(
+        (c->mask && c->mask[0]) ? c->mask : "255.255.255.0");
+    if (c->gw && c->gw[0]) {
+        ip.gw.addr = esp_ip4addr_aton(c->gw);
+    }
+    esp_err_t e = esp_netif_set_ip_info(s_sta_netif, &ip);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "set_ip_info failed: %s", esp_err_to_name(e));
+        esp_netif_dhcpc_start(s_sta_netif);         /* don't strand the device */
+        return e;
+    }
+
+    /* No DHCP means no resolver either, so one has to be set explicitly.
+     * Falling back to the gateway suits nearly every home network. */
+    const char *dns = (c->dns && c->dns[0]) ? c->dns
+                    : ((c->gw && c->gw[0]) ? c->gw : NULL);
+    if (dns) {
+        esp_netif_dns_info_t di = { 0 };
+        di.ip.type = ESP_IPADDR_TYPE_V4;
+        di.ip.u_addr.ip4.addr = esp_ip4addr_aton(dns);
+        esp_netif_set_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &di);
+    }
+
+    ESP_LOGI(TAG, "station addressing: static %s/%s gw %s dns %s",
+             c->ip, (c->mask && c->mask[0]) ? c->mask : "255.255.255.0",
+             (c->gw && c->gw[0]) ? c->gw : "(none)", dns ? dns : "(none)");
+    return ESP_OK;
+}
+
+void wifi_mgr_sta_gw(char *buf, size_t len)
+{
+    esp_netif_ip_info_t ip;
+    if (s_sta_netif && esp_netif_get_ip_info(s_sta_netif, &ip) == ESP_OK) {
+        esp_ip4addr_ntoa(&ip.gw, buf, len);
+    } else {
+        strlcpy(buf, "0.0.0.0", len);
+    }
+}
+
+void wifi_mgr_sta_dns(char *buf, size_t len)
+{
+    esp_netif_dns_info_t di;
+    if (s_sta_netif &&
+        esp_netif_get_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &di) == ESP_OK) {
+        esp_ip4addr_ntoa(&di.ip.u_addr.ip4, buf, len);
+    } else {
+        strlcpy(buf, "0.0.0.0", len);
+    }
 }
 
 esp_err_t wifi_mgr_sta_connect(const char *ssid, const char *pass,

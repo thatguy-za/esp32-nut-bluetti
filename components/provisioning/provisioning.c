@@ -27,6 +27,7 @@
 
 #include "wifi_mgr.h"
 #include "ecoflow_ble.h"
+#include "notify.h"
 
 static const char *TAG = "provisioning";
 
@@ -115,6 +116,38 @@ static bool form_get(const char *body, const char *key, char *out, size_t outsz)
     }
     if (outsz) out[0] = '\0';
     return false;
+}
+
+/* Strict dotted-quad check: four 0..255 parts, no spaces, no leading '+'.
+ * esp_ip4addr_aton() is lenient (accepts "1.2.3" and hex), which would let
+ * a typo through and strand the device on an unreachable address. */
+static bool valid_ipv4(const char *s)
+{
+    if (!s || !*s) {
+        return false;
+    }
+    int parts = 0;
+    for (;;) {
+        if (*s < '0' || *s > '9') {
+            return false;                    /* each part needs a digit */
+        }
+        int val = 0, digits = 0;
+        while (*s >= '0' && *s <= '9') {
+            val = val * 10 + (*s++ - '0');
+            if (++digits > 3 || val > 255) {
+                return false;
+            }
+        }
+        parts++;
+        if (*s == '\0') {
+            break;
+        }
+        if (*s != '.' || parts == 4) {
+            return false;
+        }
+        s++;
+    }
+    return parts == 4;
 }
 
 static esp_err_t send_json(httpd_req_t *r, const char *json)
@@ -415,6 +448,49 @@ static esp_err_t h_admin_logs(httpd_req_t *r);
 static esp_err_t h_admin_config(httpd_req_t *r);
 static esp_err_t h_admin_reconfigure(httpd_req_t *r);
 static esp_err_t h_admin_credentials(httpd_req_t *r);
+/* POST /api/notify-test — send a Telegram message with the posted (or
+ * stored) settings so the user can verify before saving. Blocking. */
+static esp_err_t h_notify_test(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    int len = r->content_len;
+    if (len < 0 || len > 1024) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
+    }
+    char *body = calloc(1, len + 1);
+    if (!body) {
+        return httpd_resp_send_500(r);
+    }
+    int got = 0;
+    while (got < len) {
+        int k = httpd_req_recv(r, body + got, len - got);
+        if (k <= 0) { free(body); return httpd_resp_send_500(r); }
+        got += k;
+    }
+
+    notify_config_t nc = { .enabled = true };
+    char v[128];
+    if (form_get(body, "tg_token", v, sizeof(v)) && v[0]) {
+        strlcpy(nc.bot_token, v, sizeof(nc.bot_token));
+    } else {
+        strlcpy(nc.bot_token, P.cfg->tg_token, sizeof(nc.bot_token));
+    }
+    if (form_get(body, "tg_chat", v, sizeof(v)) && v[0]) {
+        strlcpy(nc.chat_id, v, sizeof(nc.chat_id));
+    } else {
+        strlcpy(nc.chat_id, P.cfg->tg_chat, sizeof(nc.chat_id));
+    }
+    memset(body, 0, len);
+    free(body);
+
+    char err[128] = "";
+    if (notify_send_test(&nc, P.cfg->ups_name, err, sizeof(err)) != 0) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                   err[0] ? err : "send failed");
+    }
+    return send_json(r, "{\"ok\":true}");
+}
+
 static esp_err_t h_admin_reboot(httpd_req_t *r);
 static esp_err_t h_factory_reset(httpd_req_t *r);
 #if CONFIG_ENABLE_WEB_OTA
@@ -461,6 +537,7 @@ static esp_err_t start_httpd(bool captive)
         reg(P.httpd, "/api/config", HTTP_GET, h_admin_config);
         reg(P.httpd, "/api/reconfigure", HTTP_POST, h_admin_reconfigure);
         reg(P.httpd, "/api/credentials", HTTP_POST, h_admin_credentials);
+        reg(P.httpd, "/api/notify-test", HTTP_POST, h_notify_test);
         reg(P.httpd, "/api/ble-scan", HTTP_GET, h_ble_scan);
         reg(P.httpd, "/api/wifi-scan", HTTP_GET, h_wifi_scan);
         reg(P.httpd, "/api/reboot", HTTP_POST, h_admin_reboot);
@@ -531,6 +608,11 @@ static esp_err_t h_admin_status(httpd_req_t *r)
     } else {
         wifi_mgr_sta_ip(ip, sizeof(ip));
     }
+    char gw[16] = "-", dns[16] = "-";
+    if (!ap) {
+        wifi_mgr_sta_gw(gw, sizeof(gw));
+        wifi_mgr_sta_dns(dns, sizeof(dns));
+    }
     ecoflow_state_t st;
     bool have = ecoflow_ble_get_state(&st);
     const esp_app_desc_t *app = esp_app_get_description();
@@ -539,9 +621,11 @@ static esp_err_t h_admin_status(httpd_req_t *r)
 #else
     const bool ota = false;
 #endif
-    char out[560];
+    char out[760];
     snprintf(out, sizeof(out),
              "{\"wifi_mode\":\"%s\",\"network\":\"%s\",\"ip\":\"%s\","
+             "\"addressing\":\"%s\",\"gateway\":\"%s\",\"dns\":\"%s\","
+             "\"hostname\":\"%s\","
              "\"fw_version\":\"%s\",\"fw_date\":\"%s %s\",\"ota\":%s,"
              "\"ups\":\"%s\",\"nut_port\":%u,"
              "\"ble_target\":\"%s\",\"ble_connected\":%s,"
@@ -550,6 +634,8 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              "\"configured\":%s}",
              ap ? "ap" : "station",
              ap ? P.cfg->ap_ssid : P.cfg->wifi_ssid, ip,
+             ap ? "ap" : (P.cfg->use_static_ip ? "static" : "dhcp"), gw, dns,
+             P.cfg->hostname,
              app->version, app->date, app->time, ota ? "true" : "false",
              P.cfg->ups_name, P.cfg->nut_port,
              P.cfg->ble_addr[0] ? P.cfg->ble_addr : P.cfg->ble_name,
@@ -610,13 +696,17 @@ static esp_err_t h_admin_config(httpd_req_t *r)
     REQUIRE_AUTH(r);
     char def_ap[33];
     wifi_mgr_default_ap_ssid(def_ap, sizeof(def_ap));
-    char out[560];   /* grows with ssid + ap_ssid + user */
+    char out[900];   /* ssid + ap_ssid + user + addressing + telegram */
     snprintf(out, sizeof(out),
              "{\"ble_addr\":\"%s\",\"ble_name\":\"%s\",\"has_user_id\":%s,"
              "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
              "\"wifi_mode\":\"%s\",\"wifi_ssid\":\"%s\",\"has_wifi_pass\":%s,"
              "\"ap_ssid\":\"%s\",\"has_ap_pass\":%s,\"default_ap_ssid\":\"%s\","
-             "\"auth_user\":\"%s\",\"auth_set\":%s}",
+             "\"auth_user\":\"%s\",\"auth_set\":%s,"
+             "\"hostname\":\"%s\",\"use_static_ip\":%s,\"static_ip\":\"%s\","
+             "\"static_mask\":\"%s\",\"static_gw\":\"%s\",\"static_dns\":\"%s\","
+             "\"tg_enabled\":%s,\"tg_chat\":\"%s\",\"has_tg_token\":%s,"
+             "\"tg_on_power\":%s,\"tg_on_low_batt\":%s,\"tg_on_link\":%s}",
              P.cfg->ble_addr, P.cfg->ble_name,
              P.cfg->ef_user_id[0] ? "true" : "false",
              P.cfg->ups_name, P.cfg->nut_port, P.cfg->low_pct, P.cfg->poll_ms,
@@ -624,7 +714,15 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              P.cfg->wifi_ssid, P.cfg->wifi_pass[0] ? "true" : "false",
              P.cfg->ap_ssid[0] ? P.cfg->ap_ssid : def_ap,
              P.cfg->ap_pass[0] ? "true" : "false", def_ap,
-             P.cfg->auth_user, P.cfg->auth_set ? "true" : "false");
+             P.cfg->auth_user, P.cfg->auth_set ? "true" : "false",
+             P.cfg->hostname, P.cfg->use_static_ip ? "true" : "false",
+             P.cfg->static_ip, P.cfg->static_mask, P.cfg->static_gw,
+             P.cfg->static_dns,
+             P.cfg->tg_enabled ? "true" : "false", P.cfg->tg_chat,
+             P.cfg->tg_token[0] ? "true" : "false",
+             P.cfg->tg_on_power ? "true" : "false",
+             P.cfg->tg_on_low_batt ? "true" : "false",
+             P.cfg->tg_on_link ? "true" : "false");
     return send_json(r, out);
 }
 
@@ -774,6 +872,11 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         form_get(body, "wifi_mode", mode, sizeof(mode));
         bool ap = strcmp(mode, "ap") == 0;
 
+        /* The hostname is a device setting, not a station one. */
+        if (form_get(body, "hostname", v, sizeof(v)) && v[0]) {
+            strlcpy(P.pending.hostname, v, sizeof(P.pending.hostname));
+        }
+
         if (ap) {
             P.pending.wifi_mode = APP_WIFI_AP;
             form_get(body, "ap_ssid", P.pending.ap_ssid,
@@ -806,13 +909,70 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
             if (form_get(body, "wifi_open", v, sizeof(v)) && v[0] == '1') {
                 P.pending.wifi_pass[0] = '\0';
             }
+            P.pending.use_static_ip =
+                form_get(body, "use_static_ip", v, sizeof(v)) && v[0] == '1';
+            if (P.pending.use_static_ip) {
+                form_get(body, "static_ip", P.pending.static_ip,
+                         sizeof(P.pending.static_ip));
+                form_get(body, "static_mask", P.pending.static_mask,
+                         sizeof(P.pending.static_mask));
+                form_get(body, "static_gw", P.pending.static_gw,
+                         sizeof(P.pending.static_gw));
+                form_get(body, "static_dns", P.pending.static_dns,
+                         sizeof(P.pending.static_dns));
+            }
             free(body);
 
             if (P.pending.wifi_ssid[0] == '\0') {
                 return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
                                            "pick a Wi-Fi network");
             }
+            if (P.pending.use_static_ip) {
+                if (!valid_ipv4(P.pending.static_ip)) {
+                    return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                               "static IP is not a valid IPv4 address");
+                }
+                if (P.pending.static_mask[0] == '\0') {
+                    strlcpy(P.pending.static_mask, "255.255.255.0",
+                            sizeof(P.pending.static_mask));
+                } else if (!valid_ipv4(P.pending.static_mask)) {
+                    return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                               "subnet mask is not valid");
+                }
+                if (P.pending.static_gw[0] && !valid_ipv4(P.pending.static_gw)) {
+                    return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                               "gateway is not a valid IPv4 address");
+                }
+                if (P.pending.static_dns[0] && !valid_ipv4(P.pending.static_dns)) {
+                    return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                               "DNS server is not a valid IPv4 address");
+                }
+            }
         }
+    /* ---- Telegram notifications ---- */
+    } else if (strcmp(section, "notify") == 0) {
+        P.pending.tg_enabled =
+            form_get(body, "tg_enabled", v, sizeof(v)) && v[0] == '1';
+        /* Blank token field means "keep the stored one". */
+        if (form_get(body, "tg_token", v, sizeof(v)) && v[0]) {
+            strlcpy(P.pending.tg_token, v, sizeof(P.pending.tg_token));
+        }
+        form_get(body, "tg_chat", P.pending.tg_chat, sizeof(P.pending.tg_chat));
+        P.pending.tg_on_power =
+            form_get(body, "tg_on_power", v, sizeof(v)) && v[0] == '1';
+        P.pending.tg_on_low_batt =
+            form_get(body, "tg_on_low_batt", v, sizeof(v)) && v[0] == '1';
+        P.pending.tg_on_link =
+            form_get(body, "tg_on_link", v, sizeof(v)) && v[0] == '1';
+        memset(body, 0, len);
+        free(body);
+
+        if (P.pending.tg_enabled &&
+            (P.pending.tg_token[0] == '\0' || P.pending.tg_chat[0] == '\0')) {
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                       "a bot token and chat id are required");
+        }
+
     } else {
         free(body);
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "unknown section");

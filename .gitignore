@@ -23,3 +23,4 @@ dist/*.bin
 /test/xcheck
 /test/*.dSYM/
 /test/auth_test
+/test/ipv4_test

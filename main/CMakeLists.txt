@@ -12,4 +12,5 @@ idf_component_register(
         provisioning
         nut_server
         ecoflow_ble
+        notify
 )

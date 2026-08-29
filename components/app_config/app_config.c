@@ -5,13 +5,15 @@
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_mac.h"
+#include <stdio.h>
 #include "mbedtls/sha256.h"
 
 static const char *TAG = "app_config";
 
 #define CFG_NS      "efnut"
 #define CFG_KEY     "cfg"
-#define CFG_VERSION 4u
+#define CFG_VERSION 5u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -19,6 +21,14 @@ typedef struct {
     uint32_t     version;
     app_config_t cfg;
 } cfg_blob_t;
+
+void app_config_default_name(char *buf, size_t len)
+{
+    uint8_t mac[6] = { 0 };
+    /* eFuse read: works before esp_wifi_init(), unlike esp_wifi_get_mac(). */
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(buf, len, "esp-nut-ecoflow-%02X%02X", mac[4], mac[5]);
+}
 
 void app_config_defaults(app_config_t *cfg)
 {
@@ -33,6 +43,11 @@ void app_config_defaults(app_config_t *cfg)
     cfg->nut_port = CONFIG_NUT_TCP_PORT;
     cfg->poll_ms  = CONFIG_ECOFLOW_POLL_INTERVAL_MS;
     cfg->low_pct  = CONFIG_NUT_BATTERY_LOW_PCT;
+    app_config_default_name(cfg->hostname, sizeof(cfg->hostname));
+    cfg->use_static_ip = false;          /* DHCP unless asked otherwise */
+    cfg->tg_on_power = true;             /* the events worth waking for */
+    cfg->tg_on_low_batt = true;
+    cfg->tg_on_link = false;
     strlcpy(cfg->auth_user, "admin", sizeof(cfg->auth_user));
     cfg->auth_set = false;           /* setup must choose a password */
     cfg->provisioned = false;

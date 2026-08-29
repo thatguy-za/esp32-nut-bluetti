@@ -31,6 +31,7 @@
 #include "log_ring.h"
 #include "nut_server.h"
 #include "ecoflow_ble.h"
+#include "notify.h"
 
 static const char *TAG = "app";
 
@@ -137,6 +138,11 @@ static void publish_nut_from_ecoflow(const ecoflow_state_t *st)
         strlcat(status, " DISCHRG", sizeof(status));
     }
     nut_server_set_status(status);
+
+    /* Same string the NUT clients see, so notifications and UPS state can
+     * never disagree. Edge detection and rate limiting live in notify. */
+    notify_ups_status(status, st->soc_pct,
+                      st->ac_input_present ? -1 : st->minutes_remaining);
 }
 
 static void ecoflow_cb(const ecoflow_state_t *state, void *user)
@@ -153,10 +159,12 @@ static void staleness_task(void *arg)
         bool stale = !have ||
                      (esp_timer_get_time() - st.updated_us) > STALE_AFTER_US;
         if (stale) {
-            nut_server_set_status(ecoflow_ble_connected() ? "OL WAIT" : "OFF");
+            const char *s = ecoflow_ble_connected() ? "OL WAIT" : "OFF";
+            nut_server_set_status(s);
             nut_server_set_var("driver.state",
                                ecoflow_ble_connected() ? "connected-no-data"
                                                        : "disconnected");
+            notify_ups_status(s, have ? st.soc_pct : 0, -1);
         } else {
             nut_server_set_var("driver.state", "updated");
         }
@@ -196,6 +204,16 @@ static void start_services(const app_config_t *cfg)
         }
     }
 
+    notify_config_t ncfg = {
+        .enabled = cfg->tg_enabled,
+        .on_power = cfg->tg_on_power,
+        .on_low_batt = cfg->tg_on_low_batt,
+        .on_link = cfg->tg_on_link,
+    };
+    strlcpy(ncfg.bot_token, cfg->tg_token, sizeof(ncfg.bot_token));
+    strlcpy(ncfg.chat_id, cfg->tg_chat, sizeof(ncfg.chat_id));
+    notify_start(&ncfg, cfg->ups_name);
+
     provisioning_admin_start(cfg);
     xTaskCreate(staleness_task, "staleness", 3072, NULL, 4, NULL);
 }
@@ -234,6 +252,15 @@ void app_main(void)
         ESP_LOGI(TAG, "running as access point '%s'", cfg->ap_ssid);
         ESP_ERROR_CHECK(wifi_mgr_ap_start(cfg->ap_ssid, cfg->ap_pass));
     } else if (!need_setup) {
+        wifi_mgr_ipv4_t ipv4 = {
+            .hostname   = cfg->hostname,
+            .use_static = cfg->use_static_ip,
+            .ip         = cfg->static_ip,
+            .mask       = cfg->static_mask,
+            .gw         = cfg->static_gw,
+            .dns        = cfg->static_dns,
+        };
+        wifi_mgr_set_ipv4(&ipv4);
         ESP_LOGI(TAG, "connecting to '%s'", cfg->wifi_ssid);
         if (wifi_mgr_sta_connect(cfg->wifi_ssid, cfg->wifi_pass, 30000) != ESP_OK) {
             ESP_LOGW(TAG, "stored Wi-Fi failed; falling back to setup");

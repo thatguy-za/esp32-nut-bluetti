@@ -111,8 +111,10 @@ In normal operation the device serves a page at `http://<device-ip>/`:
   cable. Turn on `CONFIG_ECOFLOW_BLE_TRACE` for the full dump.
 - **EcoFlow** — BLE target and EcoFlow account.
 - **NUT** — UPS name, TCP port, low-battery %.
-- **Wi-Fi** — switch between joining a network and running as an access point,
-  with the settings for each.
+- **Wi-Fi** — switch between joining a network and running as an access point;
+  hostname; and DHCP or a static IPv4 address (address, mask, gateway, DNS).
+  Addressing is station-only — the access point always serves `192.168.4.1`.
+- **Alerts** — Telegram push notifications for power events.
 - **Maintenance** —
   - **Firmware update**: upload a newer
     `esp32-nut-ecoflow-<version>.bin`; it's written to the spare OTA slot and
@@ -140,6 +142,30 @@ bridge on a trusted network.
 
 If stored Wi-Fi credentials ever stop working, the device falls back to setup
 mode on its own after a failed connect.
+
+## Telegram alerts
+
+The **Alerts** tab sends a Telegram message when something happens to the power:
+
+| Event | Default |
+| --- | --- |
+| Mains lost / restored | on |
+| Battery low (crosses the NUT low-battery threshold) | on |
+| EcoFlow unit unreachable / back | off |
+
+Setup:
+
+1. Message [@BotFather](https://t.me/BotFather), `/newbot`, and copy the token.
+2. Message [@userinfobot](https://t.me/userinfobot) to get your numeric chat ID
+   (group IDs start with `-`).
+3. **Send your new bot a message first** — a bot cannot start a conversation, so
+   without this Telegram rejects the send with "chat not found".
+4. Paste both into the Alerts tab and hit **Send test message** to check before
+   saving.
+
+Repeats of the same event within a minute are suppressed, so a flapping supply
+won't fill the chat. Messages are queued: if Telegram is unreachable the bridge
+keeps serving NUT and drops the message rather than stalling.
 
 ## Using it with NUT
 
@@ -172,6 +198,10 @@ anyone); keep the device on a trusted LAN.
   message. Ported from [`rabits/ha-ef-ble`](https://github.com/rabits/ha-ef-ble).
 - **Web OTA** — upload firmware from the admin page; spare-slot write with
   bootloader rollback.
+- **Telegram alerts** — mains lost/restored, battery low, EcoFlow unreachable.
+  Sent from a worker task so HTTPS never blocks the BLE or NUT paths.
+- **Addressing** — DHCP by default, or a static IPv4 address with gateway and
+  DNS; settable hostname, sent as the DHCP client name.
 
 ### Verified without hardware ([`test/`](test/), runs in CI)
 
@@ -186,6 +216,9 @@ anyone); keep the device on a trusted LAN.
 - **Admin auth** — password hashing/verification and Basic-header parsing:
   salt uniqueness, wrong / empty / wrong-case passwords rejected, and no
   length or character restrictions.
+- **IPv4 validation** — the static-addressing validator, including the lenient
+  forms `esp_ip4addr_aton()` would wrongly accept (`192.168.1`, hex octets),
+  which would otherwise strand the device on an unreachable address.
 - **Framing** — CRC-8/16, inner-packet build↔parse, XOR deobfuscation, frame
   reassembly across split BLE notifications.
 
@@ -219,7 +252,8 @@ afterwards.
 | --- | --- |
 | `main/` | boot flow / EcoFlow→NUT variable mapping |
 | `components/app_config/` | NVS-backed runtime config |
-| `components/wifi_mgr/` | station + SoftAP (open or WPA2) + scan |
+| `components/wifi_mgr/` | station + SoftAP (open or WPA2), scan, DHCP/static IPv4 |
+| `components/notify/` | Telegram alerts (queue + worker, edge detection) |
 | `components/provisioning/` | Wi-Fi setup portal (`portal.html`), DNS server, admin page (`admin.html`), web log tail (`log_ring.c`) |
 | `components/nut_server/` | upsd-compatible TCP protocol server |
 | `components/micro_ecc/` | vendored micro-ecc (secp160r1 for the BLE handshake) |
@@ -243,7 +277,10 @@ afterwards.
   so treat the port as public on your LAN.
 - Don't expose either port to the internet. During first-run setup the Wi-Fi AP
   is open; it shuts down as soon as the device joins your network.
-- Forgot the password? Hold the BOOT button through a reset to wipe the config.
+- Forgot the password, or set an unreachable static IP? Hold the BOOT button
+  through a reset to wipe the config and return to the setup AP.
+- The Telegram bot token is stored in NVS and is readable by anyone who can
+  reach the admin page; the token only grants access to that bot.
 
 ## Protocol notes
 
