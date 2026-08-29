@@ -180,8 +180,51 @@ upsc ecoflow@<device-ip>       # dumps all variables
 MONITOR ecoflow@<device-ip> 1 monuser somepass slave
 ```
 
-The server is read-only and does not enforce auth (`LOGIN` is accepted from
-anyone); keep the device on a trusted LAN.
+### Variables
+
+| Variable | Meaning |
+| --- | --- |
+| `ups.status` | `OL` / `OB` / `LB` / `CHRG` / `DISCHRG`; `OFF` or `OL WAIT` when telemetry is stale. The one `upsmon` acts on. |
+| `battery.charge` | state of charge, % |
+| `battery.charge.low` | the `LB` threshold (your setting) |
+| `battery.runtime` | seconds left on battery; cleared while on mains |
+| `battery.runtime.low` | the runtime `LB` threshold (your setting) |
+| `battery.voltage` | pack voltage |
+| `battery.temperature` | pack temperature, °C |
+| `battery.capacity` | design capacity, Wh |
+| `ups.load` | % of the configured continuous AC rating |
+| `ups.realpower` / `ups.realpower.nominal` | output W / the configured AC rating |
+| `input.realpower` / `input.realpower.ac` | total input W / mains input W |
+| `output.realpower` | AC output W |
+| `ups.type` | `online` when EcoFlow's backup mode is on, else `offline` |
+| `ups.alarm` | device fault code, when non-zero |
+| `ups.mfr` / `ups.model` / `ups.serial` | and the `device.*` equivalents |
+| `driver.name` / `driver.version` / `driver.state` | bridge health |
+
+`ups.status` gains `LB` when **either** `battery.charge` drops to
+`battery.charge.low` **or** `battery.runtime` falls to `battery.runtime.low`.
+The percentage alone is a poor guide under load: 20 % of a 245 Wh pack is
+minutes at 300 W but hours at 20 W.
+
+Both thresholds, and the **continuous AC rating** that backs `ups.load` and
+`ups.realpower.nominal`, are set on the admin page's NUT tab — nothing about the
+unit is hardcoded.
+
+### Login
+
+Optional, and follows standard NUT semantics: the username and password gate
+`LOGIN` and `PRIMARY` (what `upsmon` uses to coordinate shutdown). Reading
+values stays anonymous, because `upsc` has no way to send credentials. The
+password is stored as a salted SHA-256.
+
+There is no TLS, and no login at all until you set one, so keep the device on a
+trusted LAN.
+
+### Not implemented
+
+No `SET VAR` or `INSTCMD`, so nothing can be changed on the EcoFlow through NUT
+and there is no shutdown command — which is also why `ups.delay.shutdown` is not
+published: nothing would honour it.
 
 ## What's implemented
 

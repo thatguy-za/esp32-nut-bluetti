@@ -36,6 +36,18 @@ void nut_server_clear_var(const char *name);
  * (e.g. "OL", "OB", "OB LB", "OL CHRG"). */
 void nut_server_set_status(const char *status);
 
+/*
+ * Optional NUT login, with upsd's semantics: the credentials gate LOGIN
+ * and PRIMARY/MASTER (what upsmon uses to coordinate shutdown). LIST and
+ * GET stay anonymous either way — `upsc` has no way to send credentials,
+ * so requiring them for reads would break every read-only client.
+ *
+ * `verify` is called with the USERNAME/PASSWORD the client supplied and
+ * must return true to accept. Pass NULL to leave LOGIN open to anyone.
+ */
+typedef bool (*nut_auth_cb_t)(const char *user, const char *pass, void *ctx);
+void nut_server_set_auth(nut_auth_cb_t verify, void *ctx);
+
 #ifdef __cplusplus
 }
 #endif

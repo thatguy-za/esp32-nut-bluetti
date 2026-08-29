@@ -13,7 +13,7 @@ static const char *TAG = "app_config";
 
 #define CFG_NS      "efnut"
 #define CFG_KEY     "cfg"
-#define CFG_VERSION 5u
+#define CFG_VERSION 7u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -43,11 +43,15 @@ void app_config_defaults(app_config_t *cfg)
     cfg->nut_port = CONFIG_NUT_TCP_PORT;
     cfg->poll_ms  = CONFIG_ECOFLOW_POLL_INTERVAL_MS;
     cfg->low_pct  = CONFIG_NUT_BATTERY_LOW_PCT;
+    cfg->ac_rating_w = CONFIG_NUT_AC_RATING_W;
+    cfg->runtime_low_s = CONFIG_NUT_RUNTIME_LOW_S;
     app_config_default_name(cfg->hostname, sizeof(cfg->hostname));
     cfg->use_static_ip = false;          /* DHCP unless asked otherwise */
     cfg->tg_on_power = true;             /* the events worth waking for */
     cfg->tg_on_low_batt = true;
     cfg->tg_on_link = false;
+    strlcpy(cfg->nut_user, "upsmon", sizeof(cfg->nut_user));
+    cfg->nut_auth_set = false;       /* LOGIN open until set */
     strlcpy(cfg->auth_user, "admin", sizeof(cfg->auth_user));
     cfg->auth_set = false;           /* setup must choose a password */
     cfg->provisioned = false;
@@ -140,33 +144,55 @@ static void hash_password(const uint8_t salt[16], const char *password,
     mbedtls_sha256_free(&c);
 }
 
-void app_config_set_password(app_config_t *cfg, const char *password)
+static void set_secret(uint8_t salt[16], uint8_t hash[32], bool *is_set,
+                       const char *password)
 {
     if (!password || password[0] == '\0') {
-        memset(cfg->auth_salt, 0, sizeof(cfg->auth_salt));
-        memset(cfg->auth_hash, 0, sizeof(cfg->auth_hash));
-        cfg->auth_set = false;
+        memset(salt, 0, 16);
+        memset(hash, 0, 32);
+        *is_set = false;
         return;
     }
-    esp_fill_random(cfg->auth_salt, sizeof(cfg->auth_salt));
-    hash_password(cfg->auth_salt, password, cfg->auth_hash);
-    cfg->auth_set = true;
+    esp_fill_random(salt, 16);
+    hash_password(salt, password, hash);
+    *is_set = true;
 }
 
-bool app_config_check_password(const app_config_t *cfg, const char *password)
+static bool check_secret(const uint8_t salt[16], const uint8_t hash[32],
+                         bool is_set, const char *password)
 {
-    if (!cfg->auth_set) {
+    if (!is_set) {
         return true;              /* nothing set yet: nothing to enforce */
     }
     if (!password) {
         return false;
     }
     uint8_t want[32];
-    hash_password(cfg->auth_salt, password, want);
+    hash_password(salt, password, want);
     /* Constant time: never leak how much of the hash matched. */
     uint8_t diff = 0;
     for (size_t i = 0; i < sizeof(want); i++) {
-        diff |= want[i] ^ cfg->auth_hash[i];
+        diff |= want[i] ^ hash[i];
     }
     return diff == 0;
+}
+
+void app_config_set_password(app_config_t *cfg, const char *password)
+{
+    set_secret(cfg->auth_salt, cfg->auth_hash, &cfg->auth_set, password);
+}
+
+bool app_config_check_password(const app_config_t *cfg, const char *password)
+{
+    return check_secret(cfg->auth_salt, cfg->auth_hash, cfg->auth_set, password);
+}
+
+void app_config_set_nut_password(app_config_t *cfg, const char *password)
+{
+    set_secret(cfg->nut_salt, cfg->nut_hash, &cfg->nut_auth_set, password);
+}
+
+bool app_config_check_nut_password(const app_config_t *cfg, const char *password)
+{
+    return check_secret(cfg->nut_salt, cfg->nut_hash, cfg->nut_auth_set, password);
 }

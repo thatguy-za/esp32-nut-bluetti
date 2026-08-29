@@ -79,6 +79,20 @@ menu "EcoFlow NUT Bridge"
         int "NUT TCP listen port"
         default 3493
 
+    config NUT_AC_RATING_W
+        int "Default continuous AC output rating (W)"
+        default 300
+        help
+            Used as the 100% reference for ups.load and reported as
+            ups.realpower.nominal. The River 3's continuous AC rating is
+            300 W; set your unit's figure in the admin page.
+
+    config NUT_RUNTIME_LOW_S
+        int "Default battery.runtime.low (seconds)"
+        default 300
+        help
+            Runtime remaining at which upsmon should treat the UPS as low.
+
     config NUT_BATTERY_LOW_PCT
         int "battery.charge.low threshold (%)"
         default 20

@@ -39,6 +39,16 @@ typedef struct {
     char     ef_user_id[40]; /* EcoFlow account user id (BLE auth)        */
     char     ups_name[32];
     uint16_t nut_port;
+    uint16_t ac_rating_w;    /* continuous AC output rating, for ups.load  */
+    uint16_t runtime_low_s;  /* battery.runtime.low, seconds               */
+
+    /* NUT login. Standard NUT semantics: these gate LOGIN / PRIMARY (what
+     * upsmon uses to coordinate shutdown); LIST/GET stay anonymous, as
+     * upsd does and as `upsc` requires. Stored as a salted SHA-256. */
+    char     nut_user[33];
+    uint8_t  nut_salt[16];
+    uint8_t  nut_hash[32];
+    bool     nut_auth_set;
     uint16_t poll_ms;
     uint8_t  low_pct;
 
@@ -86,6 +96,11 @@ void app_config_set_password(app_config_t *cfg, const char *password);
 /* Constant-time check of a candidate password against the stored hash.
  * Returns true when auth is unset (nothing to check yet). */
 bool app_config_check_password(const app_config_t *cfg, const char *password);
+
+/* Same, for the NUT protocol login. An empty password clears it, which
+ * leaves LOGIN/PRIMARY open to anyone (upsd's default too). */
+void app_config_set_nut_password(app_config_t *cfg, const char *password);
+bool app_config_check_nut_password(const app_config_t *cfg, const char *password);
 
 #ifdef __cplusplus
 }

@@ -41,7 +41,17 @@ typedef struct {
     bool used;
 } nut_var_t;
 
+/* Per-connection login state. NUT sends USERNAME and PASSWORD as separate
+ * commands before LOGIN, so both have to be remembered for the session. */
+typedef struct {
+    char user[33];
+    char pass[65];
+    bool logged_in;
+} client_ctx_t;
+
 static struct {
+    nut_auth_cb_t       auth_cb;
+    void               *auth_ctx;
     nut_server_config_t cfg;
     char                ups_name[32];
     char                ups_desc[64];
@@ -115,6 +125,12 @@ void nut_server_clear_var(const char *name)
         v->used = false;
     }
     xSemaphoreGive(s.lock);
+}
+
+void nut_server_set_auth(nut_auth_cb_t verify, void *ctx)
+{
+    s.auth_cb = verify;
+    s.auth_ctx = ctx;
 }
 
 void nut_server_set_status(const char *status)
@@ -283,7 +299,7 @@ static int cmd_get_var(int fd, const char *ups, const char *var)
     return send_str(fd, "ERR VAR-NOT-SUPPORTED\n");
 }
 
-static int handle_line(int fd, char *line)
+static int handle_line(int fd, client_ctx_t *c, char *line)
 {
     char *tok[MAX_TOKENS];
     int n = tokenize(line, tok);
@@ -335,14 +351,42 @@ static int handle_line(int fd, char *line)
         return send_str(fd, "ERR INVALID-ARGUMENT\n");
     }
 
-    if (strcasecmp(tok[0], "USERNAME") == 0 || strcasecmp(tok[0], "PASSWORD") == 0 ||
-        strcasecmp(tok[0], "LOGIN") == 0 ||
+    /* ---- login ---- *
+     * upsd takes USERNAME and PASSWORD as separate commands, then checks
+     * them at LOGIN / PRIMARY. Reads never require a login. */
+    if (strcasecmp(tok[0], "USERNAME") == 0) {
+        if (n < 2) {
+            return send_str(fd, "ERR INVALID-ARGUMENT\n");
+        }
+        if (c->user[0]) {
+            return send_str(fd, "ERR ALREADY-SET-USERNAME\n");
+        }
+        strlcpy(c->user, tok[1], sizeof(c->user));
+        return send_str(fd, "OK\n");
+    }
+    if (strcasecmp(tok[0], "PASSWORD") == 0) {
+        if (n < 2) {
+            return send_str(fd, "ERR INVALID-ARGUMENT\n");
+        }
+        if (c->pass[0]) {
+            return send_str(fd, "ERR ALREADY-SET-PASSWORD\n");
+        }
+        strlcpy(c->pass, tok[1], sizeof(c->pass));
+        return send_str(fd, "OK\n");
+    }
+    if (strcasecmp(tok[0], "LOGIN") == 0 ||
         strcasecmp(tok[0], "PRIMARY") == 0 || strcasecmp(tok[0], "MASTER") == 0) {
-        /* PRIMARY/MASTER: grant upsmon primary privileges (single-appliance
-         * server, no real login slots to arbitrate). */
+        if (s.auth_cb && !s.auth_cb(c->user, c->pass, s.auth_ctx)) {
+            ESP_LOGW(TAG, "%s denied for user '%s'", tok[0], c->user);
+            return send_str(fd, "ERR ACCESS-DENIED\n");
+        }
+        /* Single-appliance server: nothing to arbitrate, so an accepted
+         * login is also primary. */
+        c->logged_in = true;
         return send_str(fd, "OK\n");
     }
     if (strcasecmp(tok[0], "LOGOUT") == 0) {
+        c->logged_in = false;
         send_str(fd, "OK Goodbye\n");
         return -1; /* close */
     }
@@ -372,6 +416,7 @@ static void client_task(void *arg)
     int fd = (int)(intptr_t)arg;
     char buf[CLIENT_RX_BUF];
     size_t fill = 0;
+    client_ctx_t ctx = { 0 };
 
     struct timeval tv = { .tv_sec = 120, .tv_usec = 0 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -393,7 +438,7 @@ static void client_task(void *arg)
             if (len && start[len - 1] == '\r') {
                 start[len - 1] = '\0';
             }
-            if (handle_line(fd, start) < 0) {
+            if (handle_line(fd, &ctx, start) < 0) {
                 closed = true;
                 break;
             }
@@ -411,6 +456,7 @@ static void client_task(void *arg)
         }
     }
 
+    memset(&ctx, 0, sizeof(ctx));   /* don't leave the password on the stack */
     close(fd);
     s.client_count--;
     ESP_LOGI(TAG, "client closed (%d active)", s.client_count);

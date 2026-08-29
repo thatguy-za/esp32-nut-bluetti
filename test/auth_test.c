@@ -10,8 +10,11 @@
 #include "sha256.h"
 
 static int fails;
-#define OKF(c, ...) do { printf((c) ? "ok:   " : "FAIL: "); printf(__VA_ARGS__); \
-                         printf("\n"); if (!(c)) fails++; } while (0)
+/* Evaluate the condition once, so a condition with side effects can't
+ * behave differently between the print and the pass/fail count. */
+#define OKF(c, ...) do { bool _ok = (c); printf(_ok ? "ok:   " : "FAIL: "); \
+                         printf(__VA_ARGS__); printf("\n"); \
+                         if (!_ok) fails++; } while (0)
 
 typedef struct {
     char    user[33];

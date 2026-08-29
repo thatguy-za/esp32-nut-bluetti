@@ -92,6 +92,9 @@ static void publish_nut_from_ecoflow(const ecoflow_state_t *st)
     if (st->battery_temp_c > -100.0f) {
         nut_server_set_var_float("battery.temperature", st->battery_temp_c, 1);
     }
+    if (st->battery_voltage > 0.0f) {
+        nut_server_set_var_float("battery.voltage", st->battery_voltage, 2);
+    }
     if (st->design_capacity_wh > 0) {
         nut_server_set_var_int("battery.capacity", st->design_capacity_wh);
     }
@@ -105,9 +108,13 @@ static void publish_nut_from_ecoflow(const ecoflow_state_t *st)
         nut_server_set_var_float("input.realpower.ac", st->ac_in_watts, 0);
     }
     nut_server_set_var("ups.type", st->backup_mode_on ? "online" : "offline");
-    if (st->output_watts >= 0.0f) {
-        /* River 3 continuous AC rating is ~300 W. */
-        int load = (int)(st->output_watts * 100.0f / 300.0f);
+    if (st->ac_out_watts >= 0.0f) {
+        nut_server_set_var_float("output.realpower", st->ac_out_watts, 0);
+    }
+    /* ups.load is a percentage of the unit's continuous AC rating, which
+     * varies by model, so it comes from the config rather than a guess. */
+    if (st->output_watts >= 0.0f && s_cfg.ac_rating_w > 0) {
+        int load = (int)(st->output_watts * 100.0f / (float)s_cfg.ac_rating_w);
         nut_server_set_var_int("ups.load", load > 100 ? 100 : load);
     }
     if (st->error_code) {
@@ -132,7 +139,15 @@ static void publish_nut_from_ecoflow(const ecoflow_state_t *st)
         }
     } else {
         strlcpy(status, "OB", sizeof(status));
-        if (st->soc_pct <= st->soc_low_pct) {
+        /* Low battery on either trigger. The percentage alone is a poor
+         * guide under heavy load — 20% of a 245 Wh pack is minutes at
+         * 300 W but hours at 20 W — so honour the runtime threshold we
+         * publish as battery.runtime.low as well. */
+        bool low_charge = st->soc_pct <= st->soc_low_pct;
+        bool low_runtime = s_cfg.runtime_low_s > 0 &&
+                           st->minutes_remaining >= 0 &&
+                           st->minutes_remaining * 60 <= (int)s_cfg.runtime_low_s;
+        if (low_charge || low_runtime) {
             strlcat(status, " LB", sizeof(status));
         }
         strlcat(status, " DISCHRG", sizeof(status));
@@ -173,8 +188,27 @@ static void staleness_task(void *arg)
 
 /* ------------------------------------------------------------------ */
 
+/* Called from a NUT client task when a client sends LOGIN / PRIMARY. */
+static bool nut_verify_login(const char *user, const char *pass, void *ctx)
+{
+    const app_config_t *cfg = ctx;
+    if (!user || !pass || !user[0]) {
+        return false;
+    }
+    return strcmp(user, cfg->nut_user) == 0 &&
+           app_config_check_nut_password(cfg, pass);
+}
+
 static void start_services(const app_config_t *cfg)
 {
+    /* NUT login. Standard NUT: this gates LOGIN/PRIMARY only — reads stay
+     * anonymous so `upsc` keeps working. */
+    if (cfg->nut_auth_set) {
+        nut_server_set_auth(nut_verify_login, &s_cfg);
+        ESP_LOGI(TAG, "NUT login required for LOGIN/PRIMARY (user '%s')",
+                 cfg->nut_user);
+    }
+
     nut_server_config_t nut_cfg = {
         .ups_name = cfg->ups_name,
         .ups_desc = "EcoFlow via ESP32",
@@ -183,6 +217,14 @@ static void start_services(const app_config_t *cfg)
     };
     if (nut_server_start(&nut_cfg) != 0) {
         ESP_LOGE(TAG, "nut_server_start failed");
+    }
+
+    /* Fixed for this configuration, so publish once. */
+    if (cfg->ac_rating_w > 0) {
+        nut_server_set_var_int("ups.realpower.nominal", cfg->ac_rating_w);
+    }
+    if (cfg->runtime_low_s > 0) {
+        nut_server_set_var_int("battery.runtime.low", cfg->runtime_low_s);
     }
 
     /* The EcoFlow side is configured from the admin page after Wi-Fi setup,

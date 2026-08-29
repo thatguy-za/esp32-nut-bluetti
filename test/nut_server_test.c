@@ -2,6 +2,7 @@
  * protocol responses a NUT client (upsc / upsmon) relies on. */
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -9,8 +10,12 @@
 #include "nut_server.h"
 
 static int fails;
-#define OKF(c, ...) do { printf((c) ? "ok:   " : "FAIL: "); printf(__VA_ARGS__); \
-                         printf("\n"); if (!(c)) fails++; } while (0)
+/* Evaluate the condition ONCE: it usually contains a cmd() call, and a
+ * second evaluation would re-send the command — which matters now that
+ * LOGIN is stateful. */
+#define OKF(c, ...) do { bool _ok = (c); printf(_ok ? "ok:   " : "FAIL: "); \
+                         printf(__VA_ARGS__); printf("\n"); \
+                         if (!_ok) fails++; } while (0)
 
 static int sock_connect(void)
 {
@@ -33,6 +38,14 @@ static const char *cmd(int fd, const char *c, char *buf, size_t n)
     if (r < 0) r = 0;
     buf[r] = '\0';
     return buf;
+}
+
+/* Stand-in for main.c's nut_verify_login(). */
+static bool verify(const char *user, const char *pass, void *ctx)
+{
+    (void)ctx;
+    return user && pass && strcmp(user, "upsmon") == 0 &&
+           strcmp(pass, "s3cret") == 0;
 }
 
 int main(void)
@@ -80,10 +93,14 @@ int main(void)
     OKF(strcmp(cmd(fd, "GET NUMLOGINS ecoflow", b, sizeof b),
                "NUMLOGINS ecoflow 0\n") == 0, "GET NUMLOGINS -> %s", b);
 
-    /* upsmon primary-mode handshake */
+    /* upsmon handshake with no login configured: anyone may LOGIN. */
     OKF(strcmp(cmd(fd, "USERNAME upsmon", b, sizeof b), "OK\n") == 0, "USERNAME");
     OKF(strcmp(cmd(fd, "PASSWORD x", b, sizeof b), "OK\n") == 0, "PASSWORD");
-    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "OK\n") == 0, "LOGIN");
+    OKF(strcmp(cmd(fd, "USERNAME again", b, sizeof b),
+               "ERR ALREADY-SET-USERNAME\n") == 0, "USERNAME twice rejected");
+    OKF(strcmp(cmd(fd, "PASSWORD again", b, sizeof b),
+               "ERR ALREADY-SET-PASSWORD\n") == 0, "PASSWORD twice rejected");
+    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "OK\n") == 0, "LOGIN (no auth set)");
     OKF(strcmp(cmd(fd, "PRIMARY ecoflow", b, sizeof b), "OK\n") == 0, "PRIMARY");
     OKF(strcmp(cmd(fd, "MASTER ecoflow", b, sizeof b), "OK\n") == 0, "MASTER (legacy)");
 
@@ -94,6 +111,54 @@ int main(void)
     OKF(strcmp(cmd(fd, "FROBNICATE", b, sizeof b), "ERR UNKNOWN-COMMAND\n") == 0, "unknown cmd");
 
     close(fd);
+
+    /* ---- with a login configured ---- */
+    nut_server_set_auth(verify, NULL);
+
+    fd = sock_connect();
+    OKF(fd >= 0, "reconnect with auth configured");
+    /* Reads must stay anonymous: upsc cannot send credentials. */
+    OKF(strstr(cmd(fd, "LIST UPS", b, sizeof b), "UPS ecoflow") != NULL,
+        "LIST UPS still anonymous");
+    OKF(strcmp(cmd(fd, "GET VAR ecoflow battery.charge", b, sizeof b),
+               "VAR ecoflow battery.charge \"75\"\n") == 0,
+        "GET VAR still anonymous");
+    OKF(strstr(cmd(fd, "LIST VAR ecoflow", b, sizeof b), "ups.status") != NULL,
+        "LIST VAR still anonymous");
+    /* But LOGIN without credentials is refused. */
+    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "ERR ACCESS-DENIED\n") == 0,
+        "LOGIN with no credentials denied");
+    close(fd);
+
+    fd = sock_connect();
+    cmd(fd, "USERNAME upsmon", b, sizeof b);
+    cmd(fd, "PASSWORD wrong", b, sizeof b);
+    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "ERR ACCESS-DENIED\n") == 0,
+        "LOGIN with wrong password denied");
+    close(fd);
+
+    fd = sock_connect();
+    cmd(fd, "USERNAME wronguser", b, sizeof b);
+    cmd(fd, "PASSWORD s3cret", b, sizeof b);
+    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "ERR ACCESS-DENIED\n") == 0,
+        "LOGIN with wrong username denied");
+    close(fd);
+
+    fd = sock_connect();
+    cmd(fd, "USERNAME upsmon", b, sizeof b);
+    cmd(fd, "PASSWORD s3cret", b, sizeof b);
+    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "OK\n") == 0,
+        "LOGIN with correct credentials accepted");
+    OKF(strcmp(cmd(fd, "PRIMARY ecoflow", b, sizeof b), "OK\n") == 0,
+        "PRIMARY with correct credentials accepted");
+    close(fd);
+
+    /* Credentials must not leak between connections. */
+    fd = sock_connect();
+    OKF(strcmp(cmd(fd, "LOGIN ecoflow", b, sizeof b), "ERR ACCESS-DENIED\n") == 0,
+        "a new connection starts unauthenticated");
+    close(fd);
+
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;
 }

@@ -149,9 +149,44 @@
         <span><label for="cfgLow">Low battery %</label>
           <input id="cfgLow" name="low_pct" type="number" min="1" max="99"></span>
       </div>
+      <div class="row">
+        <span><label for="cfgRating">Continuous AC rating (W)</label>
+          <input id="cfgRating" name="ac_rating_w" type="number" min="1" max="65535"
+                 style="width:8rem"></span>
+        <span><label for="cfgRtLow">Low runtime (s)</label>
+          <input id="cfgRtLow" name="runtime_low_s" type="number" min="0" max="65535"
+                 style="width:8rem"></span>
+      </div>
+      <p class="hint">Your unit's continuous AC output — 300&nbsp;W on a
+        River&nbsp;3. Published as <code>ups.realpower.nominal</code> and used as
+        the 100% reference for <code>ups.load</code>.</p>
+      <p class="hint">Low runtime is published as <code>battery.runtime.low</code>.
+        The bridge raises <code>LB</code> when <em>either</em> the charge drops to
+        the low-battery percentage <em>or</em> the remaining runtime falls to this
+        many seconds — under a heavy load the runtime gets there first.</p>
       <p class="hint">Clients connect with
         <code>upsc <span id="upscName">ecoflow</span>@<span id="upscIp">&lt;ip&gt;</span></code>.</p>
     </div>
+
+    <div class="box">
+      <h2>Login <span class="sub">for upsmon</span></h2>
+      <p class="hint" id="nutAuthState"></p>
+      <label for="nutUser">Username</label>
+      <input id="nutUser" name="nut_user" autocomplete="off">
+      <label for="nutPass">Password</label>
+      <input id="nutPass" name="nut_pass" type="password" autocomplete="new-password"
+             placeholder="unchanged">
+      <label class="chk" style="margin-top:.5rem"><input type="checkbox" id="nutNoAuth"
+        name="nut_noauth" value="1" style="width:auto"> No login required</label>
+      <p class="hint">These gate <code>LOGIN</code> and <code>PRIMARY</code> — the
+        commands <code>upsmon</code> uses to coordinate shutdown. Reading values
+        stays anonymous, as it is on a normal NUT server, because
+        <code>upsc</code> has no way to send credentials.</p>
+      <p class="hint">In <code>upsmon.conf</code>:<br>
+        <code>MONITOR <span id="monName">ecoflow</span>@<span id="monIp">&lt;ip&gt;</span> 1
+        <span id="monUser">upsmon</span> &lt;password&gt; slave</code></p>
+    </div>
+
     <p><button class="act primary" id="nutSave">Save &amp; reboot</button>
        <span class="hint" id="nutMsg"></span></p>
   </form>
@@ -359,6 +394,7 @@ async function refreshStatus() {
     $('#statusTable').innerHTML = rows;
     $('#setupWarn').hidden = !!j.configured;
     $('#upscIp').textContent = j.ip || '<ip>';
+    $('#monIp').textContent = j.ip || '<ip>';
     if (j.ota) {
       $('#otaBox').hidden = false;
       $('#fwNow').textContent = (j.fw_version || '?') + ' (' + (j.fw_date || '') + ')';
@@ -413,6 +449,17 @@ async function loadConfig() {
     $('#cfgUps').value = cfg.ups_name || '';
     $('#upscName').textContent = cfg.ups_name || 'ecoflow';
     $('#cfgPort').value = cfg.nut_port || 3493;
+    $('#cfgRating').value = cfg.ac_rating_w || 300;
+    $('#cfgRtLow').value = cfg.runtime_low_s ?? 300;
+    $('#nutUser').value = cfg.nut_user || 'upsmon';
+    $('#monUser').textContent = cfg.nut_user || 'upsmon';
+    $('#monName').textContent = cfg.ups_name || 'ecoflow';
+    $('#nutPass').placeholder = cfg.nut_auth_set ? 'unchanged' : 'none set';
+    $('#nutNoAuth').checked = !cfg.nut_auth_set;
+    $('#nutAuthState').textContent = cfg.nut_auth_set
+      ? 'A login is required for LOGIN / PRIMARY.'
+      : 'No login set — any client may LOGIN.';
+    syncNutAuth();
     $('#cfgLow').value = cfg.low_pct || 20;
     if (cfg.has_user_id) {
       $('#cfgUidState').textContent =
@@ -547,7 +594,26 @@ wireForm('#efForm', '#efSave', '#efMsg', fd => {
 });
 
 /* ---- NUT tab ---- */
-wireForm('#nutForm', '#nutSave', '#nutMsg');
+function syncNutAuth() {
+  const off = $('#nutNoAuth').checked;
+  $('#nutUser').disabled = off;
+  $('#nutPass').disabled = off;
+}
+$('#nutNoAuth').onchange = syncNutAuth;
+$('#cfgUps').oninput = () => { $('#monName').textContent = $('#cfgUps').value || 'ecoflow'; };
+$('#nutUser').oninput = () => { $('#monUser').textContent = $('#nutUser').value || 'upsmon'; };
+
+wireForm('#nutForm', '#nutSave', '#nutMsg', fd => {
+  if (fd.get('nut_noauth')) {
+    /* Clearing the login: the username/password fields are irrelevant. */
+    fd.delete('nut_pass');
+    return confirm('Allow any client to LOGIN without a password?');
+  }
+  if (!cfg.nut_auth_set && !fd.get('nut_pass')) {
+    $('#nutMsg').textContent = 'Set a password, or tick "No login required".';
+    return false;
+  }
+});
 
 /* ---- Wi-Fi tab ---- */
 function syncWifiMode() {

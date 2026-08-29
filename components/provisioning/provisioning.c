@@ -696,10 +696,12 @@ static esp_err_t h_admin_config(httpd_req_t *r)
     REQUIRE_AUTH(r);
     char def_ap[33];
     wifi_mgr_default_ap_ssid(def_ap, sizeof(def_ap));
-    char out[900];   /* ssid + ap_ssid + user + addressing + telegram */
+    char out[1000];  /* ssid + ap_ssid + users + addressing + telegram */
     snprintf(out, sizeof(out),
              "{\"ble_addr\":\"%s\",\"ble_name\":\"%s\",\"has_user_id\":%s,"
              "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
+             "\"nut_user\":\"%s\",\"nut_auth_set\":%s,"
+             "\"ac_rating_w\":%u,\"runtime_low_s\":%u,"
              "\"wifi_mode\":\"%s\",\"wifi_ssid\":\"%s\",\"has_wifi_pass\":%s,"
              "\"ap_ssid\":\"%s\",\"has_ap_pass\":%s,\"default_ap_ssid\":\"%s\","
              "\"auth_user\":\"%s\",\"auth_set\":%s,"
@@ -710,6 +712,8 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              P.cfg->ble_addr, P.cfg->ble_name,
              P.cfg->ef_user_id[0] ? "true" : "false",
              P.cfg->ups_name, P.cfg->nut_port, P.cfg->low_pct, P.cfg->poll_ms,
+             P.cfg->nut_user, P.cfg->nut_auth_set ? "true" : "false",
+             P.cfg->ac_rating_w, P.cfg->runtime_low_s,
              P.cfg->wifi_mode == APP_WIFI_AP ? "ap" : "station",
              P.cfg->wifi_ssid, P.cfg->wifi_pass[0] ? "true" : "false",
              P.cfg->ap_ssid[0] ? P.cfg->ap_ssid : def_ap,
@@ -864,6 +868,24 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         if (form_get(body, "low_pct", v, sizeof(v)) && atoi(v) > 0) {
             P.pending.low_pct = (uint8_t)atoi(v);
         }
+        if (form_get(body, "ac_rating_w", v, sizeof(v)) && atoi(v) > 0) {
+            P.pending.ac_rating_w = (uint16_t)atoi(v);
+        }
+        if (form_get(body, "runtime_low_s", v, sizeof(v)) && atoi(v) >= 0) {
+            P.pending.runtime_low_s = (uint16_t)atoi(v);
+        }
+        if (form_get(body, "nut_user", v, sizeof(v)) && v[0]) {
+            strlcpy(P.pending.nut_user, v, sizeof(P.pending.nut_user));
+        }
+        /* Blank keeps the stored password; the checkbox clears it. */
+        if (form_get(body, "nut_pass", v, sizeof(v)) && v[0]) {
+            app_config_set_nut_password(&P.pending, v);
+        }
+        if (form_get(body, "nut_noauth", v, sizeof(v)) && v[0] == '1') {
+            app_config_set_nut_password(&P.pending, "");
+        }
+        memset(v, 0, sizeof(v));
+        memset(body, 0, len);
         free(body);
 
     /* ---- Wi-Fi (station or AP) ---- */
