@@ -19,7 +19,8 @@ themselves down cleanly on a mains failure.
 > ## 🚧 Work in progress — never run against an Elite 10
 >
 > A fork of [`esp32-nut-ecoflow`](https://github.com/thatguy-za/esp32-nut-ecoflow),
-> retargeted to BLUETTI. Everything vendor-independent — NUT server, Wi-Fi
+> retargeted to BLUETTI. Releases here start at v0.1.0; anything earlier belongs
+> to the EcoFlow project and lives in that repo. Everything vendor-independent — NUT server, Wi-Fi
 > setup, admin page, OTA, alerts — carries over and works.
 >
 > The BLUETTI BLE layer is **fully implemented but unverified**: the key
@@ -64,14 +65,11 @@ than guessed.
 
 ## Flash it
 
-Open the **[web installer](https://thatguy-za.github.io/esp32-nut-bluetti/)** in
-Chrome, Edge, or Opera on a desktop, plug in an **ESP32-S3 (≥4 MB flash)**, and
-click **Install**. It's an [ESP Web Tools](https://esphome.github.io/esp-web-tools/)
-button pointing at the latest release — the same one-click flasher ESPHome uses.
-
-Or on **[web.esphome.io](https://web.esphome.io)**: *Connect*, then choose
-`esp32-nut-bluetti-<version>-factory.bin` from the
-[latest release](https://github.com/thatguy-za/esp32-nut-bluetti/releases).
+Download `esp32-nut-bluetti-<version>-factory.bin` from the
+[latest release](https://github.com/thatguy-za/esp32-nut-bluetti/releases), then
+open **[web.esphome.io](https://web.esphome.io)** in Chrome, Edge, or Opera on a
+desktop, plug in an **ESP32-S3 (≥4 MB flash)**, hit *Connect* and choose that
+file. It flashes at offset `0`.
 
 Only this first flash needs a cable. After that, updates go over the network from
 the [admin page](#admin-page). Offline / Linux / `esptool` instructions are in

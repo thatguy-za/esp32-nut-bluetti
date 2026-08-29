@@ -44,10 +44,11 @@ menu "BLUETTI NUT Bridge"
 
     config BLUETTI_BLE_NAME
         string "BLUETTI BLE advertised name (fallback)"
-        default "EF-R3"
+        default "EL10"
         help
             Used when BLUETTI_BLE_ADDRESS is empty: connect to the first
-            advertiser whose name starts with this prefix. River 3 is "EF-R3".
+            advertiser whose name starts with this prefix. The Elite 10
+            advertises as "EL10" followed by digits.
 
 
     config BLUETTI_POLL_INTERVAL_MS
@@ -75,11 +76,11 @@ menu "BLUETTI NUT Bridge"
 
     config NUT_AC_RATING_W
         int "Default continuous AC output rating (W)"
-        default 300
+        default 200
         help
             Used as the 100% reference for ups.load and reported as
-            ups.realpower.nominal. The River 3's continuous AC rating is
-            300 W; set your unit's figure in the admin page.
+            ups.realpower.nominal. The Elite 10's continuous AC rating is
+            200 W; set your unit's figure in the admin page.
 
     config NUT_RUNTIME_LOW_S
         int "Default battery.runtime.low (seconds)"

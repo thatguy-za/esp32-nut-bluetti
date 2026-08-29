@@ -11,34 +11,21 @@ them after downloading.
 Use a Chromium browser (Chrome / Edge / Opera) on a desktop — flashing needs
 Web Serial, which Firefox and Safari don't support.
 
-## Option A — hosted web installer (easiest)
-
-<https://thatguy-za.github.io/esp32-nut-bluetti/> — a one-click
-[ESP Web Tools](https://esphome.github.io/esp-web-tools/) **Install** button that
-pulls the current release. Nothing to download or host.
-
-## Option B — web.esphome.io
+## Option A — web.esphome.io (easiest)
 
 **Connect**, pick the serial port, then choose `esp32-nut-bluetti-<version>-factory.bin`
 from the [release](https://github.com/thatguy-za/esp32-nut-bluetti/releases).
 
-## Option C — Espressif's esptool-js (no hosting)
+## Option B — Espressif's esptool-js (no hosting)
 
 1. <https://espressif.github.io/esptool-js/> → **Connect**, pick the port.
 2. Add `esp32-nut-bluetti-<version>-factory.bin` at **Flash Address `0x0`**, **Program**.
 
-## Option D — esptool on the command line
+## Option C — esptool on the command line
 
 ```bash
 esptool --chip esp32s3 -b 460800 write-flash 0x0 esp32-nut-bluetti-<version>-factory.bin
 ```
-
-## Self-hosting the install button
-
-The [`dist/`](.) folder has `index.html` + `manifest.json`. Drop the release's
-factory image beside them as `esp32-nut-bluetti-factory.bin` (the name
-`manifest.json` expects) and serve the folder from any static host to get your
-own copy of Option A.
 
 ## First boot
 

@@ -29,7 +29,7 @@
   .modes label:has(input:checked) { border-color: #2563eb; background: #2563eb1a; }
   .modes input { width: auto; margin-right: .4rem; }
   .modes .hint { margin: .2rem 0 0; }
-  #status { margin-top: 1rem; padding: .75rem; border-radius: .5rem;
+  #status { margin-bottom: 1rem; padding: .75rem; border-radius: .5rem;
             background: #8882; display: none; white-space: pre-wrap; }
   #status.show { display: block; }
   .ok { background: #16a34a33 !important; }
@@ -40,6 +40,10 @@
 <body>
 <h1>BLUETTI NUT Bridge</h1>
 <p class="sub" id="sub">Step 1 of 2 — get the bridge onto a network.</p>
+
+<!-- Above the form: the closing message tells you to leave this network, so
+     it must not be somewhere you have to scroll to find. -->
+<div id="status"></div>
 
 <form id="f">
   <!-- ---------- step 1: network ---------- -->
@@ -101,7 +105,6 @@
   </div>
 </form>
 
-<div id="status"></div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -109,6 +112,9 @@ const statusEl = $('#status');
 function show(html, cls) {
   statusEl.innerHTML = html;
   statusEl.className = 'show' + (cls ? ' ' + cls : '');
+  /* The form is taller than most phone screens, so being at the top of the
+     document is not enough — put it back in view. */
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 async function j(url, opts) {
