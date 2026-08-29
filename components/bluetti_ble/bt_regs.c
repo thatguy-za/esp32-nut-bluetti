@@ -117,9 +117,26 @@ int bt_regs_apply(uint16_t start_addr, const uint8_t *data, size_t len,
     if ((v = reg(start_addr, data, len, REG_AC_INPUT_VOLTAGE)) >= 0) {
         /* Voltage corroborates the mains flag: a plugged-in but idle unit
          * can report 0 W while still showing line voltage. */
+        st->ac_in_volts = (float)v / 10.0f;
         if (v > 0) {
             st->ac_input_present = true;
         }
+        matched++;
+    }
+    if ((v = reg(start_addr, data, len, REG_AC_INPUT_CURRENT)) >= 0) {
+        st->ac_in_amps = (float)v / 10.0f;
+        matched++;
+    }
+    if ((v = reg(start_addr, data, len, REG_AC_OUTPUT_VOLTAGE)) >= 0) {
+        st->ac_out_volts = (float)v / 10.0f;
+        matched++;
+    }
+    if ((v = reg(start_addr, data, len, REG_CTRL_AC)) >= 0) {
+        st->ac_switch = v ? 1 : 0;
+        matched++;
+    }
+    if ((v = reg(start_addr, data, len, REG_CTRL_DC)) >= 0) {
+        st->dc_switch = v ? 1 : 0;
         matched++;
     }
 

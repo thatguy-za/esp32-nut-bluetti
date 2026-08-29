@@ -13,6 +13,10 @@
 #define REG_TIME_REMAINING   104
 #define REG_AC_OUTPUT_POWER  142
 #define REG_AC_INPUT_POWER   146
+#define REG_AC_INPUT_VOLTAGE 1314
+#define REG_AC_INPUT_CURRENT 1315
+#define REG_CTRL_AC          2011
+#define REG_CTRL_DC          2012
 
 static int fails;
 #define OKF(c, ...) do { bool _ok = (c); printf(_ok ? "ok:   " : "FAIL: "); \
@@ -106,6 +110,38 @@ int main(void)
     int rt = reg(start, d, sizeof(d), REG_TIME_REMAINING);
     OKF(rt == 0, "runtime register can read zero");
     OKF((rt > 0 ? rt : -1) == -1, "zero runtime maps to unknown, not 0 minutes");
+
+    /* Voltage and current are 1-decimal fixed point: 2301 is 230.1 V, so a
+     * raw pass-through would report a unit at ten times its real mains. */
+    uint8_t v[8];
+    memset(v, 0, sizeof(v));
+    const uint16_t vstart = 1314;
+    put(v, vstart, REG_AC_INPUT_VOLTAGE, 2301);
+    put(v, vstart, REG_AC_INPUT_CURRENT, 13);
+    float volts = (float)reg(vstart, v, sizeof(v), REG_AC_INPUT_VOLTAGE) / 10.0f;
+    float amps  = (float)reg(vstart, v, sizeof(v), REG_AC_INPUT_CURRENT) / 10.0f;
+    OKF(volts > 230.0f && volts < 230.2f, "input voltage scales to %.1f V", volts);
+    OKF(amps > 1.29f && amps < 1.31f, "input current scales to %.1f A", amps);
+
+    /* Line voltage with zero input power still means mains present: a
+     * plugged-in unit that is full and idle draws nothing. */
+    put(p, pstart, REG_AC_INPUT_POWER, 0);
+    bool mains = reg(pstart, p, sizeof(p), REG_AC_INPUT_POWER) > 0 ||
+                 reg(vstart, v, sizeof(v), REG_AC_INPUT_VOLTAGE) > 0;
+    OKF(mains, "line voltage with 0 W input still reads as on line");
+
+    /* Output switches are booleans, and absent must stay distinct from off
+     * so an unread block does not publish an outlet as switched off. */
+    uint8_t c[4];
+    memset(c, 0, sizeof(c));
+    const uint16_t cstart = 2011;
+    put(c, cstart, REG_CTRL_AC, 1);
+    put(c, cstart, REG_CTRL_DC, 0);
+    int acsw = reg(cstart, c, sizeof(c), REG_CTRL_AC);
+    int dcsw = reg(cstart, c, sizeof(c), REG_CTRL_DC);
+    OKF(acsw == 1, "AC outlet reads on");
+    OKF(dcsw == 0, "DC outlet reads off");
+    OKF(reg(cstart, c, sizeof(c), 2013) == -1, "unread switch stays absent, not off");
 
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;

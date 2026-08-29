@@ -55,6 +55,12 @@ typedef struct {
     float    battery_temp_c;
     int      design_capacity_wh;
 
+    float    ac_in_volts;       /* -1 = n/a */
+    float    ac_in_amps;        /* -1 = n/a */
+    float    ac_out_volts;      /* -1 = n/a */
+    int      ac_switch;         /* -1 = n/a, else 0/1 */
+    int      dc_switch;         /* -1 = n/a, else 0/1 */
+
     bool     ups_mode_on;       /* the unit's UPS / backup mode           */
     uint32_t error_code;
 

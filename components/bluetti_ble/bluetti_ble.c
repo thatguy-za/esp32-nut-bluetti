@@ -703,6 +703,11 @@ int bluetti_ble_start(const bluetti_ble_config_t *config,
     b.state.minutes_remaining = BLUETTI_UNKNOWN_I;
     b.state.ac_in_watts = BLUETTI_UNKNOWN_F;
     b.state.ac_out_watts = BLUETTI_UNKNOWN_F;
+    b.state.ac_in_volts = BLUETTI_UNKNOWN_F;
+    b.state.ac_in_amps = BLUETTI_UNKNOWN_F;
+    b.state.ac_out_volts = BLUETTI_UNKNOWN_F;
+    b.state.ac_switch = BLUETTI_UNKNOWN_I;
+    b.state.dc_switch = BLUETTI_UNKNOWN_I;
     xSemaphoreGive(b.lock);
 
     b.have_target_addr = false;
