@@ -25,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # tags, so esp_app_desc.version = git describe
       - name: idf.py build
         uses: espressif/esp-idf-ci-action@v1
         with:
