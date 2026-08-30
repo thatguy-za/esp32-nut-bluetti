@@ -98,4 +98,13 @@ menu "BLUETTI NUT Bridge"
         int "battery.charge.low threshold (%)"
         default 20
 
+    config STATUS_LED_GPIO
+        int "Status LED GPIO (addressable WS2812; -1 to disable)"
+        default 48
+        help
+            The single addressable LED on most ESP32-S3 dev boards is on
+            GPIO 48; some use GPIO 38. Set to -1 for a board with no such
+            LED, or one wired to a plain single-colour LED, which this
+            cannot drive.
+
 endmenu

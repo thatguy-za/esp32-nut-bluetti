@@ -67,6 +67,9 @@ typedef struct {
     bool     auth_set;       /* a password has been chosen                 */
 
     bool     provisioned;    /* set true once Wi-Fi setup has succeeded    */
+
+    /* Board status LED (see components/led_status). */
+    bool     led_enabled;    /* user toggle; the pin itself may not exist */
 } app_config_t;
 
 /* This board's default name, "esp-nut-bluetti-XXXX" (XXXX = last two

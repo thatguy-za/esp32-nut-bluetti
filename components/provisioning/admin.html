@@ -346,6 +346,17 @@
   </div>
 
   <div class="box">
+    <h2>Status LED</h2>
+    <p>The onboard LED shows the bridge's state at a glance:
+      <b style="color:#dc2626">red</b> while starting up,
+      <b style="color:#16a34a">green</b> once it is talking to the BLUETTI
+      unit over Bluetooth.</p>
+    <label class="chk"><input type="checkbox" id="ledOn"> LED on</label>
+    <p class="hint" id="ledMsg">A board without an addressable LED stays
+      dark whatever this is set to.</p>
+  </div>
+
+  <div class="box">
     <h2>Restart</h2>
     <p>Reboot the bridge. Settings are kept.</p>
     <button class="act" id="reboot">Reboot</button>
@@ -439,6 +450,10 @@ async function refreshStatus() {
     }
     $('#upscIp').textContent = j.ip || '<ip>';
     $('#monIp').textContent = j.ip || '<ip>';
+    /* Do not fight the user mid-click: only sync when the box is idle. */
+    if (document.activeElement !== $('#ledOn')) {
+      $('#ledOn').checked = !!j.led;
+    }
     if (j.ota) {
       $('#otaBox').hidden = false;
       $('#otaFileBox').hidden = false;
@@ -823,6 +838,21 @@ wireForm('#wifiForm', '#wifiSave', '#wifiMsg', fd => {
 });
 
 /* ---- maintenance ---- */
+$('#ledOn').onchange = async (e) => {
+  const on = e.target.checked;
+  $('#ledMsg').textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/led', {
+      method: 'POST', body: new URLSearchParams({ on: on ? 1 : 0 }),
+    });
+    if (bounceIfSignedOut(r)) return;
+    if (!r.ok) throw new Error((await r.text()).trim() || 'HTTP ' + r.status);
+    $('#ledMsg').textContent = on ? 'LED on.' : 'LED off.';
+  } catch (err) {
+    e.target.checked = !on;   /* put it back */
+    $('#ledMsg').textContent = 'Could not change it: ' + err.message;
+  }
+};
 $('#reboot').onclick = () => {
   if (!confirm('Reboot the bridge?')) return;
   $('#reboot').disabled = true;

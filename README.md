@@ -142,6 +142,12 @@ the [admin page](#admin-page). Offline / Linux / `esptool` instructions are in
 You also need a Wi-Fi network the monitoring hosts can reach, and — on most dev
 boards — the BOOT button on GPIO0 for the config wipe.
 
+**Status LED.** If the board has an addressable WS2812 LED (GPIO 48 on most
+ESP32-S3 dev boards, sometimes 38 — set `STATUS_LED_GPIO`), it shows red while
+the bridge is starting and green once it is connected to the BLUETTI unit over
+Bluetooth. A **Status LED** toggle on the Maintenance tab turns it off. A board
+with a plain single-colour LED, or none, is unaffected — set the GPIO to -1.
+
 ## Setting it up
 
 Setup is two stages: get the bridge on a network, then point it at your BLUETTI.
@@ -316,6 +322,8 @@ published: nothing would honour it.
 
 - **NUT server** — upsd-compatible, read-only; verified against a third-party
   NUT client (`LIST UPS/VAR`, `GET VAR`, `upsmon` primary handshake, …).
+- **Status LED** — red while starting, green once linked to the unit over BLE;
+  a Maintenance-tab toggle turns it off. Addressable WS2812 only.
 - **Provisioning** — two-step captive portal (network, then admin login), with
   BLUETTI + NUT set from the admin page afterwards; config in NVS, BOOT-button /
   web reset.

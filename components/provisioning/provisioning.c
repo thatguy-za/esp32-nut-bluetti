@@ -25,6 +25,7 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "ota_github.h"
+#include "led_status.h"
 #include "esp_app_desc.h"
 
 #include "wifi_mgr.h"
@@ -648,6 +649,7 @@ static esp_err_t h_notify_test(httpd_req_t *r)
 }
 
 static esp_err_t h_admin_reboot(httpd_req_t *r);
+static esp_err_t h_led_toggle(httpd_req_t *r);
 static esp_err_t h_factory_reset(httpd_req_t *r);
 #if CONFIG_ENABLE_WEB_OTA
 static esp_err_t h_ota(httpd_req_t *r);
@@ -661,7 +663,7 @@ static esp_err_t start_httpd(bool captive)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 24;
+    c.max_uri_handlers = 26;
     c.stack_size = 8192;
     if (captive) {
         c.uri_match_fn = httpd_uri_match_wildcard;
@@ -703,6 +705,7 @@ static esp_err_t start_httpd(bool captive)
         reg(P.httpd, "/api/ble-scan", HTTP_GET, h_ble_scan);
         reg(P.httpd, "/api/wifi-scan", HTTP_GET, h_wifi_scan);
         reg(P.httpd, "/api/reboot", HTTP_POST, h_admin_reboot);
+        reg(P.httpd, "/api/led", HTTP_POST, h_led_toggle);
         reg(P.httpd, "/api/factory-reset", HTTP_POST, h_factory_reset);
 #if CONFIG_ENABLE_WEB_OTA
         reg(P.httpd, "/api/ota", HTTP_POST, h_ota);
@@ -789,7 +792,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
 #else
     const bool ota = false;
 #endif
-    char out[760];
+    char out[800];
     snprintf(out, sizeof(out),
              "{\"wifi_mode\":\"%s\",\"network\":\"%s\",\"ip\":\"%s\","
              "\"addressing\":\"%s\",\"gateway\":\"%s\",\"dns\":\"%s\","
@@ -799,7 +802,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              "\"ble_target\":\"%s\",\"ble_connected\":%s,"
              "\"telemetry_valid\":%s,\"battery_pct\":%d,"
              "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\","
-             "\"configured\":%s}",
+             "\"led\":%s,\"configured\":%s}",
              ap ? "ap" : "station",
              ap ? P.cfg->ap_ssid : P.cfg->wifi_ssid, ip,
              ap ? "ap" : (P.cfg->use_static_ip ? "static" : "dhcp"), gw, dns,
@@ -813,6 +816,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              have && st.ac_input_present ? "true" : "false",
              have && st.charging ? "true" : "false",
              have && st.model[0] ? st.model : "",
+             led_status_enabled() ? "true" : "false",
              P.cfg->ble_addr[0] ? "true" : "false");
     return send_json(r, out);
 }
@@ -1152,6 +1156,36 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
     send_json(r, "{\"ok\":true}");
     xTaskCreate(reboot_after_delay, "reboot", 2048, NULL, 5, NULL);
     return ESP_OK;
+}
+
+static esp_err_t h_led_toggle(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+
+    int len = r->content_len;
+    if (len <= 0 || len > 32) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
+    }
+    char body[33];
+    int got = 0;
+    while (got < len) {
+        int k = httpd_req_recv(r, body + got, len - got);
+        if (k <= 0) return httpd_resp_send_500(r);
+        got += k;
+    }
+    body[len] = '\0';
+
+    char v[8] = "";
+    if (!form_get(body, "on", v, sizeof(v))) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "missing 'on'");
+    }
+    bool on = (v[0] == '1' || v[0] == 't');
+
+    led_status_enable(on);
+    P.cfg->led_enabled = on;
+    app_config_save(P.cfg);          /* survives a reboot */
+    ESP_LOGI(TAG, "status LED %s", on ? "on" : "off");
+    return send_json(r, on ? "{\"led\":true}" : "{\"led\":false}");
 }
 
 static esp_err_t h_admin_reboot(httpd_req_t *r)

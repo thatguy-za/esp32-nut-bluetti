@@ -14,12 +14,13 @@ static const char *TAG = "app_config";
 #define CFG_NS      "efnut"
 #define CFG_KEY     "cfg"
 /*
- * 2: dropped the advertised-name targeting fallback, which shrank the
- * struct. An older blob is both the wrong size and the wrong version, so
- * it is discarded rather than reinterpreted and the device comes up
- * unprovisioned.
+ * Bumped whenever app_config_t's layout changes. A stored blob of a
+ * different version (or a different size) is discarded and the device
+ * comes up unprovisioned — there is no migration.
+ *   2: dropped the advertised-name BLE targeting fallback.
+ *   3: added the status-LED settings.
  */
-#define CFG_VERSION 2u
+#define CFG_VERSION 3u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -59,6 +60,7 @@ void app_config_defaults(app_config_t *cfg)
     strlcpy(cfg->auth_user, "admin", sizeof(cfg->auth_user));
     cfg->auth_set = false;           /* setup must choose a password */
     cfg->provisioned = false;
+    cfg->led_enabled = true;
 
     /* A blank SSID from Kconfig means "must provision". */
     if (strcmp(cfg->wifi_ssid, "myssid") == 0) {

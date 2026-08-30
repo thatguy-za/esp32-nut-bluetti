@@ -32,6 +32,7 @@
 #include "nut_server.h"
 #include "bluetti_ble.h"
 #include "notify.h"
+#include "led_status.h"
 
 static const char *TAG = "app";
 
@@ -179,6 +180,9 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
 
 static void bluetti_cb(const bluetti_state_t *state, void *user)
 {
+    /* First decoded frame means the BLE link is up and useful — turn the
+     * LED green. staleness_task takes it back to red if the link drops. */
+    led_status_set(LED_STATE_LINKED);
     publish_nut_from_bluetti(state);
 }
 
@@ -190,6 +194,8 @@ static void staleness_task(void *arg)
         bool have = bluetti_ble_get_state(&st);
         bool stale = !have ||
                      (esp_timer_get_time() - st.updated_us) > STALE_AFTER_US;
+        led_status_set(bluetti_ble_connected() && !stale
+                           ? LED_STATE_LINKED : LED_STATE_BOOT);
         if (stale) {
             const char *s = bluetti_ble_connected() ? "OL WAIT" : "OFF";
             nut_server_set_status(s);
@@ -289,6 +295,10 @@ void app_main(void)
 
     app_config_t *cfg = &s_cfg;
     app_config_load(cfg);
+
+    /* Up as early as possible so the red "booting" light is on for the
+     * whole startup, not just the tail of it. */
+    led_status_init(CONFIG_STATUS_LED_GPIO, cfg->led_enabled);
 
     ESP_ERROR_CHECK(wifi_mgr_init());
 

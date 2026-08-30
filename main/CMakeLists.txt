@@ -13,4 +13,5 @@ idf_component_register(
         nut_server
         bluetti_ble
         notify
+        led_status
 )
