@@ -69,6 +69,7 @@
   <button data-tab="wifi">Wi-Fi</button>
   <button data-tab="notify">Alerts</button>
   <button data-tab="maint">Maintenance</button>
+  <button id="signout" style="margin-left:auto">Sign out</button>
 </nav>
 
 <div id="setupWarn" class="warn" hidden>
@@ -304,24 +305,27 @@
 <!-- ---------------- Maintenance ---------------- -->
 <section id="maint">
   <div class="box" id="otaBox" hidden>
-    <h2>Firmware update</h2>
-    <p>Running <code id="fwNow">?</code>. A new build is written to the spare
-      slot and the device reboots. If it won't come up, the bootloader rolls
-      back to this one.</p>
-
-    <h3 style="font-size:.88rem;margin:.9rem 0 .3rem">From GitHub</h3>
+    <h2>Update from GitHub <span class="sub">no download needed</span></h2>
+    <p>Running <code id="fwNow">?</code>. Checks this project's releases and
+      installs the one you pick.</p>
     <div class="row">
       <button type="button" class="act" id="ghCheck">Check for updates</button>
       <select id="ghSel" style="max-width:14rem" hidden></select>
       <button type="button" class="act danger" id="ghGo" hidden>Install</button>
     </div>
     <progress id="ghProg" value="0" max="100" style="width:100%;display:none"></progress>
-    <p class="hint" id="ghMsg">Downloads the release straight from
-      <code>github.com</code> over HTTPS. The image is not signed — anyone who
-      can intercept that connection, or who controls the repository, controls
-      what gets installed.</p>
+    <p class="hint" id="ghMsg">Older releases are listed too, so you can go back
+      if a build misbehaves.</p>
+    <p class="hint">The image is downloaded over HTTPS but is <b>not signed</b>:
+      anyone who can intercept that connection, or who controls the repository,
+      controls what gets installed.</p>
+  </div>
 
-    <h3 style="font-size:.88rem;margin:1.1rem 0 .3rem">From a file</h3>
+  <div class="box" id="otaFileBox" hidden>
+    <h2>Update from a file <span class="sub">no internet needed</span></h2>
+    <p>Upload an <code>esp32-nut-bluetti-&lt;version&gt;.bin</code> you already
+      have. Use this when the bridge has no route out, or to install a build
+      that was never released.</p>
     <div class="row">
       <input type="file" id="fwFile" accept=".bin,application/octet-stream" style="max-width:24rem">
     </div>
@@ -332,6 +336,13 @@
     </div>
     <progress id="fwProg" value="0" max="100" style="width:100%;display:none"></progress>
     <p class="hint" id="fwMsg"></p>
+  </div>
+
+  <div class="box">
+    <h2>Either way</h2>
+    <p class="hint">The new build is written to the spare slot and the device
+      reboots. If it will not come up, the bootloader rolls back to the one
+      running now.</p>
   </div>
 
   <div class="box">
@@ -372,6 +383,22 @@
 
 <script>
 const $ = s => document.querySelector(s);
+
+/* The session can lapse or be cleared by a reboot. Any 401 means the
+   cookie is no longer good, so drop back to the login form rather than
+   leaving a page that silently stops updating. */
+function bounceIfSignedOut(r) {
+  if (r && r.status === 401) {
+    location.replace('/');
+    return true;
+  }
+  return false;
+}
+
+$('#signout').onclick = async () => {
+  try { await fetch('/api/logout', { method: 'POST' }); } catch (e) {}
+  location.replace('/');
+};
 const tabs = document.querySelectorAll('nav button');
 tabs.forEach(b => b.onclick = () => {
   tabs.forEach(x => x.classList.toggle('active', x === b));
@@ -394,7 +421,9 @@ const STATUS_LABELS = {
 };
 async function refreshStatus() {
   try {
-    const j = await (await fetch('/api/status')).json();
+    const res = await fetch('/api/status');
+    if (bounceIfSignedOut(res)) return;
+    const j = await res.json();
     lastStatus = j;
     const rows = Object.entries(j)
       .filter(([k]) => k in STATUS_LABELS)
@@ -412,6 +441,7 @@ async function refreshStatus() {
     $('#monIp').textContent = j.ip || '<ip>';
     if (j.ota) {
       $('#otaBox').hidden = false;
+      $('#otaFileBox').hidden = false;
       $('#fwNow').textContent = (j.fw_version || '?') + ' (' + (j.fw_date || '') + ')';
     }
   } catch (e) { /* keep last */ }

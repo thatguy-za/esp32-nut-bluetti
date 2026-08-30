@@ -22,9 +22,10 @@
 #include "esp_system.h"
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
+#include "esp_random.h"
+#include "esp_timer.h"
 #include "ota_github.h"
 #include "esp_app_desc.h"
-#include "mbedtls/base64.h"
 
 #include "wifi_mgr.h"
 #include "bluetti_ble.h"
@@ -36,6 +37,8 @@ extern const char portal_html_start[] asm("_binary_portal_html_start");
 extern const char portal_html_end[]   asm("_binary_portal_html_end");
 extern const char admin_html_start[]  asm("_binary_admin_html_start");
 extern const char admin_html_end[]    asm("_binary_admin_html_end");
+extern const char login_html_start[]  asm("_binary_login_html_start");
+extern const char login_html_end[]    asm("_binary_login_html_end");
 
 #define AP_IP "192.168.4.1"
 
@@ -153,63 +156,204 @@ static esp_err_t send_json(httpd_req_t *r, const char *json)
     return httpd_resp_sendstr(r, json);
 }
 
-/* ---- admin authentication (HTTP Basic) ---------------------------- *
- * There is no TLS here, so this keeps casual users off the admin page
- * rather than defending against someone sniffing the LAN. The password
- * itself is stored only as a salted SHA-256.                          */
+/* ---- admin authentication (cookie sessions) ------------------------ *
+ * A signed-in browser carries an opaque token in a cookie; the password
+ * is checked once, at the login form, and stored only as a salted
+ * SHA-256. Sessions live in RAM, so a reboot signs everyone out.
+ *
+ * There is no TLS here, so this keeps casual users out of the settings
+ * rather than defending against someone reading the LAN — the cookie
+ * crosses the network in clear, exactly as the old Basic header did. */
+
+#define SESSION_SLOTS   4
+#define SESSION_TOKLEN  32                     /* hex chars */
+#define SESSION_IDLE_US (8ULL * 3600 * 1000000)
+
+static struct {
+    char    tok[SESSION_TOKLEN + 1];
+    int64_t last_us;
+} S[SESSION_SLOTS];
+
+/* Constant-time compare, so a token cannot be recovered a byte at a time
+ * by timing the response. */
+static bool tok_eq(const char *a, const char *b)
+{
+    unsigned diff = 0;
+    for (int i = 0; i < SESSION_TOKLEN; i++) {
+        diff |= (unsigned char)a[i] ^ (unsigned char)b[i];
+        if (!a[i] || !b[i]) {
+            return false;
+        }
+    }
+    return diff == 0;
+}
+
+static void session_new(char out[SESSION_TOKLEN + 1])
+{
+    uint8_t raw[SESSION_TOKLEN / 2];
+    esp_fill_random(raw, sizeof(raw));
+    for (size_t i = 0; i < sizeof(raw); i++) {
+        snprintf(out + i * 2, 3, "%02x", raw[i]);
+    }
+    out[SESSION_TOKLEN] = '\0';
+
+    /* Take a free slot, or the least recently used one — a handful of
+     * browsers is the realistic ceiling, and evicting the stalest is
+     * better than refusing to sign in. */
+    int slot = 0;
+    for (int i = 0; i < SESSION_SLOTS; i++) {
+        if (S[i].tok[0] == '\0') { slot = i; break; }
+        if (S[i].last_us < S[slot].last_us) { slot = i; }
+    }
+    memcpy(S[slot].tok, out, SESSION_TOKLEN + 1);
+    S[slot].last_us = esp_timer_get_time();
+}
+
+/* Pull our cookie out of the Cookie header, which may hold several. */
+static bool cookie_token(httpd_req_t *r, char out[SESSION_TOKLEN + 1])
+{
+    char hdr[256];
+    if (httpd_req_get_hdr_value_str(r, "Cookie", hdr, sizeof(hdr)) != ESP_OK) {
+        return false;
+    }
+    const char *p = strstr(hdr, "sid=");
+    /* Must be at the start or after "; ", so "othersid=" cannot match. */
+    while (p && p != hdr && !(p[-1] == ' ' || p[-1] == ';')) {
+        p = strstr(p + 1, "sid=");
+    }
+    if (!p) {
+        return false;
+    }
+    p += 4;
+    size_t n = strspn(p, "0123456789abcdef");
+    if (n != SESSION_TOKLEN) {
+        return false;
+    }
+    memcpy(out, p, SESSION_TOKLEN);
+    out[SESSION_TOKLEN] = '\0';
+    return true;
+}
 
 static bool auth_ok(httpd_req_t *r)
 {
     if (!P.cfg || !P.cfg->auth_set) {
         return true;                       /* not configured yet */
     }
-    size_t len = httpd_req_get_hdr_value_len(r, "Authorization");
-    if (len == 0 || len > 400) {
+    char tok[SESSION_TOKLEN + 1];
+    if (!cookie_token(r, tok)) {
         return false;
     }
-    char hdr[416];
-    if (httpd_req_get_hdr_value_str(r, "Authorization", hdr, sizeof(hdr)) != ESP_OK) {
-        return false;
+    int64_t now = esp_timer_get_time();
+    for (int i = 0; i < SESSION_SLOTS; i++) {
+        if (S[i].tok[0] && tok_eq(S[i].tok, tok)) {
+            if (now - S[i].last_us > (int64_t)SESSION_IDLE_US) {
+                memset(&S[i], 0, sizeof(S[i]));      /* idled out */
+                return false;
+            }
+            S[i].last_us = now;                      /* keep it alive */
+            return true;
+        }
     }
-    if (strncasecmp(hdr, "Basic ", 6) != 0) {
-        return false;
-    }
-
-    unsigned char dec[160];
-    size_t dlen = 0;
-    if (mbedtls_base64_decode(dec, sizeof(dec) - 1, &dlen,
-                              (const unsigned char *)hdr + 6,
-                              strlen(hdr + 6)) != 0) {
-        return false;
-    }
-    dec[dlen] = '\0';
-
-    char *colon = strchr((char *)dec, ':');
-    if (!colon) {
-        return false;
-    }
-    *colon = '\0';
-    bool ok = strcmp((char *)dec, P.cfg->auth_user) == 0 &&
-              app_config_check_password(P.cfg, colon + 1);
-    memset(dec, 0, sizeof(dec));           /* don't leave it on the stack */
-    return ok;
+    return false;
 }
 
+static void session_drop(httpd_req_t *r)
+{
+    char tok[SESSION_TOKLEN + 1];
+    if (!cookie_token(r, tok)) {
+        return;
+    }
+    for (int i = 0; i < SESSION_SLOTS; i++) {
+        if (S[i].tok[0] && tok_eq(S[i].tok, tok)) {
+            memset(&S[i], 0, sizeof(S[i]));
+        }
+    }
+}
+
+/*
+ * API callers get a bare 401 and the page reloads into the login form.
+ * Serving HTML here instead would put a login page inside whatever the
+ * fetch was expecting.
+ */
 static esp_err_t send_401(httpd_req_t *r)
 {
     httpd_resp_set_status(r, "401 Unauthorized");
-    httpd_resp_set_hdr(r, "WWW-Authenticate",
-                       "Basic realm=\"BLUETTI NUT Bridge\", charset=\"UTF-8\"");
     httpd_resp_set_type(r, "text/plain");
-    return httpd_resp_sendstr(r, "Authentication required");
+    return httpd_resp_sendstr(r, "Sign in required");
 }
 
-/* Wrap a handler so it 401s unless the request carries valid credentials. */
+/* Wrap a handler so it 401s unless the request carries a live session. */
 #define REQUIRE_AUTH(req) do {            \
         if (!auth_ok(req)) {              \
             return send_401(req);         \
         }                                 \
     } while (0)
+
+static esp_err_t h_login(httpd_req_t *r)
+{
+    int len = r->content_len;
+    if (len <= 0 || len > 512) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
+    }
+    char *body = malloc(len + 1);
+    if (!body) {
+        return httpd_resp_send_500(r);
+    }
+    int got = 0;
+    while (got < len) {
+        int k = httpd_req_recv(r, body + got, len - got);
+        if (k <= 0) { free(body); return httpd_resp_send_500(r); }
+        got += k;
+    }
+    body[len] = '\0';
+
+    char user[40] = "", pass[80] = "";
+    form_get(body, "user", user, sizeof(user));
+    form_get(body, "pass", pass, sizeof(pass));
+    memset(body, 0, len);
+    free(body);
+
+    bool ok = P.cfg && strcmp(user, P.cfg->auth_user) == 0 &&
+              app_config_check_password(P.cfg, pass);
+    memset(pass, 0, sizeof(pass));
+    if (!ok) {
+        /* Slow down guessing a little without holding the socket open
+         * long enough to be a denial of service in itself. */
+        vTaskDelay(pdMS_TO_TICKS(500));
+        ESP_LOGW(TAG, "failed sign-in for '%s'", user);
+        httpd_resp_set_status(r, "401 Unauthorized");
+        httpd_resp_set_type(r, "text/plain");
+        return httpd_resp_sendstr(r, "Wrong username or password");
+    }
+
+    char tok[SESSION_TOKLEN + 1];
+    session_new(tok);
+    char cookie[128];
+    /* HttpOnly keeps it away from scripts; SameSite=Strict means another
+     * site cannot ride the session with a cross-origin request. No
+     * Secure flag: this is served over plain HTTP. */
+    snprintf(cookie, sizeof(cookie),
+             "sid=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800", tok);
+    httpd_resp_set_hdr(r, "Set-Cookie", cookie);
+    ESP_LOGI(TAG, "admin signed in");
+    return httpd_resp_sendstr(r, "ok");
+}
+
+static esp_err_t h_logout(httpd_req_t *r)
+{
+    session_drop(r);
+    httpd_resp_set_hdr(r, "Set-Cookie",
+                       "sid=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    return httpd_resp_sendstr(r, "ok");
+}
+
+/* The login page asks for this to title itself; it gives away nothing
+ * that the setup AP's own name does not. */
+static esp_err_t h_hostname(httpd_req_t *r)
+{
+    httpd_resp_set_type(r, "text/plain");
+    return httpd_resp_sendstr(r, P.cfg ? P.cfg->hostname : "");
+}
 
 /* ---- BLE scan glue -------------------------------------------------- */
 
@@ -517,7 +661,7 @@ static esp_err_t start_httpd(bool captive)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 20;
+    c.max_uri_handlers = 24;
     c.stack_size = 8192;
     if (captive) {
         c.uri_match_fn = httpd_uri_match_wildcard;
@@ -547,6 +691,9 @@ static esp_err_t start_httpd(bool captive)
         httpd_register_err_handler(P.httpd, HTTPD_404_NOT_FOUND, captive_404);
     } else {
         reg(P.httpd, "/", HTTP_GET, h_admin_root);
+        reg(P.httpd, "/api/login", HTTP_POST, h_login);
+        reg(P.httpd, "/api/logout", HTTP_POST, h_logout);
+        reg(P.httpd, "/api/hostname", HTTP_GET, h_hostname);
         reg(P.httpd, "/api/status", HTTP_GET, h_admin_status);
         reg(P.httpd, "/api/logs", HTTP_GET, h_admin_logs);
         reg(P.httpd, "/api/config", HTTP_GET, h_admin_config);
@@ -610,8 +757,11 @@ esp_err_t provisioning_run(app_config_t *cfg)
 
 static esp_err_t h_admin_root(httpd_req_t *r)
 {
-    REQUIRE_AUTH(r);
     httpd_resp_set_type(r, "text/html");
+    if (!auth_ok(r)) {
+        return httpd_resp_send(r, login_html_start,
+                               login_html_end - login_html_start - 1);
+    }
     return httpd_resp_send(r, admin_html_start,
                            admin_html_end - admin_html_start - 1);
 }

@@ -210,10 +210,12 @@ In normal operation the device serves a page at `http://<device-ip>/`:
     required).
   - **Reset** — forget everything and reboot into the setup AP.
 
-The admin page is protected by the username and password you set during setup
-(HTTP Basic). There is **no TLS**, so credentials cross the network
-base64-encoded, not encrypted — this keeps other people on the LAN out of the
-admin page, it does not defend against someone capturing your traffic. Keep the
+The admin page is protected by the username and password you set during setup.
+Signing in is a normal login form; the browser then carries a session cookie,
+which expires after eight hours idle and is cleared by a reboot. There is **no
+TLS**, so the password crosses the network in clear on the way in and the cookie
+in clear thereafter — this keeps other people on the LAN out of the admin page,
+it does not defend against someone capturing your traffic. Keep the
 bridge on a trusted network.
 
 ### Reset
@@ -317,8 +319,8 @@ published: nothing would honour it.
 - **Provisioning** — two-step captive portal (network, then admin login), with
   BLUETTI + NUT set from the admin page afterwards; config in NVS, BOOT-button /
   web reset.
-- **Admin auth** — HTTP Basic on every admin route; the password is stored as a
-  salted SHA-256, never in the clear.
+- **Admin auth** — a login form and a session cookie on every admin route; the
+  password is stored as a salted SHA-256, never in the clear.
 - **BLUETTI BLE "V2" stack** — ECDH (secp160r1) key agreement, AES-128-CBC
   session, keydata session-key derivation, both framing layers, `MD5(user_id +
   serial)` account auth, and a protobuf reader for the `pr705` telemetry
@@ -395,9 +397,11 @@ afterwards.
 
 ## Security
 
-- **Admin page** — HTTP Basic auth with the credentials chosen during setup.
-  The password is stored only as a salted SHA-256, and compared in constant
-  time. There is no TLS, so the credential is base64 on the wire: this keeps
+- **Admin page** — a login form with the credentials chosen during setup, then
+  an opaque session cookie (`HttpOnly`, `SameSite=Strict`, 8-hour idle timeout,
+  cleared on reboot). The password is stored only as a salted SHA-256, and both
+  it and the session token are compared in constant time. There is no TLS, so
+  the password and the cookie are in clear on the wire: this keeps
   other people on your LAN out, it is not protection against traffic capture.
 - **NUT server** — read-only and **unauthenticated**: `LOGIN` is accepted from
   anyone that can reach port 3493. That is deliberate (NUT clients expect it),

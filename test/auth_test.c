@@ -1,8 +1,9 @@
-/* Password hashing + verification, and the Basic-auth header decode the
+/* Password hashing + verification, and the session-cookie parsing the
  * admin server relies on. Uses the same salted-SHA-256 scheme as
  * app_config.c, re-implemented here against the host's mbedtls-free
  * SHA-256 so the test needs no ESP-IDF. The point is the *properties*:
- * right password accepts, wrong rejects, salt makes hashes unique. */
+ * right password accepts, wrong rejects, salt makes hashes unique, and a
+ * session token is matched exactly rather than by substring. */
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -52,27 +53,34 @@ static bool check_password(const auth_t *a, const char *pw)
     return diff == 0;
 }
 
-/* Base64 decode of a Basic credential, mirroring auth_ok(). */
-static int b64val(char c)
+
+
+/* ---- session cookie handling, mirroring provisioning.c ---- */
+#define TOKLEN 32
+
+static bool tok_eq(const char *a, const char *b)
 {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
-    return -1;
-}
-static int b64_decode(const char *in, char *out, int max)
-{
-    int n = 0, acc = 0, bits = 0;
-    for (; *in && *in != '='; in++) {
-        int v = b64val(*in);
-        if (v < 0) continue;
-        acc = (acc << 6) | v; bits += 6;
-        if (bits >= 8) { bits -= 8; if (n < max - 1) out[n++] = (acc >> bits) & 0xFF; }
+    unsigned diff = 0;
+    for (int i = 0; i < TOKLEN; i++) {
+        diff |= (unsigned char)a[i] ^ (unsigned char)b[i];
+        if (!a[i] || !b[i]) return false;
     }
-    out[n] = '\0';
-    return n;
+    return diff == 0;
+}
+
+static bool cookie_token(const char *hdr, char out[TOKLEN + 1])
+{
+    const char *p = strstr(hdr, "sid=");
+    while (p && p != hdr && !(p[-1] == ' ' || p[-1] == ';')) {
+        p = strstr(p + 1, "sid=");
+    }
+    if (!p) return false;
+    p += 4;
+    size_t n = strspn(p, "0123456789abcdef");
+    if (n != TOKLEN) return false;
+    memcpy(out, p, TOKLEN);
+    out[TOKLEN] = '\0';
+    return true;
 }
 
 int main(void)
@@ -124,25 +132,43 @@ int main(void)
     set_password(&a, "", salt_a);
     OKF(a.set == false, "empty password clears auth_set");
 
-    /* Basic-auth header parsing: "admin:hunter2" */
-    char dec[128];
-    b64_decode("YWRtaW46aHVudGVyMg==", dec, sizeof dec);
-    OKF(strcmp(dec, "admin:hunter2") == 0, "base64 decode -> '%s'", dec);
-    char *colon = strchr(dec, ':');
-    OKF(colon != NULL, "credential splits on ':'");
-    if (colon) {
-        *colon = '\0';
-        set_password(&a, "hunter2", salt_a);
-        OKF(strcmp(dec, a.user) == 0 && check_password(&a, colon + 1),
-            "decoded header authenticates");
-        OKF(!(strcmp("root", a.user) == 0), "wrong username rejected");
-    }
-    /* A password containing ':' still works — only the first ':' splits. */
-    b64_decode("YWRtaW46YTpi", dec, sizeof dec);   /* admin:a:b */
-    colon = strchr(dec, ':');
-    *colon = '\0';
-    OKF(strcmp(dec, "admin") == 0 && strcmp(colon + 1, "a:b") == 0,
-        "password may contain ':'");
+    /* ---- session cookies ----
+     * Sign-in is now a form and a cookie, so what matters here is that a
+     * token is extracted from the Cookie header exactly and compared
+     * whole. The trap is a cookie whose name merely ends in "sid". */
+    const char *T = "0123456789abcdef0123456789abcdef";
+    char tok[TOKLEN + 1];
+
+    OKF(cookie_token("sid=0123456789abcdef0123456789abcdef", tok) &&
+        strcmp(tok, T) == 0, "a lone sid cookie is read");
+    OKF(cookie_token("a=1; sid=0123456789abcdef0123456789abcdef; b=2", tok) &&
+        strcmp(tok, T) == 0, "sid is found among other cookies");
+    OKF(cookie_token("theme=dark; sid=0123456789abcdef0123456789abcdef", tok) &&
+        strcmp(tok, T) == 0, "sid is found last in the header");
+
+    /* "othersid=" contains "sid=", so a naive search matches the wrong
+     * cookie and authenticates against an attacker-set value. */
+    OKF(!cookie_token("othersid=0123456789abcdef0123456789abcdef", tok),
+        "a cookie merely ending in 'sid' is not mistaken for ours");
+    OKF(cookie_token("othersid=ffffffffffffffffffffffffffffffff; "
+                     "sid=0123456789abcdef0123456789abcdef", tok) &&
+        strcmp(tok, T) == 0, "the real sid wins over a lookalike before it");
+
+    OKF(!cookie_token("sid=0123456789abcdef", tok), "a short token is rejected");
+    OKF(!cookie_token("sid=0123456789abcdef0123456789abcdefff", tok),
+        "an over-long token is rejected");
+    OKF(!cookie_token("sid=zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", tok),
+        "a non-hex token is rejected");
+    OKF(!cookie_token("theme=dark", tok), "no sid cookie -> no token");
+    OKF(!cookie_token("", tok), "an empty header -> no token");
+
+    /* Whole-token comparison: a prefix must not pass. */
+    OKF(tok_eq(T, "0123456789abcdef0123456789abcdef"), "identical tokens match");
+    OKF(!tok_eq(T, "0123456789abcdef0123456789abcdee"),
+        "a token differing in the last byte is rejected");
+    OKF(!tok_eq(T, "1123456789abcdef0123456789abcdef"),
+        "a token differing in the first byte is rejected");
+    OKF(!tok_eq(T, ""), "an empty token is rejected");
 
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;
