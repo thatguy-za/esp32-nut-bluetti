@@ -9,6 +9,9 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
+/* Mirrors ota_github.c. */
+#define OTA_GH_HTTP_BUF 2048
+
 static int fails;
 #define OKF(c, ...) do { bool _ok = (c); printf(_ok ? "ok:   " : "FAIL: "); \
                          printf(__VA_ARGS__); printf("\n"); \
@@ -129,6 +132,24 @@ int main(void)
              "1234567890123456789012345678901234567890");
     feed(&s4, big, 7);
     OKF(s4.n == 1 && strlen(s4.found[0]) < 16, "an over-long tag is truncated, not overflowed");
+
+    /* Regression guard for "Out of buffer".
+     *
+     * github.com redirects a release asset to a signed URL on another
+     * host. esp_http_client composes "GET <path>?<query>" into a buffer of
+     * buffer_size_tx, whose default is 512 — far too small, so the
+     * redirected request could not be written and the download failed
+     * after both TLS handshakes had already succeeded.
+     *
+     * A real one measured 933 characters, 888 of it path and query. The
+     * signature inside is a JWT and can grow, so the configured buffer
+     * must keep real headroom over that, not just clear it. */
+    const int OBSERVED_URL = 933;
+    const int TX_BUF = OTA_GH_HTTP_BUF;
+    OKF(TX_BUF > OBSERVED_URL, "tx buffer %d clears the observed %d-char URL",
+        TX_BUF, OBSERVED_URL);
+    OKF(TX_BUF >= OBSERVED_URL * 2, "tx buffer leaves room for a longer token");
+    OKF(512 < OBSERVED_URL, "the IDF default of 512 would not have fitted");
 
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;

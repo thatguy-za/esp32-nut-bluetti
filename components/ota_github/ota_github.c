@@ -23,6 +23,9 @@ static const char *TAG = "ota_gh";
 /* GitHub rejects requests without one. */
 #define UA "esp32-nut-bluetti"
 
+/* Big enough for a redirected release-asset URL; see the note in ota_task. */
+#define OTA_GH_HTTP_BUF 2048
+
 /* ------------------------------------------------------------------ */
 /* Version comparison                                                  */
 /* ------------------------------------------------------------------ */
@@ -203,11 +206,22 @@ static void ota_task(void *arg)
              GH_OWNER, GH_REPO, G.version, GH_REPO, G.version);
     ESP_LOGI(TAG, "downloading %s", url);
 
+    /*
+     * github.com redirects release assets to a signed URL on another host,
+     * and those run to about 900 characters of path and query. The client
+     * composes "GET <path>?<query>" in buffer_size_tx, which defaults to
+     * 512 — so the redirected request cannot be written at all and the
+     * download dies with "Out of buffer" after both TLS handshakes have
+     * already succeeded. The signature is a JWT, so leave real headroom
+     * rather than sizing to what one URL happens to measure today.
+     */
     esp_http_client_config_t hc = {
         .url = url,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 20000,
         .keep_alive_enable = true,
+        .buffer_size    = OTA_GH_HTTP_BUF,
+        .buffer_size_tx = OTA_GH_HTTP_BUF,
     };
     esp_https_ota_config_t oc = { .http_config = &hc };
 
