@@ -27,10 +27,6 @@
         overflow: auto; max-height: 50vh; font: 12px/1.45 ui-monospace, monospace;
         white-space: pre-wrap; word-break: break-word; margin: 0; }
   .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .5rem 0; }
-  /* One field with its explanation alongside; the hint drops below on narrow
-     screens rather than squeezing the input. */
-  .row.explain { gap: .9rem; }
-  .row.explain .hint { flex: 1 1 16rem; margin: 0; }
   button.act { padding: .45rem .8rem; font: inherit; border-radius: .35rem;
                border: 1px solid #8886; background: #8882; color: inherit; cursor: pointer; }
   button.act:disabled { opacity: .5; cursor: progress; }
@@ -145,22 +141,18 @@
         <span><label for="cfgLow">Low battery %</label>
           <input id="cfgLow" name="low_pct" type="number" min="1" max="99"></span>
       </div>
-      <div class="row explain">
-        <span><label for="cfgRating">Continuous AC rating (W)</label>
-          <input id="cfgRating" name="ac_rating_w" type="number" min="1" max="65535"
-                 style="width:8rem"></span>
-        <p class="hint">Your unit's figure — 200&nbsp;W on an Elite&nbsp;10.
-          Published as <code>ups.realpower.nominal</code>, and the 100%
-          reference for <code>ups.load</code>.</p>
-      </div>
-      <div class="row explain">
-        <span><label for="cfgRtLow">Low runtime (s)</label>
-          <input id="cfgRtLow" name="runtime_low_s" type="number" min="0" max="65535"
-                 style="width:8rem"></span>
-        <p class="hint">Published as <code>battery.runtime.low</code>.
-          <code>LB</code> is raised by this or the low-battery %, whichever
-          comes first.</p>
-      </div>
+      <label for="cfgRating">Continuous AC rating (W)</label>
+      <p class="hint" style="margin:.15rem 0 .3rem">Sets
+        <code>ups.realpower.nominal</code>, the 100% mark for
+        <code>ups.load</code>. 200&nbsp;W on an Elite&nbsp;10.</p>
+      <input id="cfgRating" name="ac_rating_w" type="number" min="1" max="65535"
+             style="width:8rem">
+      <label for="cfgRtLow">Low runtime (s)</label>
+      <p class="hint" style="margin:.15rem 0 .3rem">Sets
+        <code>battery.runtime.low</code>. Raises <code>LB</code> at this or the
+        low-battery&nbsp;%, whichever comes first.</p>
+      <input id="cfgRtLow" name="runtime_low_s" type="number" min="0" max="65535"
+             style="width:8rem">
       <p class="hint">Clients connect with
         <code>upsc <span id="upscName">bluetti</span>@<span id="upscIp">&lt;ip&gt;</span></code>.</p>
     </div>
