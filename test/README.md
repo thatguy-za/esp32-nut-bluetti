@@ -1,7 +1,7 @@
 # Host tests
 
 Portable-logic tests that run without ESP-IDF or hardware. `make` builds and
-runs all nine C suites:
+runs all eight C suites:
 
 | Suite | Covers |
 | --- | --- |
@@ -12,8 +12,7 @@ runs all nine C suites:
 | `lb_test` | the low-battery decision: `LB` on the charge threshold **or** the runtime threshold, the heavy-load case percentage alone misses, unknown runtime, and a disabled runtime threshold |
 | `bt_frame_test` | BLUETTI wire format: CRC-16/Modbus against its known vector, the read request byte layout (big-endian address, little-endian CRC), response validation and corruption detection, the `2a2a` checksum, AES padding |
 | `ota_gh_test` | GitHub update helpers: version ordering (a string compare would put `0.10.0` before `0.9.0`) and the streaming release scanner, fed at every chunk size from 1 to 40 so no token split is handled correctly only by luck |
-| `bt_device_test` | Model identification: that the digit-tail rule keeps `EL10` from claiming an `EL100V2` (and `AC60`/`AC60P`, `AC180`/`AC180T`/`AC180P`, `PR30V2`/`PR100V2`), that unsupported and V1 models resolve to unknown, and that the per-model field sets differ where upstream says they do |
-| `bt_regs_test` | Elite 10 register decode: address bounds, swapped-string model name, mains-present and charging inference, and zero-runtime treated as unknown rather than empty |
+| `bt_regs_test` | compiles the real `bt_regs.c`: model identification (`EL10`/`EL100V2` → full decode, `AC70` and V1 models → generic, digit-tail rule), the per-field polling plan, and decode of individual field responses — SOC bounds, power summed across separate reads, mains inferred from power or line voltage, charging inference, zero-runtime as unknown, switch fields strictly 0/1, the little-endian-word serial |
 | `config_compat_test` | the forward-compatible NVS loader: pins that `led_gpio` is the last field of `app_config_t` and `led_enabled` sits right before it, and that a v3-length blob loads with the stored fields intact and `led_gpio` at its default — a future field reorder that would silently wipe or misread everyone's config fails here |
 | `nut_server_test` | drives the real `nut_server.c` over a loopback socket: `LIST UPS/VAR`, `GET VAR`, `GET UPSDESC/NUMLOGINS`, the `upsmon` primary handshake (`USERNAME`/`PASSWORD`/`LOGIN`/`PRIMARY`), empty `LIST CLIENT/RW`, error replies; plus the optional NUT login — reads stay anonymous, wrong/missing credentials denied on `LOGIN`/`PRIMARY`, and credentials not leaking between connections |
 

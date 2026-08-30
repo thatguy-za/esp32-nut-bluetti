@@ -1,10 +1,19 @@
 #pragma once
 /*
- * Elite 10 (EL10) register map and decode.
+ * BLUETTI V2 register map and decode.
  *
- * Addresses come from Patrick762/bluetti-bt-lib PR #89 plus the
- * BaseDeviceV2 common fields. See docs/PROTOCOL.md. Registers are 16-bit
- * words, big-endian on the wire.
+ * Addresses and scaling are taken field-for-field from
+ * Patrick762/bluetti-bt-lib (the library behind the Home Assistant
+ * integration) — see docs/PROTOCOL.md. Registers are 16-bit words,
+ * big-endian on the wire.
+ *
+ * Only the Elite 10 (and the byte-identical EL100V2) are decoded in full.
+ * bluetti-bt-lib reads each field with its own Modbus transaction and its
+ * own per-model scaling; other V2 models differ in both which fields
+ * exist and how a few are scaled (runtime and AC-input voltage in
+ * particular). Rather than reproduce every model's quirks unverified, an
+ * unrecognised unit gets the four fields that are identical across every
+ * V2 model — charge and the AC/DC power readings — and nothing else.
  */
 
 #include <stddef.h>
@@ -16,80 +25,70 @@
 extern "C" {
 #endif
 
-/* Common (BaseDeviceV2) */
-#define REG_BATTERY_SOC       102   /* uint, %                        */
-#define REG_TIME_REMAINING    104   /* uint, minutes                  */
-#define REG_DEVICE_TYPE       110   /* swapped string, 6 words        */
-#define REG_DEVICE_SN         116   /* serial, 4 words               */
+/* Common to every BaseDeviceV2 */
+#define REG_BATTERY_SOC       102   /* uint, %                          */
+#define REG_TIME_REMAINING    104   /* uint, minutes (EL10 scaling)     */
+#define REG_DEVICE_TYPE       110   /* swapped string, 6 words          */
+#define REG_DEVICE_SN         116   /* serial, 4 words                  */
+#define REG_DC_OUTPUT_POWER   140   /* uint, W                          */
+#define REG_AC_OUTPUT_POWER   142   /* uint, W                          */
+#define REG_DC_INPUT_POWER    144   /* uint, W                          */
+#define REG_AC_INPUT_POWER    146   /* uint, W                          */
 
-/* EL10 */
-#define REG_DC_OUTPUT_POWER   140   /* uint, W                        */
-#define REG_AC_OUTPUT_POWER   142   /* uint, W                        */
-#define REG_DC_INPUT_POWER    144   /* uint, W                        */
-#define REG_AC_INPUT_POWER    146   /* uint, W                        */
-#define REG_AC_INPUT_VOLTAGE  1314  /* decimal, 1 dp                  */
-#define REG_AC_INPUT_CURRENT  1315  /* decimal, 1 dp                  */
-#define REG_AC_OUTPUT_VOLTAGE 1511  /* decimal, 1 dp                  */
-#define REG_CTRL_AC           2011  /* bool                           */
-#define REG_CTRL_DC           2012  /* bool                           */
+/* EL10 / EL100V2 */
+#define REG_AC_INPUT_VOLTAGE  1314  /* decimal, ÷10                     */
+#define REG_AC_INPUT_CURRENT  1315  /* decimal, ÷10                     */
+#define REG_AC_OUTPUT_VOLTAGE 1511  /* decimal, ÷10                     */
+#define REG_CTRL_AC           2011  /* bool (0/1 only)                  */
+#define REG_CTRL_DC           2012  /* bool (0/1 only)                  */
 
 /*
- * A model, and which of the optional registers it actually carries.
- *
- * Every V2 portable unit uses the same addresses; they differ only in which
- * fields exist. Reading an address a model does not declare is harmless
- * (upstream sweeps 0..20000 in blocks of ten on every V2 device), but
- * *interpreting* one is not — an absent register reads as zero, which would
- * publish a real-looking 0 V or a 0-minute runtime. So each optional field
- * is gated on the model.
- *
- * Generated from Patrick762/bluetti-bt-lib's device definitions.
+ * A recognised model. `full` distinguishes the Elite-10 family (decode
+ * everything) from the generic fallback (charge + power only).
  */
 typedef struct {
-    const char *name;             /* advertised name, digits follow      */
-    bool has_runtime;             /* 104                                 */
-    bool has_dc_input;            /* 144                                 */
-    bool has_ac_in_volts;         /* 1314                                */
-    bool has_ac_in_amps;          /* 1315                                */
-    bool has_ac_out_volts;        /* 1511                                */
+    const char *name;   /* advertised name; digits follow */
+    bool        full;
 } bt_device_t;
 
-extern const bt_device_t BT_DEVICES[];
-extern const size_t      BT_DEVICE_COUNT;
+extern const bt_device_t BT_DEVICE_EL10;      /* EL10 and EL100V2 */
+extern const bt_device_t BT_DEVICE_GENERIC;   /* any other V2 unit */
 
 /*
- * Match an advertised or self-reported name to a model. Names are a model
- * followed by digits, so the tail after the prefix must be digits — that is
- * what keeps "EL10" from claiming an "EL100V2". NULL if unrecognised.
+ * Match an advertised or self-reported name to a model. A name is a model
+ * followed by digits, so the tail after the prefix must be digits — that
+ * is what keeps "EL10" from claiming an "EL100V2". Returns &BT_DEVICE_EL10
+ * for the Elite-10 family, NULL for anything else (the caller then uses
+ * BT_DEVICE_GENERIC).
  */
 const bt_device_t *bt_device_lookup(const char *name);
 
-/* The conservative subset every supported model shares: charge and the
- * three power readings. Used until the unit names itself, and for models
- * not in the table. */
-extern const bt_device_t BT_DEVICE_GENERIC;
-
 /*
- * The polling plan. Modbus caps a read at 125 registers, and the device
- * is happier with small contiguous blocks, so the map is covered by a
- * handful of reads rather than one sweep.
+ * The polling plan: one entry per field, each its own Modbus read, the
+ * way bluetti-bt-lib polls. Reading fields individually rather than in
+ * ranges avoids any question of whether the unit answers a range that
+ * spans registers it does not implement.
  */
 typedef struct {
     uint16_t addr;
-    uint16_t count;
-} bt_reg_block_t;
+    uint8_t  words;
+} bt_reg_read_t;
 
-extern const bt_reg_block_t BT_EL10_BLOCKS[];
-extern const size_t         BT_EL10_BLOCK_COUNT;
+#define BT_REG_PLAN_MAX 16
 
-/* Apply one register block to the state. Returns the number of fields
- * recognised, so the caller can tell a useful frame from a stray one. */
+/* Fill `out` (capacity `max`) with the reads to poll for `dev` (NULL =
+ * generic). UPS-critical fields come first. Returns the count. */
+size_t bt_regs_plan(const bt_device_t *dev, bt_reg_read_t *out, size_t max);
+
+/*
+ * Apply one field's response to the state. `start_addr`/`data`/`len` are a
+ * single Modbus read's register address and data bytes. Recomputes the
+ * derived values (mains present, charging, battery flow) from whatever
+ * has accumulated in `st` so far. Returns the number of raw fields this
+ * call recognised.
+ */
 int bt_regs_apply(const bt_device_t *dev, uint16_t start_addr,
                   const uint8_t *data, size_t len, bluetti_state_t *st);
-
-/* Whether a block is worth polling for this model. A NULL model means we
- * have not identified it yet, so everything is polled. */
-bool bt_regs_block_wanted(const bt_device_t *dev, uint16_t addr);
 
 #ifdef __cplusplus
 }

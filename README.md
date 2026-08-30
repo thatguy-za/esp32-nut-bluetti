@@ -37,63 +37,47 @@ themselves down cleanly on a mains failure.
 
 ## Supported models
 
-The 17 BLUETTI units that speak the **V2** protocol and carry the portable
-power registers. Every one of them reports **state of charge**, **AC and DC
-output power** and **AC input power** — enough for a working UPS: `ups.status`,
-`battery.charge`, `ups.realpower`, `ups.load` and the `OL`/`OB`/`LB` transitions
-that drive a shutdown.
+**BLUETTI Elite 10**, and the byte-identical **EL100V2**. These two share the
+same register list and the same scaling, so one decoder covers both.
 
-The columns below are the extras, which vary by model. The bridge reads the
-model out of the unit itself (register 110) and enables only the fields that
-model has, so a variable is either right or absent — never a placeholder.
+Any other **V2**-protocol BLUETTI unit that you point the bridge at will still
+connect and report the fields that are identical across every V2 model — **state
+of charge** and the **AC/DC power** readings. That is enough for a working UPS:
+`ups.status`, `battery.charge`, `ups.realpower`, `ups.load`, and the
+`OL`/`OB`/`LB` transitions that drive a shutdown. Model-specific fields
+(runtime, line voltage/current, the output switches) stay off, because
+[`bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib) scales several
+of them differently per model — an AC60 reports AC-input voltage as a plain
+integer where the Elite 10 divides by ten, an AC70's runtime register is in
+6-minute units where the Elite 10's is in minutes — and reproducing every
+model's quirks unverified would publish confident wrong numbers.
 
-| Model | `battery.runtime` | DC input | `input.voltage` | `input.current` | `output.voltage` |
-| --- | :-: | :-: | :-: | :-: | :-: |
-| `AC2A` | · | ● | · | · | · |
-| `AC2P` | · | ● | · | · | · |
-| `AC50B` | ● | · | · | · | · |
-| `AC60` | · | ● | ● | · | · |
-| `AC60P` | · | ● | ● | · | · |
-| `AC70` | ● | ● | ● | ● | ● |
-| `AC70P` | · | ● | ● | ● | ● |
-| `AC180` | · | ● | ● | ● | ● |
-| `AC180P` | · | ● | ● | · | · |
-| `AC180T` | · | ● | ● | ● | ● |
-| `AP300` | · | ● | ● | · | · |
-| `EL10` **★** | ● | ● | ● | ● | ● |
-| `EL30V2` | ● | ● | ● | · | · |
-| `EL100V2` | ● | ● | ● | ● | ● |
-| `Handsfree 1` | ● | ● | ● | ● | ● |
-| `PR30V2` | · | ● | ● | · | · |
-| `PR100V2` | · | ● | ● | · | · |
-
-★ = the model this was developed against.
-
-A model not in this table still connects and reports charge and power, with the
-optional fields off.
+The bridge reads the model from the unit itself (register 110); it is not
+something you configure.
 
 ### Not supported
 
 | Models | Why |
 | --- | --- |
-| `EP600` `EP760` `EP800` `EP2000` | V2, but grid/PV systems — three-phase grid and PV-string registers, sharing none of the addresses above |
+| `EP600` `EP760` `EP800` `EP2000` | V2, but grid/PV systems — three-phase grid and PV-string registers, sharing none of the addresses the portable units use |
 | `AC200L` `AC200M` `AC200PL` `AC300` `AC500` `EB3A` `EP500` `EP500P` | The older **V1** protocol, a different framing this firmware does not speak |
 
 ### A caveat on all of it
 
 This firmware has not been run against any BLUETTI unit. What it *has* been
-checked against is [`bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib)
-0.1.8 — the released library behind the Home Assistant integration — line by
-line: the `2a2a` key exchange, the AES framing, the register decode and the
-model table all match it. That library's own device table lists the Elite 10 as
+checked against, field by field, is
+[`bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib) — the library
+behind the Home Assistant integration: the `2a2a` key exchange, the AES framing,
+the one-request-at-a-time polling, and the Elite 10 register decode and scaling
+all match it. That library's device table lists the Elite 10 as
 contributor-validated for charge and the four power readings, so the register
-map is not purely theoretical. But a faithful port of working Python is still
-not a tested build, and the other 16 models have had no hardware exposure at
-all.
+map is not purely theoretical. A faithful port of working Python is still not a
+tested build.
 
 If a unit turns out not to encrypt, the bridge notices no key exchange starting
-and drops to plain Modbus after ~12 seconds — the same fallback the reference
-library makes.
+and drops to plain Modbus after ~15 seconds — the same fallback the reference
+library makes. If a poll wedges with the link still up, it drops the connection
+and reconnects, the way the reference recovers by reconnecting every cycle.
 
 ### How it talks
 

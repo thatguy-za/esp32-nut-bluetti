@@ -81,13 +81,18 @@ static struct {
     uint16_t             notify_cccd;
 
     bt_session_t        *session;
-    int                  poll_block;    /* index into BT_EL10_BLOCKS */
+
+    /* The per-field polling plan, rebuilt when the model is identified. */
+    bt_reg_read_t        plan[BT_REG_PLAN_MAX];
+    size_t               plan_n;
+    size_t               plan_i;         /* next field to read */
 
     /* One Modbus request at a time: the reference never has two in flight,
      * and a second read while the first is still coming back confuses the
      * reassembly. */
     bool                 req_in_flight;
     int64_t              req_sent_us;
+    int                  poll_fails;     /* consecutive reads with no reply */
 
     bluetti_state_t      state;
     SemaphoreHandle_t    lock;
@@ -99,6 +104,29 @@ static struct {
 static void start_connect_scan(void);
 static void poll_timer_cb(void *arg);
 static void kex_timer_cb(void *arg);
+
+/* Clear the telemetry to its "nothing read yet" state. Call holding b.lock,
+ * or before any task can read b.state. Keeps the configured thresholds. */
+static void state_reset(void)
+{
+    int low = b.state.soc_low_pct;
+    memset(&b.state, 0, sizeof(b.state));
+    b.state.soc_low_pct       = low;
+    b.state.soc_pct           = BLUETTI_UNKNOWN_I;
+    b.state.minutes_remaining = BLUETTI_UNKNOWN_I;
+    b.state.input_watts       = BLUETTI_UNKNOWN_F;
+    b.state.output_watts      = BLUETTI_UNKNOWN_F;
+    b.state.battery_watts     = BLUETTI_UNKNOWN_F;
+    b.state.ac_in_watts       = BLUETTI_UNKNOWN_F;
+    b.state.ac_out_watts      = BLUETTI_UNKNOWN_F;
+    b.state.dc_in_watts       = BLUETTI_UNKNOWN_F;
+    b.state.dc_out_watts      = BLUETTI_UNKNOWN_F;
+    b.state.ac_in_volts       = BLUETTI_UNKNOWN_F;
+    b.state.ac_in_amps        = BLUETTI_UNKNOWN_F;
+    b.state.ac_out_volts      = BLUETTI_UNKNOWN_F;
+    b.state.ac_switch         = BLUETTI_UNKNOWN_I;
+    b.state.dc_switch         = BLUETTI_UNKNOWN_I;
+}
 static void start_disc(bool report_all);
 static int  gap_event(struct ble_gap_event *event, void *arg);
 
@@ -267,66 +295,86 @@ static void session_regs(uint16_t addr, const uint8_t *data, size_t len,
 
     xSemaphoreTake(b.lock, portMAX_DELAY);
     matched = bt_regs_apply(b.device, addr, data, len, &b.state);
-    /* The unit names itself in register 110, so the map can be picked from
-     * what it reports rather than from what we were told to look for. */
+    /* The unit names itself in register 110, so the model — and with it
+     * the polling plan — comes from what it reports, not from config. */
     if (!b.device && b.state.model[0]) {
         b.device = bt_device_lookup(b.state.model);
         if (b.device) {
             ESP_LOGI(TAG, "identified as %s", b.device->name);
         } else {
-            ESP_LOGW(TAG, "unknown model '%s' - charge and power only",
+            ESP_LOGW(TAG, "unrecognised model '%s' — charge and power only",
                      b.state.model);
             b.device = &BT_DEVICE_GENERIC;
         }
-        /* Re-run now that the optional fields are known to be readable. */
+        b.plan_n = bt_regs_plan(b.device, b.plan, BT_REG_PLAN_MAX);
+        b.plan_i = 0;
         bt_regs_apply(b.device, addr, data, len, &b.state);
     }
     b.state.soc_low_pct = b.cfg.low_battery_pct;
     copy = b.state;
     xSemaphoreGive(b.lock);
 
-    b.req_in_flight = false;      /* response arrived; next block may go */
+    b.req_in_flight = false;      /* response arrived; next field may go */
+    b.poll_fails = 0;            /* the link is answering */
 
     if (matched > 0 && b.state_cb) {
         b.state_cb(&copy, b.state_cb_user);
     }
 }
 
-/* Walk the register blocks one per tick, so a slow device never has more
- * than one outstanding request. */
-#define REQ_TIMEOUT_US (6 * 1000 * 1000LL)
+/*
+ * Walk the polling plan one field per tick, so there is never more than
+ * one Modbus request outstanding — the way bluetti-bt-lib polls.
+ */
+#define REQ_TIMEOUT_US   (6 * 1000 * 1000LL)
+#define POLL_FAIL_LIMIT  5      /* consecutive no-replies -> reconnect */
 
 static void poll_timer_cb(void *arg)
 {
-    if (!b.connected || !bt_session_ready(b.session)) {
+    if (!b.connected || !bt_session_ready(b.session) || b.plan_n == 0) {
         return;
     }
     /* Hold off while a request is still outstanding, unless it has been
-     * long enough that the response is not coming. */
+     * long enough that the response is clearly not coming. */
     if (b.req_in_flight) {
         if (esp_timer_get_time() - b.req_sent_us < REQ_TIMEOUT_US) {
             return;
         }
-        ESP_LOGW(TAG, "no response to the last read; moving on");
         b.req_in_flight = false;
-    }
-    /* Walk to the next block this model actually has fields in, so a unit
-     * without AC metering does not spend two round trips a cycle on
-     * registers it will never answer usefully. */
-    for (size_t tries = 0; tries < BT_EL10_BLOCK_COUNT; tries++) {
-        const bt_reg_block_t *blk = &BT_EL10_BLOCKS[b.poll_block];
-        b.poll_block = (b.poll_block + 1) % (int)BT_EL10_BLOCK_COUNT;
-        if (!bt_regs_block_wanted(b.device, blk->addr)) {
-            continue;
-        }
-        if (bt_session_read_regs(b.session, blk->addr, blk->count) != 0) {
-            ESP_LOGW(TAG, "register read %u failed", blk->addr);
+        if (++b.poll_fails >= POLL_FAIL_LIMIT) {
+            /* The session has wedged with the link still up. Drop it; the
+             * disconnect handler reconnects and re-runs the handshake,
+             * which is how the reference recovers (it reconnects every
+             * poll cycle). */
+            ESP_LOGW(TAG, "%d reads with no reply — dropping the link to retry",
+                     b.poll_fails);
+            b.poll_fails = 0;
+            b.connected = false;   /* stop further ticks writing to it */
+            esp_timer_stop(b.poll_timer);
+            ble_gap_terminate(b.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
             return;
         }
-        b.req_in_flight = true;
-        b.req_sent_us = esp_timer_get_time();
+        ESP_LOGW(TAG, "no reply to the last read (%d) — moving on", b.poll_fails);
+    }
+
+    /* session_regs may be rebuilding the plan on the host task; take a
+     * consistent snapshot of the next field. */
+    bt_reg_read_t f;
+    xSemaphoreTake(b.lock, portMAX_DELAY);
+    if (b.plan_n == 0) {
+        xSemaphoreGive(b.lock);
         return;
     }
+    f = b.plan[b.plan_i];
+    b.plan_i = (b.plan_i + 1) % b.plan_n;
+    xSemaphoreGive(b.lock);
+
+    if (bt_session_read_regs(b.session, f.addr, f.words) != 0) {
+        ESP_LOGW(TAG, "register read %u failed to send", f.addr);
+        return;
+    }
+    b.req_in_flight = true;
+    b.req_sent_us = esp_timer_get_time();
 }
 
 /*
@@ -352,21 +400,31 @@ static int on_sub(uint16_t conn, const struct ble_gatt_error *err,
         return 0;
     }
     ESP_LOGI(TAG, "subscribed; awaiting the device challenge");
+
+    /* Until the model is known, poll the fields common to every V2 unit —
+     * one of which (register 110) names the model and triggers the rebuild. */
+    b.plan_n = bt_regs_plan(&BT_DEVICE_GENERIC, b.plan, BT_REG_PLAN_MAX);
+    b.plan_i = 0;
+    b.poll_fails = 0;
+    b.req_in_flight = false;
+
     /* The device opens the key exchange on its own once notifications are
      * live, so there is nothing to send here. Start the poll timer: it
      * no-ops until the session reports ready. */
     if (b.poll_timer) {
         esp_timer_stop(b.poll_timer);
         uint32_t period = b.cfg.poll_interval_ms ? b.cfg.poll_interval_ms : 5000;
-        /* Spread the blocks across the interval. */
-        esp_timer_start_periodic(b.poll_timer,
-            (uint64_t)(period / BT_EL10_BLOCK_COUNT + 1) * 1000);
+        /* One field per tick; a full sweep takes about the poll interval. */
+        uint32_t tick_ms = period / (b.plan_n + 6);
+        if (tick_ms < 250) tick_ms = 250;
+        esp_timer_start_periodic(b.poll_timer, (uint64_t)tick_ms * 1000);
     }
-    /* ...but not every unit encrypts. If no challenge lands in this window,
-     * fall back to plain Modbus rather than waiting forever. */
+    /* Not every unit encrypts. If no challenge lands in this window, fall
+     * back to plain Modbus rather than waiting forever — bluetti-bt-lib's
+     * recognizer gives the encrypted attempt 15 s before it retries plain. */
     if (b.kex_timer && !b.cfg.probe) {
         esp_timer_stop(b.kex_timer);
-        esp_timer_start_once(b.kex_timer, 12 * 1000 * 1000ULL);
+        esp_timer_start_once(b.kex_timer, 15 * 1000 * 1000ULL);
     }
     return 0;
 }
@@ -499,10 +557,14 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             b.connected = true;
             b.notify_n = 0;
             b.write_handle = b.notify_handle = b.notify_cccd = 0;
-            b.poll_block = 0;
+            b.plan_n = b.plan_i = 0;
             b.req_in_flight = false;
+            b.poll_fails = 0;
+            xSemaphoreTake(b.lock, portMAX_DELAY);
+            state_reset();
+            xSemaphoreGive(b.lock);
             bt_session_reset(b.session);
-        b.device = NULL;   /* re-identify on the next connect */
+            b.device = NULL;   /* re-identify on the next connect */
             ble_gattc_exchange_mtu(b.conn_handle, NULL, NULL);
             if (b.cfg.probe) {
                 ESP_LOGW(TAG, "probe mode: enumerating GATT, nothing decoded");
@@ -772,17 +834,10 @@ int bluetti_ble_start(const bluetti_ble_config_t *config,
     b.state_cb_user = user;
 
     xSemaphoreTake(b.lock, portMAX_DELAY);
-    memset(&b.state, 0, sizeof(b.state));
-    b.device = NULL;
     b.state.soc_low_pct = config->low_battery_pct;
-    b.state.minutes_remaining = BLUETTI_UNKNOWN_I;
-    b.state.ac_in_watts = BLUETTI_UNKNOWN_F;
-    b.state.ac_out_watts = BLUETTI_UNKNOWN_F;
-    b.state.ac_in_volts = BLUETTI_UNKNOWN_F;
-    b.state.ac_in_amps = BLUETTI_UNKNOWN_F;
-    b.state.ac_out_volts = BLUETTI_UNKNOWN_F;
-    b.state.ac_switch = BLUETTI_UNKNOWN_I;
-    b.state.dc_switch = BLUETTI_UNKNOWN_I;
+    state_reset();
+    b.device = NULL;
+    b.plan_n = b.plan_i = 0;
     xSemaphoreGive(b.lock);
 
     /* An address is the only way to name a unit, so a bad one is fatal
@@ -800,8 +855,7 @@ int bluetti_ble_start(const bluetti_ble_config_t *config,
         ESP_LOGW(TAG, "PROBE MODE: GATT and notifications will be logged, "
                       "nothing will be decoded");
     } else {
-        ESP_LOGI(TAG, "polling %u register blocks every %u ms",
-                 (unsigned)BT_EL10_BLOCK_COUNT,
+        ESP_LOGI(TAG, "polling one field per read, ~%u ms per sweep",
                  (unsigned)(config->poll_interval_ms ?: 5000));
     }
 

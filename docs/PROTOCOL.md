@@ -83,54 +83,48 @@ model. From [Patrick762/bluetti-bt-lib#89](https://github.com/Patrick762/bluetti
 common fields — and cross-checked against the other V2 device definitions,
 which use the same addresses.
 
-Models differ only in *which* of these registers they declare, not where the
-registers live. `BaseDeviceV2.get_full_registers_range` sweeps 0..20000 in
-blocks of ten on every V2 device, so reading an address a model does not
-declare is harmless — but interpreting one is not, since an absent register
-reads as zero. `bt_regs.c` therefore gates each optional field on the model,
-which it takes from register 110 rather than from configuration. The per-model
-table is in the README.
+**Only the Elite 10 (and the byte-identical EL100V2) are decoded in full.**
+Other V2 models put the same *fields* at these addresses but scale a few
+differently — `bluetti-bt-lib` gives each model its own `DecimalField`
+parameters. Register 104 (runtime) is in minutes on the EL10 (`scale 0,
+×1/60`), tenths of an hour on the AC70 and Handsfree 1 (`scale 1`), and
+something else again on the EL30V2 (`scale 4, ×167`). Register 1314 (AC input
+voltage) is `÷10` on the EL10 but a plain integer on the AC60. Rather than
+reproduce every model's quirks unverified, `bt_regs.c` decodes the Elite 10
+scaling for an Elite 10, and for anything else publishes only the fields that
+are identical across every V2 model — SOC (102) and the four power registers
+(140/142/144/146), all plain `uint`.
 
-Four V2 models are **not** supported: `EP600`, `EP760`, `EP800` and `EP2000`
-are grid/PV systems whose fields (three-phase grid, PV strings) share none of
-these addresses. The V1-protocol models are not supported either — that is a
-different framing altogether. Review is not hardware confirmation: as far as is known nobody
-has run it against a unit either, so treat the addresses as a well-reviewed
-hypothesis rather than fact.
+The model comes from register 110, not from configuration.
 
-Upstream matches advertised names as `^(…|EL10|EL100V2|…)(\d+)$` — a model name
-followed by digits. Note that `EL10` is a prefix of `EL100V2`, a different unit
-with a different map, so a plain prefix test binds the wrong model. Connecting
-is by BLE address only, which sidesteps this; the same digits-after-the-name
-rule is still used to pick the register set from the model the unit reports.
+Four V2 models are **not** supported at all: `EP600`, `EP760`, `EP800` and
+`EP2000` are grid/PV systems whose fields (three-phase grid, PV strings) share
+none of these addresses. The V1-protocol models are a different framing
+altogether.
 
-| Register | Field | Type / scale |
+| Register | Field | EL10 type / scale |
 | --- | --- | --- |
 | 102 | Battery SOC | uint, 0..100 |
-| 104 | Time remaining | decimal, ×1/60 (→ hours) |
+| 104 | Time remaining | uint minutes (upstream ×1/60 → hours) |
 | 110 | Device type | swapped string, 6 words |
-| 116 | Device serial | serial-number field |
+| 116 | Device serial | 4 words, least-significant first |
 | 140 | DC output power | uint, W |
 | 142 | AC output power | uint, W |
 | 144 | DC input power | uint, W |
 | 146 | AC input power | uint, W |
-| 1314 | AC input voltage | decimal, 1 dp |
-| 1315 | AC input current | decimal, 1 dp |
-| 1511 | AC output voltage | decimal, 1 dp |
-| 2011 | AC output switch | bool |
-| 2012 | DC output switch | bool |
-| 2014 | DC ECO enable | bool |
-| 2015 | DC ECO time mode | enum |
-| 2016 | DC ECO minimum power | uint |
-| 2017 | AC ECO enable | bool |
-| 2018 | AC ECO time mode | enum |
-| 2019 | AC ECO minimum power | uint |
-| 2020 | Charging mode | enum |
-| 2021 | Power lifting | bool |
-| 2067 | Display timeout | enum |
-| 6175 | BMS version | version field |
+| 1314 | AC input voltage | uint ÷10, V |
+| 1315 | AC input current | uint ÷10, A |
+| 1511 | AC output voltage | uint ÷10, V |
+| 2011 | AC output switch | bool — **only** 0 or 1; anything else = absent |
+| 2012 | DC output switch | bool — as above |
 
-Advertised name matches `^EL10(\d+)$`.
+The remaining EL10 registers upstream lists (2014–6175: ECO settings, charging
+mode, display timeout, BMS version) are controls this bridge does not surface.
+
+Advertised name matches `^EL10(\d+)$` or `^EL100V2(\d+)$`. `EL10` is a prefix
+of `EL100V2`; the digit-after-the-name check keeps them apart (both resolve to
+the same decoder here, but the check still matters). Connecting is by BLE
+address only, which sidesteps the ambiguity for targeting.
 
 ### Mapping onto NUT
 
@@ -159,13 +153,24 @@ the "encrypted" flag it ends up storing is just whichever attempt answered.
 
 This firmware does the same in one connection rather than two: it subscribes,
 waits for the device to open the `2a2a` exchange, and if nothing arrives within
-about 12 seconds, `bt_session_use_plain()` switches the session to unencrypted
-Modbus — register reads then go out as bare PDUs and responses are parsed
-straight off the wire. A single stray handshake byte cancels the fallback.
+15 seconds (the reference's own encrypted-attempt timeout), `bt_session_use_plain()`
+switches the session to unencrypted Modbus — register reads then go out as bare
+PDUs and responses are parsed straight off the wire. A single stray handshake
+byte cancels the fallback.
 
-One Modbus request is outstanding at a time, matching the reference's
-send-then-await loop; the next block waits for the response or a 6-second
-timeout.
+## Polling
+
+`bluetti-bt-lib` reads **one field per Modbus transaction** — `get_polling_registers`
+returns one `ReadableRegisters(addr, size)` per field, and the reader loops
+`write → wait for one notification → next`. This firmware matches that: a
+per-field plan (`bt_regs_plan`), one request outstanding at a time, each field's
+response decoded on its own. Reading fields individually rather than in ranges
+avoids any question of whether the unit answers a range spanning registers it
+does not implement.
+
+If five reads in a row get no reply while the BLE link is still up, the session
+has wedged; the bridge drops the connection and reconnects, which re-runs the
+handshake. The reference gets this for free by reconnecting every poll cycle.
 
 ## Cross-check against the reference
 

@@ -1,147 +1,193 @@
-/* Elite 10 register decode. Mirrors bt_regs.c's arithmetic against
- * synthetic Modbus blocks, so the address maths and the inferred fields
- * (mains present, charging) are pinned down before hardware exists.
- *
- * The addresses come from an unmerged PR; if they turn out wrong the
- * failure will be in the map, not in this arithmetic. */
+/* Exercises the real bt_regs.c: model identification, the per-field
+ * polling plan, and the decode of individual Modbus field responses into
+ * bluetti_state_t. Everything here mirrors what bluetti-bt-lib does for
+ * the Elite 10; it cannot prove the register addresses are right (that
+ * needs hardware) but it pins the arithmetic and the field gating. */
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
 
-#define REG_BATTERY_SOC      102
-#define REG_TIME_REMAINING   104
-#define REG_AC_OUTPUT_POWER  142
-#define REG_AC_INPUT_POWER   146
-#define REG_AC_INPUT_VOLTAGE 1314
-#define REG_AC_INPUT_CURRENT 1315
-#define REG_CTRL_AC          2011
-#define REG_CTRL_DC          2012
+#include "bt_regs.h"
 
 static int fails;
 #define OKF(c, ...) do { bool _ok = (c); printf(_ok ? "ok:   " : "FAIL: "); \
                          printf(__VA_ARGS__); printf("\n"); \
                          if (!_ok) fails++; } while (0)
 
-/* Same accessor as bt_regs.c. */
-static int reg(uint16_t start, const uint8_t *d, size_t len, uint16_t addr)
+/* A one-register (or n-register) big-endian response body. */
+static size_t words_be(uint8_t *out, const uint16_t *w, size_t n)
 {
-    if (addr < start) return -1;
-    size_t i = (size_t)(addr - start) * 2;
-    if (i + 1 >= len) return -1;
-    return ((int)d[i] << 8) | d[i + 1];
-}
-
-static void put(uint8_t *d, uint16_t start, uint16_t addr, uint16_t val)
-{
-    size_t i = (size_t)(addr - start) * 2;
-    d[i] = val >> 8;
-    d[i + 1] = val & 0xFF;
-}
-
-/* The swapped-string decode used for the model name. */
-static void swap_string(uint16_t start, const uint8_t *d, size_t len,
-                        uint16_t addr, int words, char *out, size_t out_sz)
-{
-    size_t o = 0;
-    for (int w = 0; w < words && o + 2 < out_sz; w++) {
-        int v = reg(start, d, len, addr + w);
-        if (v < 0) break;
-        char lo = (char)(v & 0xFF), hi = (char)((v >> 8) & 0xFF);
-        if (lo) out[o++] = lo;
-        if (hi) out[o++] = hi;
+    for (size_t i = 0; i < n; i++) {
+        out[i * 2]     = w[i] >> 8;
+        out[i * 2 + 1] = w[i] & 0xFF;
     }
-    out[o] = '\0';
-    while (o > 0 && out[o - 1] == ' ') out[--o] = '\0';
+    return n * 2;
+}
+
+static bluetti_state_t fresh(void)
+{
+    bluetti_state_t st;
+    memset(&st, 0, sizeof st);
+    st.soc_pct           = BLUETTI_UNKNOWN_I;
+    st.minutes_remaining = BLUETTI_UNKNOWN_I;
+    st.input_watts = st.output_watts = st.battery_watts = BLUETTI_UNKNOWN_F;
+    st.ac_in_watts = st.ac_out_watts = BLUETTI_UNKNOWN_F;
+    st.dc_in_watts = st.dc_out_watts = BLUETTI_UNKNOWN_F;
+    st.ac_in_volts = st.ac_in_amps = st.ac_out_volts = BLUETTI_UNKNOWN_F;
+    st.ac_switch = st.dc_switch = BLUETTI_UNKNOWN_I;
+    return st;
+}
+
+/* Feed one field response at `addr`. */
+static int one(const bt_device_t *dev, bluetti_state_t *st,
+               uint16_t addr, uint16_t value)
+{
+    uint8_t buf[2];
+    uint16_t w = value;
+    words_be(buf, &w, 1);
+    return bt_regs_apply(dev, addr, buf, 2, st);
 }
 
 int main(void)
 {
-    /* A 16-register block starting at 102. */
-    const uint16_t start = 102;
-    uint8_t d[32];
-    memset(d, 0, sizeof(d));
+    /* ---- model identification ---- */
+    const bt_device_t *el = bt_device_lookup("EL102411000123");
+    OKF(el == &BT_DEVICE_EL10, "EL10 with a serial -> full decode");
+    OKF(bt_device_lookup("EL100V22411") == &BT_DEVICE_EL10,
+        "EL100V2 -> full decode (identical field list)");
+    OKF(bt_device_lookup("EL100V22411") == bt_device_lookup("EL102411"),
+        "EL10 and EL100V2 resolve to the same descriptor");
+    OKF(bt_device_lookup("AC70123") == NULL, "AC70 is not claimed -> generic");
+    OKF(bt_device_lookup("AC200M9") == NULL, "a V1 model -> generic");
+    OKF(bt_device_lookup("EL10ABC") == NULL, "non-digit tail does not match");
+    OKF(bt_device_lookup("") == NULL && bt_device_lookup(NULL) == NULL,
+        "empty / NULL name -> generic");
+    OKF(!BT_DEVICE_GENERIC.full && BT_DEVICE_EL10.full,
+        "generic is not full, EL10 is");
 
-    put(d, start, REG_BATTERY_SOC, 75);
-    put(d, start, REG_TIME_REMAINING, 240);
+    /* ---- polling plan ---- */
+    bt_reg_read_t plan[BT_REG_PLAN_MAX];
+    size_t gn = bt_regs_plan(&BT_DEVICE_GENERIC, plan, BT_REG_PLAN_MAX);
+    OKF(gn >= 5 && gn <= 8, "generic plan is the small common set (%zu)", gn);
+    OKF(plan[0].addr == REG_BATTERY_SOC, "charge is polled first");
+    bool has_type = false;
+    for (size_t i = 0; i < gn; i++) if (plan[i].addr == REG_DEVICE_TYPE) has_type = true;
+    OKF(has_type, "generic plan still reads register 110 to identify the model");
 
-    OKF(reg(start, d, sizeof(d), REG_BATTERY_SOC) == 75, "SOC reads 75");
-    OKF(reg(start, d, sizeof(d), REG_TIME_REMAINING) == 240, "runtime reads 240 min");
+    size_t en = bt_regs_plan(&BT_DEVICE_EL10, plan, BT_REG_PLAN_MAX);
+    OKF(en > gn, "EL10 plan has more fields than generic (%zu > %zu)", en, gn);
+    bool has_ctrl = false, has_sn = false, has_rt = false;
+    for (size_t i = 0; i < en; i++) {
+        if (plan[i].addr == REG_CTRL_AC)     has_ctrl = true;
+        if (plan[i].addr == REG_DEVICE_SN)   has_sn = true;
+        if (plan[i].addr == REG_TIME_REMAINING) has_rt = true;
+    }
+    OKF(has_ctrl && has_sn && has_rt, "EL10 plan covers switches, serial, runtime");
+    OKF(en <= BT_REG_PLAN_MAX, "plan fits the buffer");
 
-    /* Out-of-block addresses must report absent, not garbage. */
-    OKF(reg(start, d, sizeof(d), 101) == -1, "address below the block -> absent");
-    OKF(reg(start, d, sizeof(d), 200) == -1, "address past the block -> absent");
-    OKF(reg(start, d, sizeof(d), start + 15) >= 0, "last register in range");
-    OKF(reg(start, d, sizeof(d), start + 16) == -1, "one past the end -> absent");
+    /* ---- decode: charge ---- */
+    bluetti_state_t st = fresh();
+    OKF(one(&BT_DEVICE_EL10, &st, REG_BATTERY_SOC, 75) == 1 && st.soc_pct == 75,
+        "SOC 75 decodes");
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_BATTERY_SOC, 200);
+    OKF(st.soc_pct == BLUETTI_UNKNOWN_I, "SOC 200 is out of range -> ignored");
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_BATTERY_SOC, 0xFFFF);
+    OKF(st.soc_pct == BLUETTI_UNKNOWN_I, "SOC 0xFFFF (sentinel) -> ignored");
 
-    /* Swapped strings: word 0x4C45 should read "EL", not "LE". */
-    uint8_t s[12];
-    memset(s, 0, sizeof(s));
-    const uint16_t sstart = 110;
-    put(s, sstart, 110, 0x4C45);   /* 'L','E' -> "EL" */
-    put(s, sstart, 111, 0x3031);   /* '0','1' -> "10" */
-    char model[24];
-    swap_string(sstart, s, sizeof(s), 110, 6, model, sizeof(model));
-    OKF(strncmp(model, "EL10", 4) == 0, "swapped string decodes to '%s'", model);
+    /* ---- decode: power sums across separate reads ---- */
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_AC_OUTPUT_POWER, 45);
+    one(&BT_DEVICE_EL10, &st, REG_DC_OUTPUT_POWER, 5);
+    OKF(st.output_watts > 49.5f && st.output_watts < 50.5f,
+        "output = AC(45) + DC(5) from two separate reads");
+    one(&BT_DEVICE_EL10, &st, REG_AC_INPUT_POWER, 60);
+    OKF(st.input_watts > 59.5f && st.input_watts < 60.5f, "input = AC(60)");
+    OKF(st.ac_input_present, "AC input power > 0 -> on line");
+    OKF(st.battery_watts > -10.5f && st.battery_watts < -9.5f,
+        "battery flow = out(50) - in(60) = -10 (charging)");
 
-    /* Mains present is inferred from AC input power. */
-    uint8_t p[16];
-    memset(p, 0, sizeof(p));
-    const uint16_t pstart = 140;
-    put(p, pstart, REG_AC_OUTPUT_POWER, 45);
-    put(p, pstart, REG_AC_INPUT_POWER, 0);
-    bool ac = reg(pstart, p, sizeof(p), REG_AC_INPUT_POWER) > 0;
-    OKF(!ac, "no AC input power -> on battery");
-    OKF(reg(pstart, p, sizeof(p), REG_AC_OUTPUT_POWER) == 45, "AC output 45 W");
+    /* ---- decode: mains from line voltage alone ---- */
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_AC_INPUT_POWER, 0);
+    OKF(!st.ac_input_present, "0 W AC input, no voltage yet -> on battery");
+    one(&BT_DEVICE_EL10, &st, REG_AC_INPUT_VOLTAGE, 2301);
+    OKF(st.ac_in_volts > 230.0f && st.ac_in_volts < 230.2f,
+        "AC input voltage 2301 -> 230.1 V");
+    OKF(st.ac_input_present, "line voltage present -> back on line even at 0 W");
 
-    put(p, pstart, REG_AC_INPUT_POWER, 60);
-    ac = reg(pstart, p, sizeof(p), REG_AC_INPUT_POWER) > 0;
-    OKF(ac, "AC input power present -> on line");
+    /* ---- decode: charging inference ---- */
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_BATTERY_SOC, 80);
+    one(&BT_DEVICE_EL10, &st, REG_AC_INPUT_POWER, 100);
+    OKF(st.charging, "mains in at 80pct then charging");
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_BATTERY_SOC, 100);
+    one(&BT_DEVICE_EL10, &st, REG_AC_INPUT_POWER, 100);
+    OKF(!st.charging, "mains in at 100pct then not charging");
 
-    /* Charging is inferred: mains in and not full. */
-    int soc = 75;
-    OKF(ac && soc < 100, "mains in at 75%% -> charging");
-    soc = 100;
-    OKF(!(ac && soc < 100), "mains in at 100%% -> not charging");
+    /* ---- decode: runtime ---- */
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_TIME_REMAINING, 240);
+    OKF(st.minutes_remaining == 240, "runtime 240 min");
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_TIME_REMAINING, 0);
+    OKF(st.minutes_remaining == BLUETTI_UNKNOWN_I,
+        "runtime 0 -> unknown, not 'no time left'");
+    /* generic model must not decode runtime at all */
+    st = fresh();
+    one(&BT_DEVICE_GENERIC, &st, REG_TIME_REMAINING, 240);
+    OKF(st.minutes_remaining == BLUETTI_UNKNOWN_I,
+        "generic model does not decode runtime");
 
-    /* A zero runtime means "unknown", not "no time left" — it reads zero
-     * both when full and when the device has no estimate. */
-    put(d, start, REG_TIME_REMAINING, 0);
-    int rt = reg(start, d, sizeof(d), REG_TIME_REMAINING);
-    OKF(rt == 0, "runtime register can read zero");
-    OKF((rt > 0 ? rt : -1) == -1, "zero runtime maps to unknown, not 0 minutes");
+    /* ---- decode: switches are strictly 0/1 ---- */
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_CTRL_AC, 1);
+    OKF(st.ac_switch == 1, "CTRL_AC 1 -> outlet on");
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_CTRL_AC, 0);
+    OKF(st.ac_switch == 0, "CTRL_AC 0 -> outlet off");
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_CTRL_AC, 2);
+    OKF(st.ac_switch == BLUETTI_UNKNOWN_I,
+        "CTRL_AC 2 is neither on nor off -> absent (matches lib's None)");
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_CTRL_AC, 0xFFFF);
+    OKF(st.ac_switch == BLUETTI_UNKNOWN_I, "CTRL_AC 0xFFFF -> absent");
 
-    /* Voltage and current are 1-decimal fixed point: 2301 is 230.1 V, so a
-     * raw pass-through would report a unit at ten times its real mains. */
-    uint8_t v[8];
-    memset(v, 0, sizeof(v));
-    const uint16_t vstart = 1314;
-    put(v, vstart, REG_AC_INPUT_VOLTAGE, 2301);
-    put(v, vstart, REG_AC_INPUT_CURRENT, 13);
-    float volts = (float)reg(vstart, v, sizeof(v), REG_AC_INPUT_VOLTAGE) / 10.0f;
-    float amps  = (float)reg(vstart, v, sizeof(v), REG_AC_INPUT_CURRENT) / 10.0f;
-    OKF(volts > 230.0f && volts < 230.2f, "input voltage scales to %.1f V", volts);
-    OKF(amps > 1.29f && amps < 1.31f, "input current scales to %.1f A", amps);
+    /* ---- decode: serial across four words, least-significant first ---- */
+    st = fresh();
+    {
+        uint8_t buf[8];
+        uint16_t w[4] = { 0x0001, 0x0000, 0x0000, 0x0000 };  /* = 1 */
+        words_be(buf, w, 4);
+        bt_regs_apply(&BT_DEVICE_EL10, REG_DEVICE_SN, buf, 8, &st);
+        OKF(strcmp(st.serial, "1") == 0, "serial words LE: {1,0,0,0} -> '1'");
 
-    /* Line voltage with zero input power still means mains present: a
-     * plugged-in unit that is full and idle draws nothing. */
-    put(p, pstart, REG_AC_INPUT_POWER, 0);
-    bool mains = reg(pstart, p, sizeof(p), REG_AC_INPUT_POWER) > 0 ||
-                 reg(vstart, v, sizeof(v), REG_AC_INPUT_VOLTAGE) > 0;
-    OKF(mains, "line voltage with 0 W input still reads as on line");
+        uint16_t w2[4] = { 0x0000, 0x0001, 0x0000, 0x0000 };  /* = 65536 */
+        words_be(buf, w2, 4);
+        st = fresh();
+        bt_regs_apply(&BT_DEVICE_EL10, REG_DEVICE_SN, buf, 8, &st);
+        OKF(strcmp(st.serial, "65536") == 0, "serial {0,1,0,0} -> '65536'");
+    }
 
-    /* Output switches are booleans, and absent must stay distinct from off
-     * so an unread block does not publish an outlet as switched off. */
-    uint8_t c[4];
-    memset(c, 0, sizeof(c));
-    const uint16_t cstart = 2011;
-    put(c, cstart, REG_CTRL_AC, 1);
-    put(c, cstart, REG_CTRL_DC, 0);
-    int acsw = reg(cstart, c, sizeof(c), REG_CTRL_AC);
-    int dcsw = reg(cstart, c, sizeof(c), REG_CTRL_DC);
-    OKF(acsw == 1, "AC outlet reads on");
-    OKF(dcsw == 0, "DC outlet reads off");
-    OKF(reg(cstart, c, sizeof(c), 2013) == -1, "unread switch stays absent, not off");
+    /* ---- decode: swapped model string ---- */
+    st = fresh();
+    {
+        uint8_t buf[12];
+        /* "EL10" as byte-swapped words: 'L','E' then '0','1' */
+        uint16_t w[6] = { ('L' << 8) | 'E', ('0' << 8) | '1', 0, 0, 0, 0 };
+        words_be(buf, w, 6);
+        bt_regs_apply(&BT_DEVICE_EL10, REG_DEVICE_TYPE, buf, 12, &st);
+        OKF(strcmp(st.model, "EL10") == 0, "swapped string -> '%s'", st.model);
+    }
+
+    /* ---- a stray field for the wrong address changes nothing ---- */
+    st = fresh();
+    OKF(one(&BT_DEVICE_EL10, &st, 9999, 1234) == 0 && !st.valid,
+        "an unknown address is ignored, state stays invalid");
 
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;

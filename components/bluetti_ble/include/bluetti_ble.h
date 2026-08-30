@@ -2,25 +2,16 @@
 /*
  * BLUETTI power-station link over Bluetooth LE.
  *
- * STATUS: scaffolding. The Elite 10's protocol has not been confirmed on
- * hardware, so this deliberately does not guess at a decoder. What it
- * does provide is:
+ * Connects to the unit's ff00 service, runs the "2a2a" key exchange
+ * (bt_session.c), then polls Modbus holding registers one field at a
+ * time and decodes them (bt_regs.c). The port follows
+ * Patrick762/bluetti-bt-lib — see docs/PROTOCOL.md — but has not been run
+ * against a physical unit. A unit that turns out not to encrypt falls
+ * back to plain Modbus after the handshake window; PROBE mode enumerates
+ * GATT and hex-dumps notifications without decoding, for when a reading
+ * looks wrong.
  *
- *   - scanning, and connecting to a chosen device
- *   - a PROBE mode that enumerates every GATT service and characteristic,
- *     subscribes to anything that notifies, and hex-dumps what arrives
- *
- * That probe output is what tells us which protocol the unit speaks:
- *
- *   Older BLUETTI firmware (AC200M, AC300, AC500, EB3A, EP600, ...) uses
- *   Modbus RTU framed over a Nordic-UART-style service, documented by
- *   warhammerkid/bluetti_mqtt. Newer firmware — which likely includes the
- *   Elite series — negotiates an encrypted channel first, and no public
- *   implementation derives its keys; the one project that handles it
- *   extracts a per-device pin/key/token from an Android HCI capture.
- *
- * The state struct below is intentionally the same shape the NUT layer
- * already consumes, so wiring a real decoder in later is a local change.
+ * The state struct below is the shape the NUT layer consumes.
  */
 
 #include <stdbool.h>
@@ -46,10 +37,12 @@ typedef struct {
     bool     charging;
     int      minutes_remaining; /* runtime estimate, -1 = n/a            */
 
-    float    input_watts;
-    float    output_watts;
-    float    ac_in_watts;       /* -1 = n/a */
-    float    ac_out_watts;      /* -1 = n/a */
+    float    input_watts;       /* ac_in + dc_in                          */
+    float    output_watts;      /* ac_out + dc_out                        */
+    float    ac_in_watts;       /* <0 = n/a */
+    float    ac_out_watts;      /* <0 = n/a */
+    float    dc_in_watts;       /* <0 = n/a */
+    float    dc_out_watts;      /* <0 = n/a */
     float    battery_watts;     /* >0 discharging */
     float    battery_voltage;   /* 0 = n/a */
     float    battery_temp_c;

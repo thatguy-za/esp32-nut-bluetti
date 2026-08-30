@@ -81,7 +81,9 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
     if (!st->valid) {
         return;
     }
-    nut_server_set_var_int("battery.charge", st->soc_pct);
+    if (st->soc_pct >= 0) {
+        nut_server_set_var_int("battery.charge", st->soc_pct);
+    }
     nut_server_set_var_int("battery.charge.low", st->soc_low_pct);
 
     int rem = st->ac_input_present ? -1 : st->minutes_remaining;
@@ -161,7 +163,7 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
          * guide under heavy load — 20% of a 245 Wh pack is minutes at
          * 300 W but hours at 20 W — so honour the runtime threshold we
          * publish as battery.runtime.low as well. */
-        bool low_charge = st->soc_pct <= st->soc_low_pct;
+        bool low_charge = st->soc_pct >= 0 && st->soc_pct <= st->soc_low_pct;
         bool low_runtime = s_cfg.runtime_low_s > 0 &&
                            st->minutes_remaining >= 0 &&
                            st->minutes_remaining * 60 <= (int)s_cfg.runtime_low_s;

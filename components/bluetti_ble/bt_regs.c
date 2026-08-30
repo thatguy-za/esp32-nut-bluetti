@@ -6,86 +6,69 @@
 
 static const char *TAG = "bt_regs";
 
-/*
- * The V2 portable range. Flags say which optional registers each model
- * declares upstream; the four base fields (charge, and DC/AC output and AC
- * input power) are common to all of them.
- *
- *                        runtime  dc_in  ac_in_v  ac_in_a  ac_out_v */
-const bt_device_t BT_DEVICES[] = {
-    { "AC180",       false, true , true , true , true  },
-    { "AC180P",      false, true , true , false, false },
-    { "AC180T",      false, true , true , true , true  },
-    { "AC2A",        false, true , false, false, false },
-    { "AC2P",        false, true , false, false, false },
-    { "AC50B",       true , false, false, false, false },
-    { "AC60",        false, true , true , false, false },
-    { "AC60P",       false, true , true , false, false },
-    { "AC70",        true , true , true , true , true  },
-    { "AC70P",       false, true , true , true , true  },
-    { "AP300",       false, true , true , false, false },
-    { "EL10",        true , true , true , true , true  },
-    { "EL100V2",     true , true , true , true , true  },
-    { "EL30V2",      true , true , true , false, false },
-    { "Handsfree 1", true , true , true , true , true  },
-    { "PR100V2",     false, true , true , false, false },
-    { "PR30V2",      false, true , true , false, false },
-};
-const size_t BT_DEVICE_COUNT = sizeof(BT_DEVICES) / sizeof(BT_DEVICES[0]);
-
-const bt_device_t BT_DEVICE_GENERIC = {
-    "unknown", false, false, false, false, false
-};
+const bt_device_t BT_DEVICE_EL10    = { "EL10", true };
+const bt_device_t BT_DEVICE_GENERIC = { "unknown", false };
 
 const bt_device_t *bt_device_lookup(const char *name)
 {
     if (!name || !name[0]) {
         return NULL;
     }
-    for (size_t i = 0; i < BT_DEVICE_COUNT; i++) {
-        size_t n = strlen(BT_DEVICES[i].name);
-        if (strncmp(name, BT_DEVICES[i].name, n) != 0) {
+    /* EL10 and EL100V2 share an identical field list and scaling. Any
+     * other model falls through to the generic (charge + power) path. */
+    static const char *FAMILY[] = { "EL10", "EL100V2" };
+    for (size_t i = 0; i < sizeof(FAMILY) / sizeof(FAMILY[0]); i++) {
+        size_t n = strlen(FAMILY[i]);
+        if (strncmp(name, FAMILY[i], n) != 0) {
             continue;
         }
-        /* The tail must be digits, or empty for an exact name: without
-         * this "EL10" would also claim "EL100V2...". */
         size_t j = n;
         while (name[j] >= '0' && name[j] <= '9') {
             j++;
         }
         if (name[j] == '\0') {
-            return &BT_DEVICES[i];
+            return &BT_DEVICE_EL10;
         }
     }
     return NULL;
 }
 
-bool bt_regs_block_wanted(const bt_device_t *dev, uint16_t addr)
+size_t bt_regs_plan(const bt_device_t *dev, bt_reg_read_t *out, size_t max)
 {
-    if (!dev) {
-        return true;         /* not identified yet: poll everything */
+    /* Common to every V2 unit, most-important-first. */
+    static const bt_reg_read_t COMMON[] = {
+        { REG_BATTERY_SOC,     1 },
+        { REG_AC_INPUT_POWER,  1 },
+        { REG_AC_OUTPUT_POWER, 1 },
+        { REG_DC_INPUT_POWER,  1 },
+        { REG_DC_OUTPUT_POWER, 1 },
+        { REG_DEVICE_TYPE,     6 },
+    };
+    /* Elite-10 extras. */
+    static const bt_reg_read_t EL10_EXTRA[] = {
+        { REG_TIME_REMAINING,    1 },
+        { REG_AC_INPUT_VOLTAGE,  1 },
+        { REG_AC_INPUT_CURRENT,  1 },
+        { REG_AC_OUTPUT_VOLTAGE, 1 },
+        { REG_CTRL_AC,           1 },
+        { REG_CTRL_DC,           1 },
+        { REG_DEVICE_SN,         4 },
+    };
+
+    size_t n = 0;
+    for (size_t i = 0; i < sizeof(COMMON) / sizeof(COMMON[0]) && n < max; i++) {
+        out[n++] = COMMON[i];
     }
-    if (addr == REG_AC_INPUT_VOLTAGE) {
-        return dev->has_ac_in_volts || dev->has_ac_in_amps;
+    if (dev && dev->full) {
+        for (size_t i = 0;
+             i < sizeof(EL10_EXTRA) / sizeof(EL10_EXTRA[0]) && n < max; i++) {
+            out[n++] = EL10_EXTRA[i];
+        }
     }
-    if (addr == REG_AC_OUTPUT_VOLTAGE) {
-        return dev->has_ac_out_volts;
-    }
-    return true;
+    return n;
 }
 
-/* Contiguous blocks covering everything the decoder uses. */
-const bt_reg_block_t BT_EL10_BLOCKS[] = {
-    { 102,  16 },   /* SOC, time remaining, device type, serial */
-    { 140,   8 },   /* the four power readings                  */
-    { 1314,  2 },   /* AC input voltage + current               */
-    { 1511,  1 },   /* AC output voltage                        */
-    { 2011,  2 },   /* AC / DC output switches                  */
-};
-const size_t BT_EL10_BLOCK_COUNT =
-    sizeof(BT_EL10_BLOCKS) / sizeof(BT_EL10_BLOCKS[0]);
-
-/* Fetch one register out of a response block, or -1 if out of range. */
+/* One register out of a single field's response, or -1 if not present. */
 static int reg(uint16_t start, const uint8_t *data, size_t len, uint16_t addr)
 {
     if (addr < start) {
@@ -117,9 +100,35 @@ static void swap_string(uint16_t start, const uint8_t *data, size_t len,
         if (hi) out[o++] = hi;
     }
     out[o] = '\0';
-    /* Trim trailing spaces the device pads with. */
     while (o > 0 && (out[o - 1] == ' ' || out[o - 1] == '\0')) {
         out[--o] = '\0';
+    }
+}
+
+/* Recompute everything derived from the raw fields accumulated in `st`. */
+static void recompute(bluetti_state_t *st)
+{
+    float ac_out = st->ac_out_watts  >= 0.0f ? st->ac_out_watts  : 0.0f;
+    float dc_out = st->dc_out_watts  >= 0.0f ? st->dc_out_watts  : 0.0f;
+    if (st->ac_out_watts >= 0.0f || st->dc_out_watts >= 0.0f) {
+        st->output_watts = ac_out + dc_out;
+    }
+
+    float ac_in = st->ac_in_watts >= 0.0f ? st->ac_in_watts : 0.0f;
+    float dc_in = st->dc_in_watts >= 0.0f ? st->dc_in_watts : 0.0f;
+    if (st->ac_in_watts >= 0.0f || st->dc_in_watts >= 0.0f) {
+        st->input_watts = ac_in + dc_in;
+    }
+
+    /* No explicit mains flag in the map: infer it from AC input power, or
+     * line voltage (a plugged-in but idle unit reads 0 W but shows volts). */
+    st->ac_input_present = (st->ac_in_watts  > 0.0f) ||
+                           (st->ac_in_volts  > 0.0f);
+    st->charging = st->ac_input_present && st->soc_pct >= 0 && st->soc_pct < 100;
+
+    if (st->input_watts >= 0.0f && st->output_watts >= 0.0f) {
+        /* NUT-layer sign convention: >0 = discharging. */
+        st->battery_watts = st->output_watts - st->input_watts;
     }
 }
 
@@ -137,96 +146,80 @@ int bt_regs_apply(const bt_device_t *dev, uint16_t start_addr,
         st->soc_pct = v;
         matched++;
     }
-    if (dev->has_runtime &&
-        (v = reg(start_addr, data, len, REG_TIME_REMAINING)) >= 0) {
-        /* 0 shows up both when full and when the estimate is unavailable;
-         * treat it as unknown rather than "no runtime left". */
-        st->minutes_remaining = v > 0 ? v : BLUETTI_UNKNOWN_I;
-        matched++;
-    }
     if ((v = reg(start_addr, data, len, REG_DEVICE_TYPE)) >= 0) {
         swap_string(start_addr, data, len, REG_DEVICE_TYPE, 6,
                     st->model, sizeof(st->model));
         matched++;
     }
-    if ((v = reg(start_addr, data, len, REG_DEVICE_SN)) >= 0) {
-        /* The serial is four words, little-endian across the pair. */
-        uint64_t sn = 0;
-        bool ok = true;
-        for (int w = 3; w >= 0; w--) {
-            int x = reg(start_addr, data, len, REG_DEVICE_SN + w);
-            if (x < 0) { ok = false; break; }
-            sn = (sn << 16) | (uint16_t)x;
-        }
-        if (ok && sn) {
-            snprintf(st->serial, sizeof(st->serial), "%llu",
-                     (unsigned long long)sn);
-            matched++;
-        }
-    }
 
     if ((v = reg(start_addr, data, len, REG_DC_OUTPUT_POWER)) >= 0) {
-        st->output_watts = (float)v;   /* provisional; AC added below */
+        st->dc_out_watts = (float)v;
         matched++;
     }
     if ((v = reg(start_addr, data, len, REG_AC_OUTPUT_POWER)) >= 0) {
         st->ac_out_watts = (float)v;
-        int dc = reg(start_addr, data, len, REG_DC_OUTPUT_POWER);
-        st->output_watts = (float)v + (dc > 0 ? (float)dc : 0.0f);
         matched++;
     }
-    if (dev->has_dc_input &&
-        (v = reg(start_addr, data, len, REG_DC_INPUT_POWER)) >= 0) {
-        st->input_watts = (float)v;
+    if ((v = reg(start_addr, data, len, REG_DC_INPUT_POWER)) >= 0) {
+        st->dc_in_watts = (float)v;
         matched++;
     }
     if ((v = reg(start_addr, data, len, REG_AC_INPUT_POWER)) >= 0) {
         st->ac_in_watts = (float)v;
-        int dc = dev->has_dc_input
-                     ? reg(start_addr, data, len, REG_DC_INPUT_POWER) : -1;
-        st->input_watts = (float)v + (dc > 0 ? (float)dc : 0.0f);
-        /* No explicit mains flag in the map, so infer it from input. */
-        st->ac_input_present = v > 0;
-        matched++;
-    }
-    if (dev->has_ac_in_volts &&
-        (v = reg(start_addr, data, len, REG_AC_INPUT_VOLTAGE)) >= 0) {
-        /* Voltage corroborates the mains flag: a plugged-in but idle unit
-         * can report 0 W while still showing line voltage. */
-        st->ac_in_volts = (float)v / 10.0f;
-        if (v > 0) {
-            st->ac_input_present = true;
-        }
-        matched++;
-    }
-    if ((v = reg(start_addr, data, len, REG_AC_INPUT_CURRENT)) >= 0) {
-        st->ac_in_amps = (float)v / 10.0f;
-        matched++;
-    }
-    if ((v = reg(start_addr, data, len, REG_AC_OUTPUT_VOLTAGE)) >= 0) {
-        st->ac_out_volts = (float)v / 10.0f;
-        matched++;
-    }
-    if ((v = reg(start_addr, data, len, REG_CTRL_AC)) >= 0) {
-        st->ac_switch = v ? 1 : 0;
-        matched++;
-    }
-    if ((v = reg(start_addr, data, len, REG_CTRL_DC)) >= 0) {
-        st->dc_switch = v ? 1 : 0;
         matched++;
     }
 
-    if (matched > 0) {
-        /* Charging is inferred: mains in, and not full. */
-        st->charging = st->ac_input_present && st->soc_pct < 100;
-        /* battery_watts sign convention matches the NUT layer: >0 = out. */
-        if (st->input_watts >= 0.0f && st->output_watts >= 0.0f) {
-            st->battery_watts = st->output_watts - st->input_watts;
+    if (dev->full) {
+        if ((v = reg(start_addr, data, len, REG_TIME_REMAINING)) >= 0) {
+            /* Raw is minutes on the EL10 family. 0 covers both "full" and
+             * "no estimate" — treat as unknown, not "no runtime left". */
+            st->minutes_remaining = v > 0 ? v : BLUETTI_UNKNOWN_I;
+            matched++;
         }
+        if ((v = reg(start_addr, data, len, REG_DEVICE_SN)) >= 0) {
+            /* Four words, least-significant first. */
+            uint64_t sn = 0;
+            bool ok = true;
+            for (int w = 3; w >= 0; w--) {
+                int x = reg(start_addr, data, len, REG_DEVICE_SN + w);
+                if (x < 0) { ok = false; break; }
+                sn = (sn << 16) | (uint16_t)x;
+            }
+            if (ok && sn) {
+                snprintf(st->serial, sizeof(st->serial), "%llu",
+                         (unsigned long long)sn);
+                matched++;
+            }
+        }
+        if ((v = reg(start_addr, data, len, REG_AC_INPUT_VOLTAGE)) >= 0) {
+            st->ac_in_volts = (float)v / 10.0f;
+            matched++;
+        }
+        if ((v = reg(start_addr, data, len, REG_AC_INPUT_CURRENT)) >= 0) {
+            st->ac_in_amps = (float)v / 10.0f;
+            matched++;
+        }
+        if ((v = reg(start_addr, data, len, REG_AC_OUTPUT_VOLTAGE)) >= 0) {
+            st->ac_out_volts = (float)v / 10.0f;
+            matched++;
+        }
+        /* Switch fields are strictly 0 or 1; anything else means the
+         * register is not really there (bluetti-bt-lib returns None). */
+        if ((v = reg(start_addr, data, len, REG_CTRL_AC)) == 0 || v == 1) {
+            st->ac_switch = v;
+            matched++;
+        }
+        if ((v = reg(start_addr, data, len, REG_CTRL_DC)) == 0 || v == 1) {
+            st->dc_switch = v;
+            matched++;
+        }
+    }
+
+    if (matched > 0) {
+        recompute(st);
         st->valid = true;
         st->updated_us = esp_timer_get_time();
     }
-    ESP_LOGD(TAG, "block %u len %u -> %d fields", start_addr,
-             (unsigned)len, matched);
+    ESP_LOGD(TAG, "field @%u len %u -> %d", start_addr, (unsigned)len, matched);
     return matched;
 }

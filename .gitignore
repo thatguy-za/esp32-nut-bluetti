@@ -26,7 +26,7 @@ dist/*.bin
 /test/ipv4_test
 /test/bt_frame_test
 /test/bt_regs_test
-/test/bt_device_test
 /test/ota_gh_test
 /test/lb_test
 /test/config_compat_test
+/test/nut_server_test
