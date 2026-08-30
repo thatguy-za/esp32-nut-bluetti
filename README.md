@@ -112,6 +112,21 @@ The absent fields are the honest gap: the upstream map does not include pack
 voltage or temperature for any of these models, so those NUT variables are
 simply not published rather than guessed.
 
+## Updating
+
+Once it is on the network, the **Maintenance** tab checks GitHub for releases,
+lists them, and installs the one you pick — no file to download. Older releases
+are listed too, since going back is the right move when a new build misbehaves.
+
+The image is written to the spare OTA slot; if it will not boot, the bootloader
+rolls back to the running one. Uploading a `.bin` by hand still works and is
+the fallback when the bridge has no route to the internet.
+
+> The downloaded image is **not signed**. Trust rests on TLS and on GitHub:
+> anyone who can intercept that connection or control the repository controls
+> what gets installed. Secure boot is what fixes that properly, and this
+> project does not enable it.
+
 ## Flash it
 
 Download `esp32-nut-bluetti-<version>-factory.bin` from the

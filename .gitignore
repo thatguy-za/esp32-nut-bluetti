@@ -27,4 +27,5 @@ dist/*.bin
 /test/bt_frame_test
 /test/bt_regs_test
 /test/bt_device_test
+/test/ota_gh_test
 /test/lb_test

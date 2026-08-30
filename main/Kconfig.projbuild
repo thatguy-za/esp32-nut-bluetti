@@ -42,6 +42,21 @@ menu "BLUETTI NUT Bridge"
             MAC address of the BLUETTI unit, e.g. AA:BB:CC:DD:EE:FF.
             Leave empty to connect by advertised name instead.
 
+    config OTA_GITHUB_OWNER
+        string "GitHub owner for firmware updates"
+        default "thatguy-za"
+        help
+            Update checks read this repository's releases. Point both this
+            and OTA_GITHUB_REPO at your own fork if you publish your own
+            builds — the device installs whatever that repo publishes.
+
+    config OTA_GITHUB_REPO
+        string "GitHub repository for firmware updates"
+        default "esp32-nut-bluetti"
+        help
+            Also the asset name stem: the update downloads
+            <repo>-<version>.bin from the matching release tag.
+
     config BLUETTI_POLL_INTERVAL_MS
         int "BLUETTI poll interval (ms)"
         default 5000

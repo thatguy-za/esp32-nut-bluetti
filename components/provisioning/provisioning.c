@@ -22,6 +22,7 @@
 #include "esp_system.h"
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
+#include "ota_github.h"
 #include "esp_app_desc.h"
 #include "mbedtls/base64.h"
 
@@ -506,6 +507,9 @@ static esp_err_t h_admin_reboot(httpd_req_t *r);
 static esp_err_t h_factory_reset(httpd_req_t *r);
 #if CONFIG_ENABLE_WEB_OTA
 static esp_err_t h_ota(httpd_req_t *r);
+static esp_err_t h_update_check(httpd_req_t *r);
+static esp_err_t h_update_install(httpd_req_t *r);
+static esp_err_t h_update_status(httpd_req_t *r);
 #endif
 
 static esp_err_t start_httpd(bool captive)
@@ -513,7 +517,7 @@ static esp_err_t start_httpd(bool captive)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 16;
+    c.max_uri_handlers = 20;
     c.stack_size = 8192;
     if (captive) {
         c.uri_match_fn = httpd_uri_match_wildcard;
@@ -555,6 +559,9 @@ static esp_err_t start_httpd(bool captive)
         reg(P.httpd, "/api/factory-reset", HTTP_POST, h_factory_reset);
 #if CONFIG_ENABLE_WEB_OTA
         reg(P.httpd, "/api/ota", HTTP_POST, h_ota);
+        reg(P.httpd, "/api/update/check", HTTP_GET, h_update_check);
+        reg(P.httpd, "/api/update/install", HTTP_POST, h_update_install);
+        reg(P.httpd, "/api/update/status", HTTP_GET, h_update_status);
 #endif
     }
     return ESP_OK;
@@ -1014,6 +1021,93 @@ static void reboot_task(void *arg)
 }
 
 /* POST /api/ota  — body is a raw app image; header X-Confirm: FLASH */
+/* ---- updates from GitHub releases ---------------------------------- */
+
+static esp_err_t h_update_check(httpd_req_t *r)
+{
+    ota_gh_release_t rel[OTA_GH_MAX_RELEASES];
+    char err[96] = "";
+    int n = ota_gh_check(rel, OTA_GH_MAX_RELEASES, err, sizeof(err));
+
+    char out[160 + OTA_GH_MAX_RELEASES * 48];
+    int k;
+    if (n < 0) {
+        k = snprintf(out, sizeof(out), "{\"error\":\"%s\"}", err);
+    } else {
+        k = snprintf(out, sizeof(out), "{\"releases\":[");
+        for (int i = 0; i < n; i++) {
+            k += snprintf(out + k, sizeof(out) - k,
+                          "%s{\"version\":\"%s\",\"newer\":%s}",
+                          i ? "," : "", rel[i].version,
+                          rel[i].newer ? "true" : "false");
+        }
+        k += snprintf(out + k, sizeof(out) - k, "]}");
+    }
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_send(r, out, k);
+}
+
+static esp_err_t h_update_install(httpd_req_t *r)
+{
+    /* Same confirmation gate as the upload path: this replaces the running
+     * firmware, and a stray click should not be enough. */
+    char confirm[16] = "";
+    httpd_req_get_hdr_value_str(r, "X-Confirm", confirm, sizeof(confirm));
+    if (strcmp(confirm, "FLASH") != 0) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "confirm required");
+    }
+
+    int len = r->content_len;
+    if (len <= 0 || len > 128) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
+    }
+    char *body = malloc(len + 1);
+    if (!body) {
+        return httpd_resp_send_500(r);
+    }
+    int got = 0;
+    while (got < len) {
+        int k = httpd_req_recv(r, body + got, len - got);
+        if (k <= 0) { free(body); return httpd_resp_send_500(r); }
+        got += k;
+    }
+    body[len] = '\0';
+
+    char v[16] = "";
+    bool have = form_get(body, "version", v, sizeof(v));
+    free(body);
+    if (!have || !v[0]) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "no version");
+    }
+    /* This goes straight into a download URL, so keep it to digits and
+     * dots — nothing that could steer the request elsewhere. */
+    for (const char *c = v; *c; c++) {
+        if (!isdigit((unsigned char)*c) && *c != '.') {
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad version");
+        }
+    }
+    if (ota_gh_start(v) != 0) {
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "an update is already running");
+    }
+    ESP_LOGW(TAG, "update to %s requested from the admin page", v);
+    return httpd_resp_sendstr(r, "ok");
+}
+
+static esp_err_t h_update_status(httpd_req_t *r)
+{
+    int pct = -1;
+    char msg[96] = "";
+    ota_gh_state_t s = ota_gh_status(&pct, msg, sizeof(msg));
+    static const char *NAMES[] = { "idle", "running", "done", "failed" };
+    char out[192];
+    int k = snprintf(out, sizeof(out),
+                     "{\"state\":\"%s\",\"pct\":%d,\"msg\":\"%s\"}",
+                     NAMES[s], pct, msg);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_send(r, out, k);
+}
+
 static esp_err_t h_ota(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);

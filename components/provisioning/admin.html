@@ -305,10 +305,23 @@
 <section id="maint">
   <div class="box" id="otaBox" hidden>
     <h2>Firmware update</h2>
-    <p>Running <code id="fwNow">?</code>. Upload a newer
-      <code>esp32-nut-bluetti-&lt;version&gt;.bin</code>; it's written to the spare
-      slot and the device reboots. If the new build won't come up, the bootloader
-      rolls back.</p>
+    <p>Running <code id="fwNow">?</code>. A new build is written to the spare
+      slot and the device reboots. If it won't come up, the bootloader rolls
+      back to this one.</p>
+
+    <h3 style="font-size:.88rem;margin:.9rem 0 .3rem">From GitHub</h3>
+    <div class="row">
+      <button type="button" class="act" id="ghCheck">Check for updates</button>
+      <select id="ghSel" style="max-width:14rem" hidden></select>
+      <button type="button" class="act danger" id="ghGo" hidden>Install</button>
+    </div>
+    <progress id="ghProg" value="0" max="100" style="width:100%;display:none"></progress>
+    <p class="hint" id="ghMsg">Downloads the release straight from
+      <code>github.com</code> over HTTPS. The image is not signed — anyone who
+      can intercept that connection, or who controls the repository, controls
+      what gets installed.</p>
+
+    <h3 style="font-size:.88rem;margin:1.1rem 0 .3rem">From a file</h3>
     <div class="row">
       <input type="file" id="fwFile" accept=".bin,application/octet-stream" style="max-width:24rem">
     </div>
@@ -589,6 +602,88 @@ wireForm('#efForm', '#efSave', '#efMsg', fd => {
     return false;
   }
 });
+
+/* ---- firmware updates from GitHub ---- */
+let ghTimer = null;
+$('#ghCheck').onclick = async () => {
+  $('#ghCheck').disabled = true;
+  $('#ghCheck').textContent = 'Checking…';
+  $('#ghMsg').textContent = 'Asking GitHub…';
+  try {
+    const j = await (await fetch('/api/update/check')).json();
+    if (j.error) {
+      $('#ghMsg').textContent = j.error;
+    } else {
+      const sel = $('#ghSel');
+      sel.innerHTML = '';
+      /* Older builds are listed too — going back is a legitimate move when
+         a new one misbehaves. */
+      for (const r of j.releases) {
+        const o = document.createElement('option');
+        o.value = r.version;
+        o.textContent = r.version + (r.newer ? ' (newer)' : '');
+        sel.appendChild(o);
+      }
+      const newer = j.releases.filter(r => r.newer).length;
+      if (newer) sel.value = j.releases.find(r => r.newer).version;
+      sel.hidden = false;
+      $('#ghGo').hidden = false;
+      $('#ghMsg').textContent = newer
+        ? newer + ' newer release' + (newer > 1 ? 's' : '') + ' available.'
+        : 'Already on the latest release. You can still reinstall or go back.';
+    }
+  } catch (e) {
+    $('#ghMsg').textContent = 'Could not check: ' + e.message;
+  }
+  $('#ghCheck').disabled = false;
+  $('#ghCheck').textContent = 'Check for updates';
+};
+
+function pollGh() {
+  ghTimer = setInterval(async () => {
+    try {
+      const j = await (await fetch('/api/update/status')).json();
+      if (j.pct >= 0) {
+        $('#ghProg').style.display = '';
+        $('#ghProg').value = j.pct;
+      }
+      if (j.state === 'running') {
+        $('#ghMsg').textContent = j.pct >= 0
+          ? 'Downloading… ' + j.pct + '%' : 'Downloading…';
+      } else if (j.state === 'done') {
+        clearInterval(ghTimer);
+        $('#ghMsg').textContent = 'Installed. Rebooting — this page will ' +
+                                  'come back on its own.';
+      } else if (j.state === 'failed') {
+        clearInterval(ghTimer);
+        $('#ghProg').style.display = 'none';
+        $('#ghMsg').textContent = 'Update failed: ' + j.msg;
+        $('#ghGo').disabled = false;
+      }
+    } catch (e) { /* the device reboots mid-poll; keep trying */ }
+  }, 1000);
+}
+
+$('#ghGo').onclick = async () => {
+  const v = $('#ghSel').value;
+  if (!v) return;
+  if (!confirm('Install ' + v + '? The bridge reboots and monitoring stops ' +
+               'for about a minute.')) return;
+  $('#ghGo').disabled = true;
+  $('#ghMsg').textContent = 'Starting…';
+  try {
+    const r = await fetch('/api/update/install', {
+      method: 'POST',
+      headers: { 'X-Confirm': 'FLASH' },
+      body: new URLSearchParams({ version: v }),
+    });
+    if (!r.ok) throw new Error((await r.text()).trim() || 'HTTP ' + r.status);
+    pollGh();
+  } catch (e) {
+    $('#ghMsg').textContent = 'Could not start: ' + e.message;
+    $('#ghGo').disabled = false;
+  }
+};
 
 /* ---- NUT tab ---- */
 function syncNutAuth() {
