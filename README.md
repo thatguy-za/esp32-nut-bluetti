@@ -81,10 +81,19 @@ optional fields off.
 
 ### A caveat on all of it
 
-Development has centred on the **Elite 10**. The other 16 come from the same
-upstream field definitions and share the same code path, but they have had
-exactly as much hardware exposure as the Elite 10 has, which is none. Nothing
-in this table has been confirmed against a physical unit.
+This firmware has not been run against any BLUETTI unit. What it *has* been
+checked against is [`bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib)
+0.1.8 — the released library behind the Home Assistant integration — line by
+line: the `2a2a` key exchange, the AES framing, the register decode and the
+model table all match it. That library's own device table lists the Elite 10 as
+contributor-validated for charge and the four power readings, so the register
+map is not purely theoretical. But a faithful port of working Python is still
+not a tested build, and the other 16 models have had no hardware exposure at
+all.
+
+If a unit turns out not to encrypt, the bridge notices no key exchange starting
+and drops to plain Modbus after ~12 seconds — the same fallback the reference
+library makes.
 
 ### How it talks
 

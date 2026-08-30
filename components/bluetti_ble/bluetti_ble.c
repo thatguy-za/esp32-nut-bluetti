@@ -83,14 +83,22 @@ static struct {
     bt_session_t        *session;
     int                  poll_block;    /* index into BT_EL10_BLOCKS */
 
+    /* One Modbus request at a time: the reference never has two in flight,
+     * and a second read while the first is still coming back confuses the
+     * reassembly. */
+    bool                 req_in_flight;
+    int64_t              req_sent_us;
+
     bluetti_state_t      state;
     SemaphoreHandle_t    lock;
     esp_timer_handle_t   scan_timer;
     esp_timer_handle_t   poll_timer;
+    esp_timer_handle_t   kex_timer;     /* one-shot: plain-Modbus fallback */
 } b;
 
 static void start_connect_scan(void);
 static void poll_timer_cb(void *arg);
+static void kex_timer_cb(void *arg);
 static void start_disc(bool report_all);
 static int  gap_event(struct ble_gap_event *event, void *arg);
 
@@ -277,6 +285,8 @@ static void session_regs(uint16_t addr, const uint8_t *data, size_t len,
     copy = b.state;
     xSemaphoreGive(b.lock);
 
+    b.req_in_flight = false;      /* response arrived; next block may go */
+
     if (matched > 0 && b.state_cb) {
         b.state_cb(&copy, b.state_cb_user);
     }
@@ -284,10 +294,21 @@ static void session_regs(uint16_t addr, const uint8_t *data, size_t len,
 
 /* Walk the register blocks one per tick, so a slow device never has more
  * than one outstanding request. */
+#define REQ_TIMEOUT_US (6 * 1000 * 1000LL)
+
 static void poll_timer_cb(void *arg)
 {
     if (!b.connected || !bt_session_ready(b.session)) {
         return;
+    }
+    /* Hold off while a request is still outstanding, unless it has been
+     * long enough that the response is not coming. */
+    if (b.req_in_flight) {
+        if (esp_timer_get_time() - b.req_sent_us < REQ_TIMEOUT_US) {
+            return;
+        }
+        ESP_LOGW(TAG, "no response to the last read; moving on");
+        b.req_in_flight = false;
     }
     /* Walk to the next block this model actually has fields in, so a unit
      * without AC metering does not spend two round trips a cycle on
@@ -300,8 +321,24 @@ static void poll_timer_cb(void *arg)
         }
         if (bt_session_read_regs(b.session, blk->addr, blk->count) != 0) {
             ESP_LOGW(TAG, "register read %u failed", blk->addr);
+            return;
         }
+        b.req_in_flight = true;
+        b.req_sent_us = esp_timer_get_time();
         return;
+    }
+}
+
+/*
+ * Armed when notifications go live. If the device has not opened the key
+ * exchange by the time this fires, it is not going to — switch the session
+ * to unencrypted Modbus, the way the reference library falls back after
+ * its encrypted attempt times out.
+ */
+static void kex_timer_cb(void *arg)
+{
+    if (b.connected && bt_session_state(b.session) == BT_SESS_IDLE) {
+        bt_session_use_plain(b.session);
     }
 }
 
@@ -324,6 +361,12 @@ static int on_sub(uint16_t conn, const struct ble_gatt_error *err,
         /* Spread the blocks across the interval. */
         esp_timer_start_periodic(b.poll_timer,
             (uint64_t)(period / BT_EL10_BLOCK_COUNT + 1) * 1000);
+    }
+    /* ...but not every unit encrypts. If no challenge lands in this window,
+     * fall back to plain Modbus rather than waiting forever. */
+    if (b.kex_timer && !b.cfg.probe) {
+        esp_timer_stop(b.kex_timer);
+        esp_timer_start_once(b.kex_timer, 12 * 1000 * 1000ULL);
     }
     return 0;
 }
@@ -457,6 +500,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             b.notify_n = 0;
             b.write_handle = b.notify_handle = b.notify_cccd = 0;
             b.poll_block = 0;
+            b.req_in_flight = false;
             bt_session_reset(b.session);
         b.device = NULL;   /* re-identify on the next connect */
             ble_gattc_exchange_mtu(b.conn_handle, NULL, NULL);
@@ -482,6 +526,9 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         b.connected = false;
         if (b.poll_timer) {
             esp_timer_stop(b.poll_timer);
+        }
+        if (b.kex_timer) {
+            esp_timer_stop(b.kex_timer);
         }
         bt_session_reset(b.session);
         b.device = NULL;   /* re-identify on the next connect */
@@ -619,6 +666,8 @@ int bluetti_ble_host_init(void)
     esp_timer_create(&st, &b.scan_timer);
     esp_timer_create_args_t pt = { .callback = poll_timer_cb, .name = "bt_poll" };
     esp_timer_create(&pt, &b.poll_timer);
+    esp_timer_create_args_t kt = { .callback = kex_timer_cb, .name = "bt_kex" };
+    esp_timer_create(&kt, &b.kex_timer);
 
     b.session = bt_session_new(session_tx, session_regs, NULL);
     if (!b.session) {

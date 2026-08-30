@@ -20,7 +20,7 @@ typedef enum {
     BT_SESS_IDLE = 0,
     BT_SESS_CHALLENGE,   /* answered the challenge, awaiting the peer key */
     BT_SESS_PUBKEY,      /* sent our key, awaiting acceptance             */
-    BT_SESS_READY,       /* secure key established, Modbus available      */
+    BT_SESS_READY,       /* Modbus available (secure key, or plain)       */
     BT_SESS_FAILED,
 } bt_sess_state_t;
 
@@ -41,6 +41,17 @@ void bt_session_reset(bt_session_t *s);
 
 bt_sess_state_t bt_session_state(const bt_session_t *s);
 bool            bt_session_ready(const bt_session_t *s);
+
+/*
+ * Not every V2 unit encrypts. The reference library tries an encrypted
+ * connection first and falls back to plain Modbus when it times out; we
+ * do the same. If no challenge has arrived a short while after
+ * notifications are enabled, call this: it puts the session straight into
+ * READY with no crypto, and register reads go out as bare Modbus.
+ * A no-op once any handshake byte has been seen.
+ */
+void bt_session_use_plain(bt_session_t *s);
+bool bt_session_is_plain(const bt_session_t *s);
 
 /* Feed bytes from a notification. Handles reassembly internally. */
 void bt_session_feed(bt_session_t *s, const uint8_t *data, size_t len);

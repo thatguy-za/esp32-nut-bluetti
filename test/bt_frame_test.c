@@ -112,6 +112,38 @@ int main(void)
     OKF(true, "padding rounds up to the AES block for 1..64 bytes");
     OKF(((8 + 15) / 16) * 16 == 16, "an 8-byte Modbus read pads to one block");
 
+    /* Plain-Modbus reassembly (the unencrypted fallback path): a response
+     * frame is 3 + bytecount + 2, and it can arrive split across several
+     * notifications. Reconstruct it the way bt_session_feed does. */
+    uint8_t full[9] = { 0x01, 0x03, 0x04, 0x00, 0x4B, 0x00, 0x2D, 0x00, 0x00 };
+    {
+        uint16_t fc = crc16_modbus(full, 3 + full[2]);
+        full[3 + full[2]] = fc & 0xFF;
+        full[4 + full[2]] = fc >> 8;
+    }
+    uint8_t buf[32];
+    size_t buf_len = 0, consumed = 0;
+    const size_t chunks[] = { 1, 2, 6 };   /* 1 + 2 + 6 == 9 */
+    for (size_t i = 0, off = 0; i < 3; i++) {
+        memcpy(buf + buf_len, full + off, chunks[i]);
+        buf_len += chunks[i];
+        off += chunks[i];
+        while (buf_len >= 3) {
+            size_t frame_len = 3 + buf[2] + 2;
+            if (buf_len < frame_len) break;
+            OKF(crc16_modbus(buf, 3 + buf[2]) ==
+                ((uint16_t)buf[3 + buf[2]] | ((uint16_t)buf[4 + buf[2]] << 8)),
+                "reassembled plain frame passes CRC");
+            OKF(buf[2] == 4 && (((int)buf[3] << 8) | buf[4]) == 75,
+                "reassembled plain frame decodes register 0 as 75");
+            memmove(buf, buf + frame_len, buf_len - frame_len);
+            buf_len -= frame_len;
+            consumed++;
+        }
+    }
+    OKF(consumed == 1 && buf_len == 0,
+        "exactly one frame recovered, nothing left over");
+
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;
 }

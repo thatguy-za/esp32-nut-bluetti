@@ -151,17 +151,46 @@ What the map does not give, and what was done about it:
 - **design capacity** — the Elite 10 is 128 Wh, a constant
 - **continuous AC rating** — 200 W for this unit; a UI setting, not hardcoded
 
+## Encryption is not assumed
+
+Not every V2 unit encrypts. `bluetti-bt-lib`'s `recognize_device` tries an
+encrypted connection first and, when it times out, retries in plain Modbus —
+the "encrypted" flag it ends up storing is just whichever attempt answered.
+
+This firmware does the same in one connection rather than two: it subscribes,
+waits for the device to open the `2a2a` exchange, and if nothing arrives within
+about 12 seconds, `bt_session_use_plain()` switches the session to unencrypted
+Modbus — register reads then go out as bare PDUs and responses are parsed
+straight off the wire. A single stray handshake byte cancels the fallback.
+
+One Modbus request is outstanding at a time, matching the reference's
+send-then-await loop; the next block waits for the response or a 6-second
+timeout.
+
+## Cross-check against the reference
+
+`bt_session.c` / `bt_crypto.c` were audited line-by-line against
+`bluetti_bt_lib/bluetooth/encryption.py` at 0.1.8:
+
+- the fixed `LOCAL_AES_KEY`, `PRIVATE_KEY_L1` and `PUBLIC_KEY_K2` bytes match
+- challenge: IV is `MD5(nonce reversed)`, first key is `IV XOR LOCAL_AES_KEY`,
+  reply body `0204 || IV[8:12]`, sent **unencrypted**
+- peer key: verify `sig` over `pubkey || IV` against K2; reply `0580 || our
+  pubkey || our sig(pubkey || IV) under L1`, AES-wrapped with the handshake key
+- session key: raw ECDH X coordinate on secp256r1, used directly as AES-256
+- frame wrapping: `len_be16` then, when secure, a 4-byte seed whose `MD5` is the
+  per-message IV; zero padding to the AES block
+
 ## Probe mode
 
-The decoder is written, so probe mode is now a diagnostic rather than a first
-step: enable it when a value looks wrong or the link never reaches `READY`.
+Enable it when a value looks wrong or the link never reaches `READY`.
 In the Logs tab:
 
 - `ff01`/`ff02` present → the transport above is right.
 - Notifications starting `2a 2a` → the encrypted handshake, which
   `bt_session.c` answers. If it repeats without ever reaching `READY`, the
   fixed keys or the challenge derivation are wrong for this firmware.
-- Plain Modbus responses (slave id, `0x03`, byte count, data, CRC) → the unit
-  is unencrypted; the session layer passes those straight through.
+- Plain Modbus responses (any slave id, `0x03`, byte count, data, CRC) → the
+  unit is unencrypted; the fallback path handles these.
 - Connect then immediate disconnect with no traffic → the device gave up
   waiting for a handshake response.

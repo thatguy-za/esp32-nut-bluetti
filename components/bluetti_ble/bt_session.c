@@ -32,6 +32,7 @@ struct bt_session {
     void           *user;
 
     bt_sess_state_t state;
+    bool            plain;      /* device does not encrypt; raw Modbus */
 
     uint8_t         unsecure_key[16];
     uint8_t         unsecure_iv[16];
@@ -341,7 +342,10 @@ static void handle_modbus(bt_session_t *s, const uint8_t *f, size_t len)
         ESP_LOGW(TAG, "modbus exception %u for address %u", f[2], s->pending_addr);
         return;
     }
-    if (f[0] != MODBUS_SLAVE || f[1] != MODBUS_READ) {
+    /* Accept any slave id — the reference does not check it, and a unit
+     * answering as something other than 0x01 would otherwise be silently
+     * dropped. Only the function code and CRC have to hold. */
+    if (f[1] != MODBUS_READ) {
         return;
     }
     size_t count = f[2];
@@ -377,6 +381,11 @@ int bt_session_read_regs(bt_session_t *s, uint16_t addr, uint16_t count)
 
     s->pending_addr = addr;
     s->pending_count = count;
+    s->rx_len = 0;           /* a fresh response is coming */
+
+    if (s->plain) {
+        return s->tx(cmd, sizeof(cmd), s->user);
+    }
 
     uint8_t wrapped[RX_MAX];
     size_t n = aes_wrap(s->secure_key, 32, NULL, cmd, sizeof(cmd),
@@ -393,6 +402,31 @@ int bt_session_read_regs(bt_session_t *s, uint16_t addr, uint16_t count)
 
 void bt_session_feed(bt_session_t *s, const uint8_t *data, size_t len)
 {
+    /*
+     * Plain mode: no crypto, the notifications are raw Modbus. Buffer
+     * fragments until a whole response is in hand — [id][fn][bytecount]
+     * [data...][crc:2] — then hand it straight to the Modbus parser.
+     */
+    if (s->plain) {
+        if (s->rx_len + len > sizeof(s->rx)) {
+            s->rx_len = 0;
+            return;
+        }
+        memcpy(s->rx + s->rx_len, data, len);
+        s->rx_len += len;
+
+        while (s->rx_len >= 3) {
+            size_t frame = 3 + s->rx[2] + 2;
+            if (s->rx_len < frame) {
+                return;                        /* wait for the rest */
+            }
+            handle_modbus(s, s->rx, frame);
+            memmove(s->rx, s->rx + frame, s->rx_len - frame);
+            s->rx_len -= frame;
+        }
+        return;
+    }
+
     /* Plaintext key-exchange frames arrive whole and unencrypted. */
     if (len >= 2 && data[0] == KEX_MAGIC0 && data[1] == KEX_MAGIC1 &&
         !s->have_unsecure) {
@@ -471,11 +505,28 @@ void bt_session_reset(bt_session_t *s)
     bt_keypair_free(s->kp);
     s->kp = NULL;
     s->state = BT_SESS_IDLE;
+    s->plain = false;
     s->have_unsecure = false;
     s->have_secure = false;
     s->rx_len = 0;
     memset(s->secure_key, 0, sizeof(s->secure_key));
     memset(s->unsecure_key, 0, sizeof(s->unsecure_key));
+}
+
+void bt_session_use_plain(bt_session_t *s)
+{
+    if (!s || s->state != BT_SESS_IDLE) {
+        return;                    /* a handshake is already under way */
+    }
+    s->plain = true;
+    s->rx_len = 0;
+    s->state = BT_SESS_READY;
+    ESP_LOGW(TAG, "no challenge seen; falling back to unencrypted Modbus");
+}
+
+bool bt_session_is_plain(const bt_session_t *s)
+{
+    return s && s->plain;
 }
 
 bt_sess_state_t bt_session_state(const bt_session_t *s)
@@ -485,5 +536,5 @@ bt_sess_state_t bt_session_state(const bt_session_t *s)
 
 bool bt_session_ready(const bt_session_t *s)
 {
-    return s && s->state == BT_SESS_READY && s->have_secure;
+    return s && s->state == BT_SESS_READY && (s->have_secure || s->plain);
 }
