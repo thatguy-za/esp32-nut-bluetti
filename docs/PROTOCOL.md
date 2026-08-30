@@ -27,6 +27,15 @@ reading looks wrong, probe mode (below) shows the raw frames.
 Note these are **not** the Nordic UART UUIDs used by EcoFlow — they're
 `ff01`/`ff02` in the 16-bit space.
 
+`bluetti-bt-lib` writes to `ff02` with `bleak`'s default (`response=None`), which
+picks **write-with-response** whenever the characteristic advertises the `WRITE`
+property and falls back to write-without-response otherwise. This firmware reads
+`ff02`'s properties during discovery and does the same. It matters because a unit
+that accepts only one write type on `ff02` drops the other silently — and the
+first thing written is the challenge reply, so getting it wrong stalls the
+handshake before it visibly starts. Probe mode's characteristic dump shows which
+properties `ff02` has (`W` = write, `w` = write-no-response).
+
 ## Encryption (V2 devices, which includes the Elite series)
 
 Newer firmware negotiates an encrypted channel before it will answer Modbus.

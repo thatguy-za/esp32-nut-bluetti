@@ -77,6 +77,7 @@ static struct {
 
     /* Characteristic handles for the BLUETTI service. */
     uint16_t             write_handle;
+    bool                 write_with_rsp;   /* ff02 advertises WRITE */
     uint16_t             notify_handle;
     uint16_t             notify_cccd;
 
@@ -271,14 +272,32 @@ static int on_probe_svc(uint16_t conn, const struct ble_gatt_error *err,
 /* Session plumbing                                                     */
 /* ------------------------------------------------------------------ */
 
-/* Session -> radio. Write-without-response: the device does not ack. */
+static int on_write_done(uint16_t conn, const struct ble_gatt_error *err,
+                         struct ble_gatt_attr *attr, void *arg)
+{
+    if (err->status != 0) {
+        ESP_LOGW(TAG, "acked write failed: %d", err->status);
+    }
+    return 0;
+}
+
+/*
+ * Session -> radio. bluetti-bt-lib writes to ff02 with bleak's default
+ * (response=None), which picks write-with-response whenever the
+ * characteristic advertises the WRITE property and falls back to
+ * write-without-response otherwise. Match that: some units accept only
+ * one write type on ff02, and a write of the wrong type is dropped
+ * silently — which would stall the handshake before it starts.
+ */
 static int session_tx(const uint8_t *data, size_t len, void *user)
 {
     if (!b.connected || b.write_handle == 0) {
         return -1;
     }
-    int rc = ble_gattc_write_no_rsp_flat(b.conn_handle, b.write_handle,
-                                         data, len);
+    int rc = b.write_with_rsp
+        ? ble_gattc_write_flat(b.conn_handle, b.write_handle, data, len,
+                               on_write_done, NULL)
+        : ble_gattc_write_no_rsp_flat(b.conn_handle, b.write_handle, data, len);
     if (rc != 0) {
         ESP_LOGW(TAG, "write failed: %d", rc);
         return -1;
@@ -458,6 +477,10 @@ static int on_disc_write_chr(uint16_t conn, const struct ble_gatt_error *err,
 {
     if (err->status == 0 && chr) {
         b.write_handle = chr->val_handle;
+        /* bleak uses write-with-response iff the WRITE property is set. */
+        b.write_with_rsp = (chr->properties & BLE_GATT_CHR_PROP_WRITE) != 0;
+        ESP_LOGI(TAG, "ff02 write handle %u, %s", chr->val_handle,
+                 b.write_with_rsp ? "with response" : "no response");
         return 0;
     }
     if (err->status == BLE_HS_EDONE) {
@@ -557,6 +580,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             b.connected = true;
             b.notify_n = 0;
             b.write_handle = b.notify_handle = b.notify_cccd = 0;
+            b.write_with_rsp = false;
             b.plan_n = b.plan_i = 0;
             b.req_in_flight = false;
             b.poll_fails = 0;
