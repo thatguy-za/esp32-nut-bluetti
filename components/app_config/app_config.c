@@ -1,6 +1,7 @@
 #include "app_config.h"
 
 #include <string.h>
+#include <stddef.h>
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
@@ -18,9 +19,16 @@ static const char *TAG = "app_config";
  * different version (or a different size) is discarded and the device
  * comes up unprovisioned — there is no migration.
  *   2: dropped the advertised-name BLE targeting fallback.
- *   3: added the status-LED settings.
+ *   3: added the status-LED on/off toggle.
+ *   4: added the status-LED pin.
+ *
+ * From v3 on, fields are only ever appended, and a stored blob of an
+ * older-but-recognised version (3 or 4) is kept: the bytes that were
+ * written still mean what they meant, and the newer trailing fields come
+ * up at their defaults. A newer, much older, or unreadable blob is still
+ * discarded.
  */
-#define CFG_VERSION 3u
+#define CFG_VERSION 4u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -61,6 +69,7 @@ void app_config_defaults(app_config_t *cfg)
     cfg->auth_set = false;           /* setup must choose a password */
     cfg->provisioned = false;
     cfg->led_enabled = true;
+    cfg->led_gpio    = CONFIG_STATUS_LED_GPIO;
 
     /* A blank SSID from Kconfig means "must provision". */
     if (strcmp(cfg->wifi_ssid, "myssid") == 0) {
@@ -81,18 +90,31 @@ esp_err_t app_config_load(app_config_t *cfg)
         return ESP_OK;
     }
 
-    cfg_blob_t blob;
+    /* Pre-seed the struct with defaults so that a short read from an
+     * older, smaller layout leaves the newer trailing fields alone. */
+    cfg_blob_t blob = { .version = CFG_VERSION, .cfg = *cfg };
     size_t len = sizeof(blob);
     err = nvs_get_blob(h, CFG_KEY, &blob, &len);
     nvs_close(h);
 
-    if (err != ESP_OK || len != sizeof(blob) || blob.version != CFG_VERSION) {
+    /* Accept a v3 blob (0.6.0) as well as v4: v4 only appends led_gpio, so
+     * a shorter v3 blob still means what it says and led_gpio stays at its
+     * default. Anything older, newer, or a length that cannot be a v3/v4
+     * blob is discarded and the device re-provisions. */
+    const size_t min_len =
+        offsetof(cfg_blob_t, cfg) + offsetof(app_config_t, led_gpio);
+    if (err != ESP_OK || len > sizeof(blob) || len < min_len ||
+        blob.version < 3u || blob.version > CFG_VERSION) {
         ESP_LOGW(TAG, "stored config unusable (err=%s len=%u ver=%u), defaults",
                  esp_err_to_name(err), (unsigned)len,
                  err == ESP_OK ? (unsigned)blob.version : 0u);
         return ESP_OK;
     }
 
+    if (blob.version < CFG_VERSION) {
+        ESP_LOGW(TAG, "config v%u < v%u: kept, new fields at defaults",
+                 (unsigned)blob.version, (unsigned)CFG_VERSION);
+    }
     *cfg = blob.cfg;
     ESP_LOGI(TAG, "loaded config: ssid='%s' ble='%s' ups='%s' provisioned=%d",
              cfg->wifi_ssid, cfg->ble_addr,

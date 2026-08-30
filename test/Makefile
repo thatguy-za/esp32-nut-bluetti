@@ -9,7 +9,7 @@ CFLAGS  ?= -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter
 NUT     := ../components/nut_server
 
 .PHONY: all clean
-all: nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test bt_device_test ota_gh_test
+all: nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test bt_device_test ota_gh_test config_compat_test
 	./nut_server_test
 	./auth_test
 	./ipv4_test
@@ -18,6 +18,7 @@ all: nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test bt_d
 	./bt_regs_test
 	./bt_device_test
 	./ota_gh_test ota_gh_test
+	./config_compat_test
 
 nut_server_test: nut_server_test.c $(NUT)/nut_server.c
 	$(CC) $(CFLAGS) -Ishim -I$(NUT)/include $^ -lpthread -o $@
@@ -43,5 +44,8 @@ bt_device_test: bt_device_test.c
 ota_gh_test: ota_gh_test.c
 	$(CC) $(CFLAGS) $^ -o $@
 
+config_compat_test: config_compat_test.c
+	$(CC) $(CFLAGS) -Ishim -I../components/app_config/include $^ -o $@
+
 clean:
-	rm -rf nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test bt_device_test ota_gh_test *.dSYM
+	rm -rf nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test bt_device_test ota_gh_test config_compat_test *.dSYM

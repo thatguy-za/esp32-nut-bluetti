@@ -1,7 +1,7 @@
 # Host tests
 
 Portable-logic tests that run without ESP-IDF or hardware. `make` builds and
-runs all eight C suites:
+runs all nine C suites:
 
 | Suite | Covers |
 | --- | --- |
@@ -14,6 +14,7 @@ runs all eight C suites:
 | `ota_gh_test` | GitHub update helpers: version ordering (a string compare would put `0.10.0` before `0.9.0`) and the streaming release scanner, fed at every chunk size from 1 to 40 so no token split is handled correctly only by luck |
 | `bt_device_test` | Model identification: that the digit-tail rule keeps `EL10` from claiming an `EL100V2` (and `AC60`/`AC60P`, `AC180`/`AC180T`/`AC180P`, `PR30V2`/`PR100V2`), that unsupported and V1 models resolve to unknown, and that the per-model field sets differ where upstream says they do |
 | `bt_regs_test` | Elite 10 register decode: address bounds, swapped-string model name, mains-present and charging inference, and zero-runtime treated as unknown rather than empty |
+| `config_compat_test` | the forward-compatible NVS loader: pins that `led_gpio` is the last field of `app_config_t` and `led_enabled` sits right before it, and that a v3-length blob loads with the stored fields intact and `led_gpio` at its default — a future field reorder that would silently wipe or misread everyone's config fails here |
 | `nut_server_test` | drives the real `nut_server.c` over a loopback socket: `LIST UPS/VAR`, `GET VAR`, `GET UPSDESC/NUMLOGINS`, the `upsmon` primary handshake (`USERNAME`/`PASSWORD`/`LOGIN`/`PRIMARY`), empty `LIST CLIENT/RW`, error replies; plus the optional NUT login — reads stay anonymous, wrong/missing credentials denied on `LOGIN`/`PRIMARY`, and credentials not leaking between connections |
 
 ## Crypto cross-check (optional)

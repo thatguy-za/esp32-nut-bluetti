@@ -151,11 +151,13 @@ the [admin page](#admin-page). Offline / Linux / `esptool` instructions are in
 You also need a Wi-Fi network the monitoring hosts can reach, and — on most dev
 boards — the BOOT button on GPIO0 for the config wipe.
 
-**Status LED.** If the board has an addressable WS2812 LED (GPIO 48 on most
-ESP32-S3 dev boards, sometimes 38 — set `STATUS_LED_GPIO`), it shows red while
+**Status LED.** If the board has an addressable WS2812 LED, it shows red while
 the bridge is starting and green once it is connected to the BLUETTI unit over
-Bluetooth. A **Status LED** toggle on the Maintenance tab turns it off. A board
-with a plain single-colour LED, or none, is unaffected — set the GPIO to -1.
+Bluetooth. The **Maintenance** tab has an on/off toggle, a **data GPIO** field,
+and a **Test** button that flashes red / green / blue on that pin — so you can
+find which GPIO your board wired the LED to without a rebuild. Common values are
+48, 38 and 21; `-1` turns it off. `STATUS_LED_GPIO` sets the boot default. A
+board with a plain single-colour LED, or none, stays dark.
 
 ## Setting it up
 

@@ -298,7 +298,7 @@ void app_main(void)
 
     /* Up as early as possible so the red "booting" light is on for the
      * whole startup, not just the tail of it. */
-    led_status_init(CONFIG_STATUS_LED_GPIO, cfg->led_enabled);
+    led_status_init(cfg->led_gpio, cfg->led_enabled);
 
     ESP_ERROR_CHECK(wifi_mgr_init());
 

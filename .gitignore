@@ -29,3 +29,4 @@ dist/*.bin
 /test/bt_device_test
 /test/ota_gh_test
 /test/lb_test
+/test/config_compat_test

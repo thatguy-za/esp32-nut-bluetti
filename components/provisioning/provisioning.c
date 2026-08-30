@@ -792,7 +792,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
 #else
     const bool ota = false;
 #endif
-    char out[800];
+    char out[860];
     snprintf(out, sizeof(out),
              "{\"wifi_mode\":\"%s\",\"network\":\"%s\",\"ip\":\"%s\","
              "\"addressing\":\"%s\",\"gateway\":\"%s\",\"dns\":\"%s\","
@@ -802,7 +802,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              "\"ble_target\":\"%s\",\"ble_connected\":%s,"
              "\"telemetry_valid\":%s,\"battery_pct\":%d,"
              "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\","
-             "\"led\":%s,\"configured\":%s}",
+             "\"led\":%s,\"led_gpio\":%d,\"configured\":%s}",
              ap ? "ap" : "station",
              ap ? P.cfg->ap_ssid : P.cfg->wifi_ssid, ip,
              ap ? "ap" : (P.cfg->use_static_ip ? "static" : "dhcp"), gw, dns,
@@ -817,6 +817,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              have && st.charging ? "true" : "false",
              have && st.model[0] ? st.model : "",
              led_status_enabled() ? "true" : "false",
+             led_status_gpio(),
              P.cfg->ble_addr[0] ? "true" : "false");
     return send_json(r, out);
 }
@@ -1163,10 +1164,10 @@ static esp_err_t h_led_toggle(httpd_req_t *r)
     REQUIRE_AUTH(r);
 
     int len = r->content_len;
-    if (len <= 0 || len > 32) {
+    if (len <= 0 || len > 48) {
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
     }
-    char body[33];
+    char body[49];
     int got = 0;
     while (got < len) {
         int k = httpd_req_recv(r, body + got, len - got);
@@ -1176,16 +1177,44 @@ static esp_err_t h_led_toggle(httpd_req_t *r)
     body[len] = '\0';
 
     char v[8] = "";
-    if (!form_get(body, "on", v, sizeof(v))) {
-        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "missing 'on'");
-    }
-    bool on = (v[0] == '1' || v[0] == 't');
+    bool changed = false;
 
-    led_status_enable(on);
-    P.cfg->led_enabled = on;
-    app_config_save(P.cfg);          /* survives a reboot */
-    ESP_LOGI(TAG, "status LED %s", on ? "on" : "off");
-    return send_json(r, on ? "{\"led\":true}" : "{\"led\":false}");
+    /* gpio: move the LED to a different pin (-1 disables it). */
+    if (form_get(body, "gpio", v, sizeof(v)) && v[0]) {
+        int gpio = atoi(v);
+        if (gpio < -1 || gpio > 48) {
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                       "gpio out of range");
+        }
+        led_status_reinit(gpio);
+        P.cfg->led_gpio = (int16_t)gpio;
+        changed = true;
+    }
+
+    /* on: the user's enable toggle. */
+    if (form_get(body, "on", v, sizeof(v)) && v[0]) {
+        bool on = (v[0] == '1' || v[0] == 't');
+        led_status_enable(on);
+        P.cfg->led_enabled = on;
+        changed = true;
+    }
+
+    if (changed) {
+        app_config_save(P.cfg);      /* survives a reboot */
+    }
+
+    /* test: flash R/G/B once, so the user can confirm the pin. Done last,
+     * so it runs on whatever pin the request just set. */
+    if (form_get(body, "test", v, sizeof(v)) && (v[0] == '1' || v[0] == 't')) {
+        if (!led_status_identify()) {
+            return send_json(r, "{\"tested\":false}");
+        }
+    }
+
+    char out[64];
+    snprintf(out, sizeof(out), "{\"led\":%s,\"led_gpio\":%d}",
+             led_status_enabled() ? "true" : "false", led_status_gpio());
+    return send_json(r, out);
 }
 
 static esp_err_t h_admin_reboot(httpd_req_t *r)
