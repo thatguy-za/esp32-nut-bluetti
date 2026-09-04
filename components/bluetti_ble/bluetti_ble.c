@@ -139,6 +139,8 @@ static void state_reset(void)
     b.state.charging_mode     = BLUETTI_UNKNOWN_I;
     b.state.power_lifting     = BLUETTI_UNKNOWN_I;
     b.state.display_time      = BLUETTI_UNKNOWN_I;
+    b.state.soc_min           = BLUETTI_UNKNOWN_I;
+    b.state.soc_max           = BLUETTI_UNKNOWN_I;
 }
 static void start_disc(bool report_all);
 static int  gap_event(struct ble_gap_event *event, void *arg);
@@ -331,13 +333,15 @@ static void session_regs(uint16_t addr, const uint8_t *data, size_t len,
     if (!b.device && b.state.model[0]) {
         b.device = bt_device_lookup(b.state.model);
         if (b.device) {
-            ESP_LOGI(TAG, "identified as %s", b.device->name);
+            ESP_LOGI(TAG, "identified as %s (%s telemetry, controls 0x%03x)",
+                     b.device->name, b.device->full ? "full" : "basic",
+                     b.device->controls);
         } else {
             ESP_LOGW(TAG, "unrecognised model '%s' — charge and power only",
                      b.state.model);
             b.device = &BT_DEVICE_GENERIC;
         }
-        b.plan_n = bt_regs_plan(b.device, b.cfg.controls && b.device->full,
+        b.plan_n = bt_regs_plan(b.device, b.cfg.controls,
                                 b.plan, BT_REG_PLAN_MAX);
         b.plan_i = 0;
         bt_regs_apply(b.device, addr, data, len, &b.state);
@@ -884,26 +888,34 @@ bool bluetti_ble_connected(void)
 
 int bluetti_ble_controls_json(char *buf, size_t len)
 {
-    bool avail = b.connected && b.device && b.device->full &&
-                 bt_session_ready(b.session);
+    uint16_t mask = b.device ? b.device->controls : 0;
+    bool avail = b.connected && mask != 0 && bt_session_ready(b.session);
 
     xSemaphoreTake(b.lock, portMAX_DELAY);
     bluetti_state_t st = b.state;
     xSemaphoreGive(b.lock);
 
+    static const char *KIND[] = { "bool", "enum", "range" };
+
     int n = snprintf(buf, len,
-        "{\"available\":%s,\"enabled\":%s,\"on_battery\":%s,\"items\":[",
+        "{\"available\":%s,\"enabled\":%s,\"model\":\"%s\",\"on_battery\":%s,\"items\":[",
         avail ? "true" : "false",
         b.cfg.controls ? "true" : "false",
+        b.device ? b.device->name : "",
         (st.valid && !st.ac_input_present) ? "true" : "false");
 
+    bool first = true;
     for (size_t i = 0; i < BT_CONTROL_COUNT && n > 0 && n < (int)len; i++) {
         const bt_control_t *c = &BT_CONTROLS[i];
+        if (!(mask & c->bit)) {
+            continue;      /* this model does not have it */
+        }
         n += snprintf(buf + n, len - n,
-            "%s{\"field\":\"%s\",\"bool\":%s,\"allowed\":\"%s\",\"value\":%d}",
-            i ? "," : "", c->field, c->is_bool ? "true" : "false",
+            "%s{\"field\":\"%s\",\"kind\":\"%s\",\"allowed\":\"%s\",\"value\":%d}",
+            first ? "" : ",", c->field, KIND[c->kind],
             c->allowed ? c->allowed : "",
             bt_control_current(c, &st));
+        first = false;
     }
     if (n > 0 && n < (int)len) {
         n += snprintf(buf + n, len - n, "]}");
@@ -921,8 +933,18 @@ int bluetti_ble_write_control(const char *field, int value)
         ESP_LOGW(TAG, "control write refused: controls are disabled");
         return -1;
     }
-    if (!b.connected || !b.device || !b.device->full ||
-        !bt_session_ready(b.session)) {
+    if (!b.connected || !b.device || !bt_session_ready(b.session)) {
+        return -1;
+    }
+    if (!(b.device->controls & c->bit)) {
+        ESP_LOGW(TAG, "control write refused: %s not on %s", field, b.device->name);
+        return -1;
+    }
+    /* Refuse a write to a register we have never seen a valid value from:
+     * on a model where that control turns out not to exist, its reads come
+     * back as exceptions and its state stays unknown. */
+    if (bt_control_current(c, &b.state) < 0) {
+        ESP_LOGW(TAG, "control write refused: %s never read back", field);
         return -1;
     }
     xSemaphoreTake(b.lock, portMAX_DELAY);

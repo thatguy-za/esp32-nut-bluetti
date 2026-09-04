@@ -6,28 +6,58 @@
 
 static const char *TAG = "bt_regs";
 
-const bt_device_t BT_DEVICE_EL10    = { "EL10", true };
-const bt_device_t BT_DEVICE_GENERIC = { "unknown", false };
+const bt_device_t BT_DEVICE_GENERIC = { "unknown", false, 0 };
+
+/* The output-switch pair every controllable model shares. */
+#define C_OUT   (BT_C_AC_OUT | BT_C_DC_OUT)
+/* AC + DC output, both ECO modes and their timeouts, charging mode,
+ * power lifting — the set the EL10, AC70, AC180 and EL30V2 all carry. */
+#define C_FULL  (C_OUT | BT_C_ECO_AC | BT_C_ECO_DC | \
+                 BT_C_ECO_MODE_AC | BT_C_ECO_MODE_DC | \
+                 BT_C_CHARGE_MODE | BT_C_POWER_LIFT)
+
+/*
+ * Models recognised for control. `full` (full telemetry decode) is only
+ * the Elite-10 family; the control mask is wider because the control
+ * registers do not need per-model scaling. From bluetti-bt-lib's
+ * SwitchField / SelectField / UIntField definitions.
+ *
+ * SOC min/max (2022/2023): declared for the EL100V2 upstream; also polled
+ * on the EL10, where it is unconfirmed — the control only appears if the
+ * register actually answers.
+ */
+static const bt_device_t DEVICES[] = {
+    { "EL100V2",     true,  C_FULL | BT_C_DISPLAY | BT_C_SOC_MIN | BT_C_SOC_MAX },
+    { "EL10",        true,  C_FULL | BT_C_DISPLAY | BT_C_SOC_MIN | BT_C_SOC_MAX },
+    { "AC70",        false, C_FULL },
+    { "AC180",       false, C_FULL },
+    { "EL30V2",      false, C_FULL },
+    { "AC180P",      false, C_OUT | BT_C_CHARGE_MODE | BT_C_POWER_LIFT },
+    { "AC2P",        false, C_OUT | BT_C_POWER_LIFT },
+    { "AC60",        false, C_OUT | BT_C_POWER_LIFT },
+    { "AC60P",       false, C_OUT | BT_C_POWER_LIFT },
+    { "Handsfree 2", false, C_OUT },
+};
 
 const bt_device_t *bt_device_lookup(const char *name)
 {
     if (!name || !name[0]) {
         return NULL;
     }
-    /* EL10 and EL100V2 share an identical field list and scaling. Any
-     * other model falls through to the generic (charge + power) path. */
-    static const char *FAMILY[] = { "EL10", "EL100V2" };
-    for (size_t i = 0; i < sizeof(FAMILY) / sizeof(FAMILY[0]); i++) {
-        size_t n = strlen(FAMILY[i]);
-        if (strncmp(name, FAMILY[i], n) != 0) {
+    for (size_t i = 0; i < sizeof(DEVICES) / sizeof(DEVICES[0]); i++) {
+        size_t n = strlen(DEVICES[i].name);
+        if (strncmp(name, DEVICES[i].name, n) != 0) {
             continue;
         }
+        /* The tail must be digits (or empty): keeps "EL10" off "EL100V2"
+         * and "AC60" off "AC60P". Every entry is tried, so ordering does
+         * not matter. */
         size_t j = n;
         while (name[j] >= '0' && name[j] <= '9') {
             j++;
         }
         if (name[j] == '\0') {
-            return &BT_DEVICE_EL10;
+            return &DEVICES[i];
         }
     }
     return NULL;
@@ -45,26 +75,13 @@ size_t bt_regs_plan(const bt_device_t *dev, bool with_controls,
         { REG_DC_OUTPUT_POWER, 1 },
         { REG_DEVICE_TYPE,     6 },
     };
-    /* Elite-10 extras: telemetry, then the two output switches. */
+    /* Elite-10 telemetry extras (full decode only). */
     static const bt_reg_read_t EL10_EXTRA[] = {
         { REG_TIME_REMAINING,    1 },
         { REG_AC_INPUT_VOLTAGE,  1 },
         { REG_AC_INPUT_CURRENT,  1 },
         { REG_AC_OUTPUT_VOLTAGE, 1 },
-        { REG_CTRL_AC,           1 },
-        { REG_CTRL_DC,           1 },
         { REG_DEVICE_SN,         4 },
-    };
-    /* Only polled when device controls are enabled, so a monitoring-only
-     * setup keeps a short, fast sweep. */
-    static const bt_reg_read_t EL10_CONTROLS[] = {
-        { REG_CTRL_ECO_DC,        1 },
-        { REG_CTRL_ECO_MODE_DC,   1 },
-        { REG_CTRL_ECO_AC,        1 },
-        { REG_CTRL_ECO_MODE_AC,   1 },
-        { REG_CTRL_CHARGING_MODE, 1 },
-        { REG_CTRL_POWER_LIFTING, 1 },
-        { REG_CTRL_DISPLAY_TIME,  1 },
     };
 
     size_t n = 0;
@@ -76,11 +93,14 @@ size_t bt_regs_plan(const bt_device_t *dev, bool with_controls,
              i < sizeof(EL10_EXTRA) / sizeof(EL10_EXTRA[0]) && n < max; i++) {
             out[n++] = EL10_EXTRA[i];
         }
-        if (with_controls) {
-            for (size_t i = 0;
-                 i < sizeof(EL10_CONTROLS) / sizeof(EL10_CONTROLS[0]) && n < max;
-                 i++) {
-                out[n++] = EL10_CONTROLS[i];
+    }
+    /* Control registers: only the ones this model has, and only when the
+     * user has enabled controls — so a monitoring-only setup keeps a
+     * short, fast sweep. Each is its own single-register read. */
+    if (with_controls && dev && dev->controls) {
+        for (size_t i = 0; i < BT_CONTROL_COUNT && n < max; i++) {
+            if (dev->controls & BT_CONTROLS[i].bit) {
+                out[n++] = (bt_reg_read_t){ BT_CONTROLS[i].reg, 1 };
             }
         }
     }
@@ -92,17 +112,33 @@ size_t bt_regs_plan(const bt_device_t *dev, bool with_controls,
 /* ------------------------------------------------------------------ */
 
 const bt_control_t BT_CONTROLS[] = {
-    { "ac_output",       REG_CTRL_AC,             true,  NULL      },
-    { "dc_output",       REG_CTRL_DC,             true,  NULL      },
-    { "eco_ac",          REG_CTRL_ECO_AC,         true,  NULL      },
-    { "eco_dc",          REG_CTRL_ECO_DC,         true,  NULL      },
-    { "eco_mode_ac",     REG_CTRL_ECO_MODE_AC,    false, "1,2,3,4" },
-    { "eco_mode_dc",     REG_CTRL_ECO_MODE_DC,    false, "1,2,3,4" },
-    { "charging_mode",   REG_CTRL_CHARGING_MODE,  false, "0,1,2,4" },
-    { "power_lifting",   REG_CTRL_POWER_LIFTING,  true,  NULL      },
-    { "display_time",    REG_CTRL_DISPLAY_TIME,   false, "2,3,4,5" },
+  { "ac_output",     REG_CTRL_AC,            BT_C_AC_OUT,      BT_KIND_BOOL,  NULL      },
+  { "dc_output",     REG_CTRL_DC,            BT_C_DC_OUT,      BT_KIND_BOOL,  NULL      },
+  { "eco_ac",        REG_CTRL_ECO_AC,        BT_C_ECO_AC,      BT_KIND_BOOL,  NULL      },
+  { "eco_dc",        REG_CTRL_ECO_DC,        BT_C_ECO_DC,      BT_KIND_BOOL,  NULL      },
+  { "eco_mode_ac",   REG_CTRL_ECO_MODE_AC,   BT_C_ECO_MODE_AC, BT_KIND_ENUM,  "1,2,3,4" },
+  { "eco_mode_dc",   REG_CTRL_ECO_MODE_DC,   BT_C_ECO_MODE_DC, BT_KIND_ENUM,  "1,2,3,4" },
+  { "charging_mode", REG_CTRL_CHARGING_MODE, BT_C_CHARGE_MODE, BT_KIND_ENUM,  "0,1,2,4" },
+  { "power_lifting", REG_CTRL_POWER_LIFTING, BT_C_POWER_LIFT,  BT_KIND_BOOL,  NULL      },
+  { "soc_min",       REG_CTRL_SOC_MIN,       BT_C_SOC_MIN,     BT_KIND_RANGE, "0,100"   },
+  { "soc_max",       REG_CTRL_SOC_MAX,       BT_C_SOC_MAX,     BT_KIND_RANGE, "0,100"   },
+  { "display_time",  REG_CTRL_DISPLAY_TIME,  BT_C_DISPLAY,     BT_KIND_ENUM,  "2,3,4,5" },
 };
 const size_t BT_CONTROL_COUNT = sizeof(BT_CONTROLS) / sizeof(BT_CONTROLS[0]);
+
+/* Parse "a,b" (range) or "a,b,c,…" (enum list) into up to `n` ints. */
+static size_t parse_ints(const char *s, int *out, size_t n)
+{
+    size_t k = 0;
+    for (const char *p = s; p && *p && k < n; ) {
+        int v = 0;
+        bool digits = false;
+        while (*p >= '0' && *p <= '9') { v = v * 10 + (*p++ - '0'); digits = true; }
+        if (digits) out[k++] = v;
+        while (*p == ',') p++;
+    }
+    return k;
+}
 
 const bt_control_t *bt_control_lookup(const char *field)
 {
@@ -122,18 +158,18 @@ bool bt_control_valid(const bt_control_t *c, int value)
     if (!c) {
         return false;
     }
-    if (c->is_bool) {
+    if (c->kind == BT_KIND_BOOL) {
         return value == 0 || value == 1;
     }
-    /* Membership in the comma-separated allow list. */
-    for (const char *p = c->allowed; p && *p; ) {
-        int v = 0;
-        bool digits = false;
-        while (*p >= '0' && *p <= '9') { v = v * 10 + (*p++ - '0'); digits = true; }
-        if (digits && v == value) {
+    int vals[8];
+    size_t k = parse_ints(c->allowed, vals, 8);
+    if (c->kind == BT_KIND_RANGE) {
+        return k == 2 && value >= vals[0] && value <= vals[1];
+    }
+    for (size_t i = 0; i < k; i++) {
+        if (vals[i] == value) {
             return true;
         }
-        while (*p == ',') p++;
     }
     return false;
 }
@@ -152,6 +188,8 @@ int bt_control_current(const bt_control_t *c, const bluetti_state_t *st)
     case REG_CTRL_ECO_MODE_DC:    return st->eco_mode_dc;
     case REG_CTRL_CHARGING_MODE:  return st->charging_mode;
     case REG_CTRL_POWER_LIFTING:  return st->power_lifting;
+    case REG_CTRL_SOC_MIN:        return st->soc_min;
+    case REG_CTRL_SOC_MAX:        return st->soc_max;
     case REG_CTRL_DISPLAY_TIME:   return st->display_time;
     default:                      return -1;
     }
@@ -292,35 +330,50 @@ int bt_regs_apply(const bt_device_t *dev, uint16_t start_addr,
             st->ac_out_volts = (float)v / 10.0f;
             matched++;
         }
-        /* Switch fields are strictly 0 or 1; anything else means the
-         * register is not really there (bluetti-bt-lib returns None). */
-        if ((v = reg(start_addr, data, len, REG_CTRL_AC)) == 0 || v == 1) {
-            st->ac_switch = v; matched++;
-        }
-        if ((v = reg(start_addr, data, len, REG_CTRL_DC)) == 0 || v == 1) {
-            st->dc_switch = v; matched++;
-        }
-        if ((v = reg(start_addr, data, len, REG_CTRL_ECO_AC)) == 0 || v == 1) {
-            st->eco_ac = v; matched++;
-        }
-        if ((v = reg(start_addr, data, len, REG_CTRL_ECO_DC)) == 0 || v == 1) {
-            st->eco_dc = v; matched++;
-        }
-        if ((v = reg(start_addr, data, len, REG_CTRL_POWER_LIFTING)) == 0 || v == 1) {
-            st->power_lifting = v; matched++;
-        }
-        if ((v = reg(start_addr, data, len, REG_CTRL_ECO_MODE_AC)) >= 1 && v <= 4) {
+    }
+
+    /*
+     * Writeable controls. Gated on the model's mask, not on `full`: the
+     * control registers need no per-model scaling. A switch field is
+     * strictly 0 or 1 and an enum strictly one of its values — anything
+     * else means the register is not really there (bluetti-bt-lib returns
+     * None), so it stays unknown and the UI does not show it.
+     */
+    if (dev->controls) {
+        #define B(bit, R, F) \
+            if ((dev->controls & (bit)) && \
+                ((v = reg(start_addr, data, len, (R))) == 0 || v == 1)) { \
+                st->F = v; matched++; }
+        B(BT_C_AC_OUT,     REG_CTRL_AC,            ac_switch)
+        B(BT_C_DC_OUT,     REG_CTRL_DC,            dc_switch)
+        B(BT_C_ECO_AC,     REG_CTRL_ECO_AC,        eco_ac)
+        B(BT_C_ECO_DC,     REG_CTRL_ECO_DC,        eco_dc)
+        B(BT_C_POWER_LIFT, REG_CTRL_POWER_LIFTING, power_lifting)
+        #undef B
+        if ((dev->controls & BT_C_ECO_MODE_AC) &&
+            (v = reg(start_addr, data, len, REG_CTRL_ECO_MODE_AC)) >= 1 && v <= 4) {
             st->eco_mode_ac = v; matched++;
         }
-        if ((v = reg(start_addr, data, len, REG_CTRL_ECO_MODE_DC)) >= 1 && v <= 4) {
+        if ((dev->controls & BT_C_ECO_MODE_DC) &&
+            (v = reg(start_addr, data, len, REG_CTRL_ECO_MODE_DC)) >= 1 && v <= 4) {
             st->eco_mode_dc = v; matched++;
         }
-        if ((v = reg(start_addr, data, len, REG_CTRL_CHARGING_MODE)) >= 0 &&
+        if ((dev->controls & BT_C_CHARGE_MODE) &&
+            (v = reg(start_addr, data, len, REG_CTRL_CHARGING_MODE)) >= 0 &&
             (v == 0 || v == 1 || v == 2 || v == 4)) {
             st->charging_mode = v; matched++;
         }
-        if ((v = reg(start_addr, data, len, REG_CTRL_DISPLAY_TIME)) >= 2 && v <= 5) {
+        if ((dev->controls & BT_C_DISPLAY) &&
+            (v = reg(start_addr, data, len, REG_CTRL_DISPLAY_TIME)) >= 2 && v <= 5) {
             st->display_time = v; matched++;
+        }
+        if ((dev->controls & BT_C_SOC_MIN) &&
+            (v = reg(start_addr, data, len, REG_CTRL_SOC_MIN)) >= 0 && v <= 100) {
+            st->soc_min = v; matched++;
+        }
+        if ((dev->controls & BT_C_SOC_MAX) &&
+            (v = reg(start_addr, data, len, REG_CTRL_SOC_MAX)) >= 0 && v <= 100) {
+            st->soc_max = v; matched++;
         }
     }
 

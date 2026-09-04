@@ -49,26 +49,52 @@ extern "C" {
 #define REG_CTRL_ECO_MODE_AC   2018  /* enum  — AC ECO timeout, 1..4 h  */
 #define REG_CTRL_CHARGING_MODE 2020  /* enum  — 0 std/1 silent/2 turbo/4 custom */
 #define REG_CTRL_POWER_LIFTING 2021  /* bool  — power lifting           */
+#define REG_CTRL_SOC_MIN       2022  /* uint  — discharge floor, %      */
+#define REG_CTRL_SOC_MAX       2023  /* uint  — charge ceiling, %       */
 #define REG_CTRL_DISPLAY_TIME  2067  /* enum  — 2/3/4/5 (30s/1m/5m/never) */
 
 /*
- * A recognised model. `full` distinguishes the Elite-10 family (decode
- * everything) from the generic fallback (charge + power only).
+ * Which writeable controls a model exposes. The control registers
+ * (2011-2067) and their meanings are identical across every V2 model that
+ * implements them — a bool is 0/1, the enums are shared classes — so this
+ * is a per-model *presence* mask, taken from bluetti-bt-lib's SwitchField
+ * / SelectField / UIntField definitions, not a decode difference. (That is
+ * why controls are not limited to the Elite 10 the way full telemetry is:
+ * only the *readings* need per-model scaling.)
+ */
+enum {
+    BT_C_AC_OUT      = 1u << 0,
+    BT_C_DC_OUT      = 1u << 1,
+    BT_C_ECO_AC      = 1u << 2,
+    BT_C_ECO_DC      = 1u << 3,
+    BT_C_ECO_MODE_AC = 1u << 4,
+    BT_C_ECO_MODE_DC = 1u << 5,
+    BT_C_CHARGE_MODE = 1u << 6,
+    BT_C_POWER_LIFT  = 1u << 7,
+    BT_C_DISPLAY     = 1u << 8,
+    BT_C_SOC_MIN     = 1u << 9,
+    BT_C_SOC_MAX     = 1u << 10,
+};
+
+/*
+ * A recognised model. `full` marks the Elite-10 family (full telemetry
+ * decode); everything else falls back to charge + power. `controls` is
+ * the mask above — independent of `full`.
  */
 typedef struct {
-    const char *name;   /* advertised name; digits follow */
+    const char *name;      /* advertised name; digits follow */
     bool        full;
+    uint16_t    controls;
 } bt_device_t;
 
-extern const bt_device_t BT_DEVICE_EL10;      /* EL10 and EL100V2 */
-extern const bt_device_t BT_DEVICE_GENERIC;   /* any other V2 unit */
+extern const bt_device_t BT_DEVICE_GENERIC;   /* unrecognised V2 unit */
 
 /*
  * Match an advertised or self-reported name to a model. A name is a model
  * followed by digits, so the tail after the prefix must be digits — that
- * is what keeps "EL10" from claiming an "EL100V2". Returns &BT_DEVICE_EL10
- * for the Elite-10 family, NULL for anything else (the caller then uses
- * BT_DEVICE_GENERIC).
+ * keeps "EL10" from claiming an "EL100V2" and "AC60" from claiming an
+ * "AC60P". Returns NULL for an unrecognised name (the caller then uses
+ * BT_DEVICE_GENERIC, which has no controls).
  */
 const bt_device_t *bt_device_lookup(const char *name);
 
@@ -91,6 +117,8 @@ typedef struct {
  * plan also reads the writeable control registers so the UI can show
  * their current state. Returns the count.
  */
+#define BT_CTRL_PLAN_MAX 12
+
 size_t bt_regs_plan(const bt_device_t *dev, bool with_controls,
                     bt_reg_read_t *out, size_t max);
 
@@ -106,13 +134,20 @@ int bt_regs_apply(const bt_device_t *dev, uint16_t start_addr,
 
 /*
  * A writeable control, addressed by a stable API field name so the web
- * layer never handles a raw register. Only the EL10 family has these.
+ * layer never handles a raw register.
  */
+typedef enum {
+    BT_KIND_BOOL,    /* 0 / 1                                             */
+    BT_KIND_ENUM,    /* one of `allowed`, a comma list of ints            */
+    BT_KIND_RANGE,   /* an integer in [lo, hi]; `allowed` is "lo,hi"      */
+} bt_ctrl_kind_t;
+
 typedef struct {
-    const char *field;      /* "ac_output", "charging_mode", ...          */
-    uint16_t    reg;        /* Modbus holding register                    */
-    bool        is_bool;    /* true: 0/1; false: `allowed` list           */
-    const char *allowed;    /* comma-separated ints, e.g. "0,1,2,4"       */
+    const char    *field;   /* "ac_output", "charging_mode", "soc_min"…   */
+    uint16_t       reg;
+    uint16_t       bit;     /* BT_C_* — which models have it              */
+    bt_ctrl_kind_t kind;
+    const char    *allowed; /* enum: "0,1,2,4"; range: "0,100"; bool: NULL */
 } bt_control_t;
 
 extern const bt_control_t BT_CONTROLS[];

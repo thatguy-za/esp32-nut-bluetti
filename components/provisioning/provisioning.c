@@ -1229,7 +1229,7 @@ static esp_err_t h_led_toggle(httpd_req_t *r)
 static esp_err_t h_controls_get(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
-    char out[640];
+    char out[1024];
     if (bluetti_ble_controls_json(out, sizeof(out)) < 0) {
         return httpd_resp_send_500(r);
     }

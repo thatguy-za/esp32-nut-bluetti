@@ -61,6 +61,8 @@ typedef struct {
     int      charging_mode;     /* 0 std / 1 silent / 2 turbo / 4 custom  */
     int      power_lifting;     /* power lifting on/off                   */
     int      display_time;      /* screen timeout: 2/3/4/5                */
+    int      soc_min;          /* discharge floor, %                     */
+    int      soc_max;          /* charge ceiling, %                      */
 
     bool     ups_mode_on;       /* the unit's UPS / backup mode           */
     uint32_t error_code;

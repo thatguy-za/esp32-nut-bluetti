@@ -211,23 +211,38 @@ serialisation in the poll loop (the write jumps the queue ahead of the next
 read). The device echoes the frame back; `bt_session.c` validates the echo
 (`on_ack`) and the new value is confirmed by the next poll of that register.
 
-EL10 control registers and their values:
+Control registers and their values:
 
-| Register | Control | Values |
-| --- | --- | --- |
-| 2011 | AC output | 0 / 1 |
-| 2012 | DC output | 0 / 1 |
-| 2014 | DC ECO mode | 0 / 1 |
-| 2015 | DC ECO timeout | 1..4 (hours) |
-| 2017 | AC ECO mode | 0 / 1 |
-| 2018 | AC ECO timeout | 1..4 |
-| 2020 | Charging mode | 0 std / 1 silent / 2 turbo / 4 custom |
-| 2021 | Power lifting | 0 / 1 |
-| 2067 | Screen timeout | 2 / 3 / 4 / 5 (30 s / 1 m / 5 m / never) |
+| Register | Control | Values | Kind |
+| --- | --- | --- | --- |
+| 2011 | AC output | 0 / 1 | bool |
+| 2012 | DC output | 0 / 1 | bool |
+| 2014 | DC ECO mode | 0 / 1 | bool |
+| 2015 | DC ECO timeout | 1..4 (hours) | enum |
+| 2017 | AC ECO mode | 0 / 1 | bool |
+| 2018 | AC ECO timeout | 1..4 | enum |
+| 2020 | Charging mode | 0 std / 1 silent / 2 turbo / 4 custom | enum |
+| 2021 | Power lifting | 0 / 1 | bool |
+| 2022 | Discharge floor (min SOC) | 0..100 % | range |
+| 2023 | Charge limit (max SOC) | 0..100 % | range |
+| 2067 | Screen timeout | 2 / 3 / 4 / 5 (30 s / 1 m / 5 m / never) | enum |
 
-These addresses come from `bluetti-bt-lib`'s `SwitchField` / `SelectField`
-definitions. Its own integration disables writes on encrypted units, so as
-far as is known nobody has confirmed a write lands on an Elite 10. Untested.
+The addresses and value sets are `bluetti-bt-lib`'s `SwitchField` /
+`SelectField` / `UIntField` definitions. Because the control registers use
+no per-model scaling — a switch is 0/1, the enums are shared classes —
+they are not tied to the EL10 the way the *readings* are. `bt_regs.c` has a
+per-model capability mask (`bt_device_t.controls`): EL10, EL100V2, AC70,
+AC180, EL30V2 carry the full set; AC180P has output + charging mode +
+power lifting; AC2P/AC60/AC60P have output + power lifting; Handsfree 2
+has output only. 2022/2023 are declared upstream for the EL100V2 and
+polled speculatively on the EL10 — a control only appears if its register
+answers, so an absent one is harmless.
+
+`bluetti-bt-lib` models every one of these as a *readable* field but only
+`SwitchField`/`SelectField` as *writeable*, and its own HA integration
+disables all writes on encrypted units. So no control write here has been
+confirmed against hardware — the `0x06` frame is the obvious guess, not a
+captured one.
 
 ## Probe mode
 

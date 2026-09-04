@@ -231,34 +231,47 @@ bridge on a trusted network.
 If stored Wi-Fi credentials ever stop working, the device falls back to setup
 mode on its own after a failed connect.
 
-### Device controls (Elite 10, web UI only)
+### Device controls (web UI only)
 
 > **NUT stays read-only.** These controls live on the admin page and nowhere
 > else — nothing is exposed as a writable NUT variable, so a misconfigured
 > `upsmon` can never toggle the power station.
 
-Off by default. Enable it on the **BLUETTI** tab and a **Controls** box appears
-that can set, over the encrypted channel:
+Off by default. Enable "Allow controlling the unit" on the **BLUETTI** tab, save
+and reboot, and the controls the unit reports appear in that box.
 
-| Control | Values |
-| --- | --- |
-| AC output, DC output | on / off |
-| AC ECO mode, DC ECO mode | on / off |
-| AC ECO timeout, DC ECO timeout | 1–4 hours |
-| Charging mode | Standard / Silent / Turbo / Custom |
-| Power lifting | on / off |
-| Screen timeout | 30 s / 1 min / 5 min / Never |
+| Control | Values | Models |
+| --- | --- | --- |
+| AC output, DC output | on / off | all controllable models |
+| Power lifting | on / off | most models |
+| AC ECO mode, DC ECO mode | on / off | EL10, EL100V2, AC70, AC180, EL30V2 |
+| AC / DC ECO timeout | 1–4 hours | " |
+| Charging mode | Standard / Silent / Turbo / Custom | + AC180P |
+| Screen timeout | 30 s / 1 min / 5 min / Never | EL10, EL100V2 |
+| Discharge floor (min SOC), Charge limit (max SOC) | 0–100 % | EL100V2 (and tried on the EL10) |
 
-A change is written as a Modbus *write single register* wrapped in the same AES
-layer as the reads, then confirmed by the next poll — so a switch takes a few
-seconds to settle. Turning **AC output off while the unit is on battery** asks
-for confirmation first, since it cuts power to whatever the unit is running.
+Recognised controllable models: **EL10, EL100V2, AC70, AC180, EL30V2, AC180P,
+AC2P, AC60, AC60P, Handsfree 2.** The bridge reads which control registers the
+unit actually answers and shows only those, so on a model where a control turns
+out not to exist it simply never appears.
 
-**This has not been tested against hardware.** Writing to the power station
-relies on register addresses that `bluetti-bt-lib` assumes but — because its own
-integration disables writes on encrypted units — nobody appears to have
-confirmed. Leave it off unless you are ready to verify it with probe mode. Only
-the Elite 10 (and EL100V2) expose these.
+**Why not the Elite 10 only?** The *telemetry* decode is restricted to the EL10
+family because `bluetti-bt-lib` scales a few readings (runtime, line voltage)
+differently per model. The *controls* have no such problem — a switch register
+is 0/1 and the mode registers use shared enums — so any V2 model that declares
+them can use them.
+
+A change is a Modbus *write single register* wrapped in the same AES layer as
+the reads, then confirmed by the next poll — so a switch takes a few seconds to
+settle. Turning **AC output off while the unit is on battery** asks for
+confirmation first, since it cuts power to whatever the unit is running.
+
+**None of this has been tested against hardware.** The write registers come from
+`bluetti-bt-lib`'s field definitions, but its own integration disables writes on
+encrypted units, so as far as is known nobody has confirmed a control write
+lands. The SOC-limit registers in particular are declared upstream only for the
+EL100V2 — the EL10 is polled speculatively. Leave controls off unless you are
+ready to verify with probe mode.
 
 ## Telegram alerts
 

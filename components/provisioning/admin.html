@@ -113,14 +113,14 @@
     </div>
 
     <div class="box">
-      <h2>Device controls <span class="sub">Elite 10 only</span></h2>
+      <h2>Device controls</h2>
       <label class="chk"><input type="checkbox" id="cfgControls" name="controls_enabled"
         value="1" style="width:auto"> Allow controlling the unit</label>
-      <p class="hint">Off by default. Turns on a <b>Controls</b> box below that can
-        switch the unit's AC and DC output, ECO modes, charging mode and screen
-        timeout. Writing to the power station is <b>unverified against hardware</b>
-        and only works on an Elite&nbsp;10. NUT stays read-only either way — these
-        controls are the web page only.</p>
+      <p class="hint">Off by default. Web page only — NUT stays read-only.
+        Writing to the unit is <b>unverified against hardware</b>. Save and
+        reboot to apply; the controls then appear here.</p>
+      <div id="ctrlList" hidden style="margin-top:.8rem; border-top:1px solid #8883; padding-top:.6rem"></div>
+      <p class="hint" id="ctrlMsg" hidden></p>
     </div>
 
     <div class="box">
@@ -138,14 +138,6 @@
     <p><button class="act primary" id="efSave">Save &amp; reboot</button>
        <span class="hint" id="efMsg"></span></p>
   </form>
-
-  <div class="box" id="ctrlBox" hidden>
-    <h2>Controls <span class="sub" id="ctrlState"></span></h2>
-    <div id="ctrlList"></div>
-    <p class="hint" id="ctrlMsg">Changes are sent to the unit and confirmed on the
-      next poll, so a switch may take a few seconds to settle. Turning AC output
-      off while the unit is on battery is refused unless you confirm.</p>
-  </div>
 </section>
 
 <!-- ---------------- NUT ---------------- -->
@@ -672,13 +664,14 @@ wireForm('#efForm', '#efSave', '#efMsg', fd => {
   }
 });
 
-/* ---- device controls (EL10, web-only) ---- */
+/* ---- device controls (web UI only; NUT stays read-only) ---- */
 let ctrlActive = false, ctrlTimer = null, ctrlBusy = false;
 const CTRL_LABEL = {
   ac_output: 'AC output', dc_output: 'DC output',
   eco_ac: 'AC ECO mode', eco_dc: 'DC ECO mode',
   eco_mode_ac: 'AC ECO timeout', eco_mode_dc: 'DC ECO timeout',
   charging_mode: 'Charging mode', power_lifting: 'Power lifting',
+  soc_min: 'Discharge floor', soc_max: 'Charge limit',
   display_time: 'Screen timeout',
 };
 const CTRL_OPT = {
@@ -690,6 +683,7 @@ const CTRL_OPT = {
 
 async function sendControl(field, value) {
   ctrlBusy = true;
+  $('#ctrlMsg').hidden = false;
   $('#ctrlMsg').textContent = 'Sending…';
   try {
     const r = await fetch('/api/control', {
@@ -698,7 +692,8 @@ async function sendControl(field, value) {
     });
     if (bounceIfSignedOut(r)) return;
     if (!r.ok) throw new Error((await r.text()).trim() || 'HTTP ' + r.status);
-    $('#ctrlMsg').textContent = 'Sent. Waiting for the unit to confirm…';
+    $('#ctrlMsg').textContent = 'Sent — the unit confirms this on the next poll, '
+      + 'so it may take a few seconds.';
   } catch (e) {
     $('#ctrlMsg').textContent = 'Could not send: ' + e.message;
   }
@@ -707,14 +702,31 @@ async function sendControl(field, value) {
 }
 
 function renderControls(j) {
-  const box = $('#ctrlBox');
-  if (!j.enabled) { box.hidden = true; return; }
-  box.hidden = false;
-  $('#ctrlState').textContent = j.available ? '' : 'not connected';
-
   const list = $('#ctrlList');
+  if (!j.enabled) { list.hidden = true; $('#ctrlMsg').hidden = true; return; }
+  list.hidden = false;
   list.innerHTML = '';
-  for (const it of j.items) {
+
+  if (!j.available) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = j.model
+      ? j.model + ' connected, waiting for the control values…'
+      : 'No controllable unit connected. ' +
+        'Controls appear once the bridge links to a supported model.';
+    list.appendChild(p);
+    return;
+  }
+  const items = j.items.filter(it => it.value >= 0);
+  if (items.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = j.model + ' did not report any control registers.';
+    list.appendChild(p);
+    return;
+  }
+
+  for (const it of items) {
     const row = document.createElement('div');
     row.className = 'row';
     const lbl = document.createElement('span');
@@ -723,23 +735,38 @@ function renderControls(j) {
     row.appendChild(lbl);
 
     let input;
-    if (it.bool) {
+    if (it.kind === 'bool') {
       input = document.createElement('input');
       input.type = 'checkbox';
       input.style.width = 'auto';
       input.checked = it.value === 1;
-      input.disabled = !j.available || it.value < 0;
       input.onchange = () => {
         const want = input.checked ? 1 : 0;
         if (want === 0 && (it.field === 'ac_output' || it.field === 'dc_output')) {
           const onBatt = j.on_battery && it.field === 'ac_output';
           const q = onBatt
             ? 'The unit is on battery. Turning AC output off now cuts power to whatever it is running. Continue?'
-            : 'Turn ' + (CTRL_LABEL[it.field]) + ' off?';
+            : 'Turn ' + CTRL_LABEL[it.field] + ' off?';
           if (!confirm(q)) { input.checked = true; return; }
         }
         sendControl(it.field, want);
       };
+    } else if (it.kind === 'range') {
+      const [lo, hi] = it.allowed.split(',').map(Number);
+      input = document.createElement('input');
+      input.type = 'number';
+      input.min = lo; input.max = hi; input.value = it.value;
+      input.style.width = '5rem';
+      input.onchange = () => {
+        const v = parseInt(input.value, 10);
+        if (isNaN(v) || v < lo || v > hi) { input.value = it.value; return; }
+        sendControl(it.field, v);
+      };
+      const pct = document.createElement('span');
+      pct.textContent = '%'; pct.style.cssText = 'font-size:.85rem;opacity:.7';
+      row.appendChild(input); row.appendChild(pct);
+      list.appendChild(row);
+      continue;
     } else {
       input = document.createElement('select');
       input.style.maxWidth = '12rem';
@@ -750,12 +777,6 @@ function renderControls(j) {
         if (Number(v) === it.value) o.selected = true;
         input.appendChild(o);
       }
-      if (it.value < 0) {
-        const o = document.createElement('option');
-        o.textContent = '—'; o.selected = true; o.disabled = true;
-        input.insertBefore(o, input.firstChild);
-      }
-      input.disabled = !j.available || it.value < 0;
       input.onchange = () => sendControl(it.field, Number(input.value));
     }
     row.appendChild(input);
