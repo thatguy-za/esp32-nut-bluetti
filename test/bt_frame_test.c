@@ -144,6 +144,30 @@ int main(void)
     OKF(consumed == 1 && buf_len == 0,
         "exactly one frame recovered, nothing left over");
 
+    /* Write single register (0x06). Request and echo are both 8 bytes:
+     * [id][06][addr_hi][addr_lo][val_hi][val_lo][crc_lo][crc_hi]. The
+     * plain reassembler must frame it as 8, not by a byte-count field. */
+    uint8_t wr[8] = { 0x01, 0x06, 0x07, 0xDB, 0x00, 0x02 };  /* reg 2011 <- 2 */
+    {
+        uint16_t wc = crc16_modbus(wr, 6);
+        wr[6] = wc & 0xFF;
+        wr[7] = wc >> 8;
+    }
+    OKF(wr[1] == 0x06, "write frame carries function 0x06");
+    OKF((((int)wr[2] << 8) | wr[3]) == 2011, "address 2011 big-endian");
+    OKF((((int)wr[4] << 8) | wr[5]) == 2, "value 2 big-endian");
+    OKF(crc16_modbus(wr, 6) == ((uint16_t)wr[6] | ((uint16_t)wr[7] << 8)),
+        "write frame CRC little-endian over the first 6 bytes");
+
+    /* Framing decision, mirroring bt_session_feed's plain path. */
+    uint8_t exc[5] = { 0x01, 0x86, 0x02, 0x00, 0x00 };   /* write exception */
+    #define FRAME_LEN(f) ((f)[1] == 0x06 ? 8u \
+                          : ((f)[1] & 0x80) ? 5u \
+                          : (unsigned)(3 + (f)[2] + 2))
+    OKF(FRAME_LEN(wr) == 8, "a 0x06 echo frames as 8 bytes");
+    OKF(FRAME_LEN(exc) == 5, "an exception reply frames as 5 bytes");
+    OKF(FRAME_LEN(full) == 9, "a read reply still frames by byte count");
+
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;
 }

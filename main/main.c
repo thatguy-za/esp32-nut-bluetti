@@ -262,6 +262,7 @@ static void start_services(const app_config_t *cfg)
         bluetti_ble_config_t ef_cfg = {
             .ble_address = cfg->ble_addr,
             .probe = cfg->ble_probe,
+            .controls = cfg->controls_enabled,
             .poll_interval_ms = cfg->poll_ms,
             .low_battery_pct = cfg->low_pct,
         };

@@ -113,6 +113,17 @@
     </div>
 
     <div class="box">
+      <h2>Device controls <span class="sub">Elite 10 only</span></h2>
+      <label class="chk"><input type="checkbox" id="cfgControls" name="controls_enabled"
+        value="1" style="width:auto"> Allow controlling the unit</label>
+      <p class="hint">Off by default. Turns on a <b>Controls</b> box below that can
+        switch the unit's AC and DC output, ECO modes, charging mode and screen
+        timeout. Writing to the power station is <b>unverified against hardware</b>
+        and only works on an Elite&nbsp;10. NUT stays read-only either way — these
+        controls are the web page only.</p>
+    </div>
+
+    <div class="box">
       <h2>Protocol <span class="sub">diagnostics</span></h2>
       <label class="chk"><input type="checkbox" id="cfgProbe" name="ble_probe"
         value="1" style="width:auto"> Probe mode</label>
@@ -127,6 +138,14 @@
     <p><button class="act primary" id="efSave">Save &amp; reboot</button>
        <span class="hint" id="efMsg"></span></p>
   </form>
+
+  <div class="box" id="ctrlBox" hidden>
+    <h2>Controls <span class="sub" id="ctrlState"></span></h2>
+    <div id="ctrlList"></div>
+    <p class="hint" id="ctrlMsg">Changes are sent to the unit and confirmed on the
+      next poll, so a switch may take a few seconds to settle. Turning AC output
+      off while the unit is on battery is refused unless you confirm.</p>
+  </div>
 </section>
 
 <!-- ---------------- NUT ---------------- -->
@@ -416,6 +435,8 @@ tabs.forEach(b => b.onclick = () => {
     s.classList.toggle('active', s.id === b.dataset.tab));
   if (b.dataset.tab === 'status') pollLogs();
   if (['bluetti', 'nut', 'wifi', 'notify', 'maint'].includes(b.dataset.tab)) loadConfig();
+  ctrlActive = b.dataset.tab === 'bluetti';
+  if (ctrlActive) refreshControls();
 });
 
 /* ---- status ---- */
@@ -524,6 +545,7 @@ async function loadConfig() {
     syncNutAuth();
     $('#cfgLow').value = cfg.low_pct || 20;
     $('#cfgProbe').checked = !!cfg.ble_probe;
+    $('#cfgControls').checked = !!cfg.controls_enabled;
     const ap = cfg.wifi_mode === 'ap';
     document.querySelector(`input[name=wifi_mode][value=${ap ? 'ap' : 'station'}]`).checked = true;
     $('#apSsid').value = cfg.ap_ssid || cfg.default_ap_ssid || '';
@@ -649,6 +671,110 @@ wireForm('#efForm', '#efSave', '#efMsg', fd => {
     return false;
   }
 });
+
+/* ---- device controls (EL10, web-only) ---- */
+let ctrlActive = false, ctrlTimer = null, ctrlBusy = false;
+const CTRL_LABEL = {
+  ac_output: 'AC output', dc_output: 'DC output',
+  eco_ac: 'AC ECO mode', eco_dc: 'DC ECO mode',
+  eco_mode_ac: 'AC ECO timeout', eco_mode_dc: 'DC ECO timeout',
+  charging_mode: 'Charging mode', power_lifting: 'Power lifting',
+  display_time: 'Screen timeout',
+};
+const CTRL_OPT = {
+  charging_mode: { 0: 'Standard', 1: 'Silent', 2: 'Turbo', 4: 'Custom' },
+  display_time:  { 2: '30 seconds', 3: '1 minute', 4: '5 minutes', 5: 'Never' },
+  eco_mode_ac:   { 1: '1 hour', 2: '2 hours', 3: '3 hours', 4: '4 hours' },
+  eco_mode_dc:   { 1: '1 hour', 2: '2 hours', 3: '3 hours', 4: '4 hours' },
+};
+
+async function sendControl(field, value) {
+  ctrlBusy = true;
+  $('#ctrlMsg').textContent = 'Sending…';
+  try {
+    const r = await fetch('/api/control', {
+      method: 'POST',
+      body: new URLSearchParams({ field, value }),
+    });
+    if (bounceIfSignedOut(r)) return;
+    if (!r.ok) throw new Error((await r.text()).trim() || 'HTTP ' + r.status);
+    $('#ctrlMsg').textContent = 'Sent. Waiting for the unit to confirm…';
+  } catch (e) {
+    $('#ctrlMsg').textContent = 'Could not send: ' + e.message;
+  }
+  ctrlBusy = false;
+  setTimeout(refreshControls, 1500);
+}
+
+function renderControls(j) {
+  const box = $('#ctrlBox');
+  if (!j.enabled) { box.hidden = true; return; }
+  box.hidden = false;
+  $('#ctrlState').textContent = j.available ? '' : 'not connected';
+
+  const list = $('#ctrlList');
+  list.innerHTML = '';
+  for (const it of j.items) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = 'flex:1 1 10rem;font-size:.9rem';
+    lbl.textContent = CTRL_LABEL[it.field] || it.field;
+    row.appendChild(lbl);
+
+    let input;
+    if (it.bool) {
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.style.width = 'auto';
+      input.checked = it.value === 1;
+      input.disabled = !j.available || it.value < 0;
+      input.onchange = () => {
+        const want = input.checked ? 1 : 0;
+        if (want === 0 && (it.field === 'ac_output' || it.field === 'dc_output')) {
+          const onBatt = j.on_battery && it.field === 'ac_output';
+          const q = onBatt
+            ? 'The unit is on battery. Turning AC output off now cuts power to whatever it is running. Continue?'
+            : 'Turn ' + (CTRL_LABEL[it.field]) + ' off?';
+          if (!confirm(q)) { input.checked = true; return; }
+        }
+        sendControl(it.field, want);
+      };
+    } else {
+      input = document.createElement('select');
+      input.style.maxWidth = '12rem';
+      const opts = CTRL_OPT[it.field] || {};
+      for (const [v, name] of Object.entries(opts)) {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = name;
+        if (Number(v) === it.value) o.selected = true;
+        input.appendChild(o);
+      }
+      if (it.value < 0) {
+        const o = document.createElement('option');
+        o.textContent = '—'; o.selected = true; o.disabled = true;
+        input.insertBefore(o, input.firstChild);
+      }
+      input.disabled = !j.available || it.value < 0;
+      input.onchange = () => sendControl(it.field, Number(input.value));
+    }
+    row.appendChild(input);
+    list.appendChild(row);
+  }
+}
+
+async function refreshControls() {
+  clearTimeout(ctrlTimer);
+  if (!ctrlActive) return;
+  if (!ctrlBusy) {
+    try {
+      const r = await fetch('/api/controls');
+      if (bounceIfSignedOut(r)) return;
+      renderControls(await r.json());
+    } catch (e) { /* keep last */ }
+  }
+  ctrlTimer = setTimeout(refreshControls, 3000);
+}
 
 /* ---- firmware updates from GitHub ---- */
 let ghTimer = null;

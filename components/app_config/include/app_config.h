@@ -73,6 +73,10 @@ typedef struct {
     int16_t  led_gpio;       /* addressable-LED pin; -1 = off. Runtime-set
                                 so a board's LED can be found without a
                                 rebuild. Defaults to CONFIG_STATUS_LED_GPIO. */
+
+    /* Device controls. Off by default: writing to the power station is
+     * unverified against hardware and only makes sense for an EL10. */
+    bool     controls_enabled;
 } app_config_t;
 
 /* This board's default name, "esp-nut-bluetti-XXXX" (XXXX = last two

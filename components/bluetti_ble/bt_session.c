@@ -25,10 +25,12 @@ static const uint8_t LOCAL_AES_KEY[16] = {
 #define RX_MAX   512
 #define MODBUS_SLAVE 0x01
 #define MODBUS_READ  0x03
+#define MODBUS_WRITE 0x06
 
 struct bt_session {
     bt_sess_tx_t    tx;
     bt_sess_regs_t  on_regs;
+    bt_sess_ack_t   on_ack;
     void           *user;
 
     bt_sess_state_t state;
@@ -333,18 +335,46 @@ static void handle_kex(bt_session_t *s, const uint8_t *frame, size_t len)
 /* Modbus                                                              */
 /* ------------------------------------------------------------------ */
 
+/* CRC-16/Modbus over the first `n` bytes matches the trailing two. */
+static bool modbus_crc_ok(const uint8_t *f, size_t n)
+{
+    uint16_t want = bt_crc16_modbus(f, n);
+    uint16_t got = (uint16_t)f[n] | ((uint16_t)f[n + 1] << 8);
+    if (want != got) {
+        ESP_LOGW(TAG, "modbus CRC mismatch");
+        return false;
+    }
+    return true;
+}
+
 static void handle_modbus(bt_session_t *s, const uint8_t *f, size_t len)
 {
     if (len < 5) {
         return;
     }
+    /* Accept any slave id — the reference does not check it, and a unit
+     * answering as something other than 0x01 would otherwise be silently
+     * dropped. Only the function code and CRC have to hold. */
+
+    /* Write-single-register echo: [id][06][ah][al][vh][vl][crc:2] */
+    if (f[1] == MODBUS_WRITE || f[1] == (MODBUS_WRITE | 0x80)) {
+        bool ok = f[1] == MODBUS_WRITE && len >= 8 && modbus_crc_ok(f, 6);
+        if (f[1] == (MODBUS_WRITE | 0x80)) {
+            ESP_LOGW(TAG, "write rejected: modbus exception %u for reg %u",
+                     f[2], s->pending_addr);
+        }
+        uint16_t addr = ok ? ((uint16_t)f[2] << 8 | f[3]) : s->pending_addr;
+        uint16_t val  = ok ? ((uint16_t)f[4] << 8 | f[5]) : 0;
+        if (s->on_ack) {
+            s->on_ack(addr, val, ok, s->user);
+        }
+        return;
+    }
+
     if (f[1] == (MODBUS_READ | 0x80)) {
         ESP_LOGW(TAG, "modbus exception %u for address %u", f[2], s->pending_addr);
         return;
     }
-    /* Accept any slave id — the reference does not check it, and a unit
-     * answering as something other than 0x01 would otherwise be silently
-     * dropped. Only the function code and CRC have to hold. */
     if (f[1] != MODBUS_READ) {
         return;
     }
@@ -352,10 +382,7 @@ static void handle_modbus(bt_session_t *s, const uint8_t *f, size_t len)
     if (3 + count + 2 > len) {
         return;
     }
-    uint16_t want = bt_crc16_modbus(f, 3 + count);
-    uint16_t got = (uint16_t)f[3 + count] | ((uint16_t)f[4 + count] << 8);
-    if (want != got) {
-        ESP_LOGW(TAG, "modbus CRC mismatch");
+    if (!modbus_crc_ok(f, 3 + count)) {
         return;
     }
     if (s->on_regs) {
@@ -396,6 +423,38 @@ int bt_session_read_regs(bt_session_t *s, uint16_t addr, uint16_t count)
     return s->tx(wrapped, n, s->user);
 }
 
+int bt_session_write_reg(bt_session_t *s, uint16_t addr, uint16_t value)
+{
+    if (!bt_session_ready(s)) {
+        return -1;
+    }
+    uint8_t cmd[8];
+    cmd[0] = MODBUS_SLAVE;
+    cmd[1] = MODBUS_WRITE;
+    cmd[2] = addr >> 8;
+    cmd[3] = addr & 0xFF;
+    cmd[4] = value >> 8;
+    cmd[5] = value & 0xFF;
+    uint16_t crc = bt_crc16_modbus(cmd, 6);
+    cmd[6] = crc & 0xFF;
+    cmd[7] = crc >> 8;
+
+    s->pending_addr = addr;
+    s->rx_len = 0;
+
+    if (s->plain) {
+        return s->tx(cmd, sizeof(cmd), s->user);
+    }
+    uint8_t wrapped[RX_MAX];
+    size_t n = aes_wrap(s->secure_key, 32, NULL, cmd, sizeof(cmd),
+                        wrapped, sizeof(wrapped));
+    if (n == 0) {
+        return -1;
+    }
+    ESP_LOGW(TAG, "control write: reg %u <- %u", addr, value);
+    return s->tx(wrapped, n, s->user);
+}
+
 /* ------------------------------------------------------------------ */
 /* Receive path                                                        */
 /* ------------------------------------------------------------------ */
@@ -416,7 +475,15 @@ void bt_session_feed(bt_session_t *s, const uint8_t *data, size_t len)
         s->rx_len += len;
 
         while (s->rx_len >= 3) {
-            size_t frame = 3 + s->rx[2] + 2;
+            size_t frame;
+            uint8_t fn = s->rx[1];
+            if (fn == MODBUS_WRITE) {
+                frame = 8;                     /* [id][06][ah][al][vh][vl][crc:2] */
+            } else if (fn & 0x80) {
+                frame = 5;                     /* [id][fn|80][code][crc:2] */
+            } else {
+                frame = 3 + s->rx[2] + 2;      /* read: byte-count framed */
+            }
             if (s->rx_len < frame) {
                 return;                        /* wait for the rest */
             }
@@ -475,7 +542,8 @@ void bt_session_feed(bt_session_t *s, const uint8_t *data, size_t len)
 
 /* ------------------------------------------------------------------ */
 
-bt_session_t *bt_session_new(bt_sess_tx_t tx, bt_sess_regs_t on_regs, void *user)
+bt_session_t *bt_session_new(bt_sess_tx_t tx, bt_sess_regs_t on_regs,
+                             bt_sess_ack_t on_ack, void *user)
 {
     bt_session_t *s = calloc(1, sizeof(*s));
     if (!s) {
@@ -483,6 +551,7 @@ bt_session_t *bt_session_new(bt_sess_tx_t tx, bt_sess_regs_t on_regs, void *user
     }
     s->tx = tx;
     s->on_regs = on_regs;
+    s->on_ack = on_ack;
     s->user = user;
     bt_crypto_init();
     return s;

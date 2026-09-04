@@ -95,6 +95,11 @@ static struct {
     int64_t              req_sent_us;
     int                  poll_fails;     /* consecutive reads with no reply */
 
+    /* A single queued control write, sent ahead of the next poll read. */
+    bool                 write_pending;
+    uint16_t             write_reg;
+    uint16_t             write_val;
+
     bluetti_state_t      state;
     SemaphoreHandle_t    lock;
     esp_timer_handle_t   scan_timer;
@@ -127,6 +132,13 @@ static void state_reset(void)
     b.state.ac_out_volts      = BLUETTI_UNKNOWN_F;
     b.state.ac_switch         = BLUETTI_UNKNOWN_I;
     b.state.dc_switch         = BLUETTI_UNKNOWN_I;
+    b.state.eco_ac            = BLUETTI_UNKNOWN_I;
+    b.state.eco_dc            = BLUETTI_UNKNOWN_I;
+    b.state.eco_mode_ac       = BLUETTI_UNKNOWN_I;
+    b.state.eco_mode_dc       = BLUETTI_UNKNOWN_I;
+    b.state.charging_mode     = BLUETTI_UNKNOWN_I;
+    b.state.power_lifting     = BLUETTI_UNKNOWN_I;
+    b.state.display_time      = BLUETTI_UNKNOWN_I;
 }
 static void start_disc(bool report_all);
 static int  gap_event(struct ble_gap_event *event, void *arg);
@@ -325,7 +337,8 @@ static void session_regs(uint16_t addr, const uint8_t *data, size_t len,
                      b.state.model);
             b.device = &BT_DEVICE_GENERIC;
         }
-        b.plan_n = bt_regs_plan(b.device, b.plan, BT_REG_PLAN_MAX);
+        b.plan_n = bt_regs_plan(b.device, b.cfg.controls && b.device->full,
+                                b.plan, BT_REG_PLAN_MAX);
         b.plan_i = 0;
         bt_regs_apply(b.device, addr, data, len, &b.state);
     }
@@ -339,6 +352,16 @@ static void session_regs(uint16_t addr, const uint8_t *data, size_t len,
     if (matched > 0 && b.state_cb) {
         b.state_cb(&copy, b.state_cb_user);
     }
+}
+
+/* Session -> here, when a control write (0x06) is echoed back. */
+static void session_ack(uint16_t addr, uint16_t value, bool ok, void *user)
+{
+    b.req_in_flight = false;
+    b.poll_fails = 0;
+    ESP_LOGW(TAG, "control write %s: reg %u = %u", ok ? "acked" : "REJECTED",
+             addr, value);
+    /* The next poll of that register confirms the new value in the state. */
 }
 
 /*
@@ -374,6 +397,23 @@ static void poll_timer_cb(void *arg)
             return;
         }
         ESP_LOGW(TAG, "no reply to the last read (%d) — moving on", b.poll_fails);
+    }
+
+    /* A queued control write goes ahead of the next poll read. */
+    xSemaphoreTake(b.lock, portMAX_DELAY);
+    bool do_write = b.write_pending;
+    uint16_t wreg = b.write_reg, wval = b.write_val;
+    b.write_pending = false;
+    xSemaphoreGive(b.lock);
+
+    if (do_write) {
+        if (bt_session_write_reg(b.session, wreg, wval) != 0) {
+            ESP_LOGW(TAG, "control write %u failed to send", wreg);
+            return;
+        }
+        b.req_in_flight = true;
+        b.req_sent_us = esp_timer_get_time();
+        return;
     }
 
     /* session_regs may be rebuilding the plan on the host task; take a
@@ -422,7 +462,7 @@ static int on_sub(uint16_t conn, const struct ble_gatt_error *err,
 
     /* Until the model is known, poll the fields common to every V2 unit —
      * one of which (register 110) names the model and triggers the rebuild. */
-    b.plan_n = bt_regs_plan(&BT_DEVICE_GENERIC, b.plan, BT_REG_PLAN_MAX);
+    b.plan_n = bt_regs_plan(&BT_DEVICE_GENERIC, false, b.plan, BT_REG_PLAN_MAX);
     b.plan_i = 0;
     b.poll_fails = 0;
     b.req_in_flight = false;
@@ -755,7 +795,7 @@ int bluetti_ble_host_init(void)
     esp_timer_create_args_t kt = { .callback = kex_timer_cb, .name = "bt_kex" };
     esp_timer_create(&kt, &b.kex_timer);
 
-    b.session = bt_session_new(session_tx, session_regs, NULL);
+    b.session = bt_session_new(session_tx, session_regs, session_ack, NULL);
     if (!b.session) {
         ESP_LOGE(TAG, "session alloc failed");
         return -1;
@@ -840,6 +880,58 @@ bool bluetti_ble_get_state(bluetti_state_t *out)
 bool bluetti_ble_connected(void)
 {
     return b.connected;
+}
+
+int bluetti_ble_controls_json(char *buf, size_t len)
+{
+    bool avail = b.connected && b.device && b.device->full &&
+                 bt_session_ready(b.session);
+
+    xSemaphoreTake(b.lock, portMAX_DELAY);
+    bluetti_state_t st = b.state;
+    xSemaphoreGive(b.lock);
+
+    int n = snprintf(buf, len,
+        "{\"available\":%s,\"enabled\":%s,\"on_battery\":%s,\"items\":[",
+        avail ? "true" : "false",
+        b.cfg.controls ? "true" : "false",
+        (st.valid && !st.ac_input_present) ? "true" : "false");
+
+    for (size_t i = 0; i < BT_CONTROL_COUNT && n > 0 && n < (int)len; i++) {
+        const bt_control_t *c = &BT_CONTROLS[i];
+        n += snprintf(buf + n, len - n,
+            "%s{\"field\":\"%s\",\"bool\":%s,\"allowed\":\"%s\",\"value\":%d}",
+            i ? "," : "", c->field, c->is_bool ? "true" : "false",
+            c->allowed ? c->allowed : "",
+            bt_control_current(c, &st));
+    }
+    if (n > 0 && n < (int)len) {
+        n += snprintf(buf + n, len - n, "]}");
+    }
+    return (n > 0 && n < (int)len) ? n : -1;
+}
+
+int bluetti_ble_write_control(const char *field, int value)
+{
+    const bt_control_t *c = bt_control_lookup(field);
+    if (!c || !bt_control_valid(c, value)) {
+        return -1;
+    }
+    if (!b.cfg.controls) {
+        ESP_LOGW(TAG, "control write refused: controls are disabled");
+        return -1;
+    }
+    if (!b.connected || !b.device || !b.device->full ||
+        !bt_session_ready(b.session)) {
+        return -1;
+    }
+    xSemaphoreTake(b.lock, portMAX_DELAY);
+    b.write_pending = true;
+    b.write_reg = c->reg;
+    b.write_val = (uint16_t)value;
+    xSemaphoreGive(b.lock);
+    ESP_LOGW(TAG, "queued control write: %s = %d (reg %u)", field, value, c->reg);
+    return 0;
 }
 
 int bluetti_ble_start(const bluetti_ble_config_t *config,

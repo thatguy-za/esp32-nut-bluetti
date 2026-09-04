@@ -39,8 +39,17 @@ extern "C" {
 #define REG_AC_INPUT_VOLTAGE  1314  /* decimal, ÷10                     */
 #define REG_AC_INPUT_CURRENT  1315  /* decimal, ÷10                     */
 #define REG_AC_OUTPUT_VOLTAGE 1511  /* decimal, ÷10                     */
-#define REG_CTRL_AC           2011  /* bool (0/1 only)                  */
-#define REG_CTRL_DC           2012  /* bool (0/1 only)                  */
+
+/* EL10 writeable controls (Modbus 0x06). Values documented in bt_regs.c. */
+#define REG_CTRL_AC             2011  /* bool  — AC output               */
+#define REG_CTRL_DC             2012  /* bool  — DC output               */
+#define REG_CTRL_ECO_DC        2014  /* bool  — DC ECO mode             */
+#define REG_CTRL_ECO_MODE_DC   2015  /* enum  — DC ECO timeout, 1..4 h  */
+#define REG_CTRL_ECO_AC        2017  /* bool  — AC ECO mode             */
+#define REG_CTRL_ECO_MODE_AC   2018  /* enum  — AC ECO timeout, 1..4 h  */
+#define REG_CTRL_CHARGING_MODE 2020  /* enum  — 0 std/1 silent/2 turbo/4 custom */
+#define REG_CTRL_POWER_LIFTING 2021  /* bool  — power lifting           */
+#define REG_CTRL_DISPLAY_TIME  2067  /* enum  — 2/3/4/5 (30s/1m/5m/never) */
 
 /*
  * A recognised model. `full` distinguishes the Elite-10 family (decode
@@ -74,11 +83,16 @@ typedef struct {
     uint8_t  words;
 } bt_reg_read_t;
 
-#define BT_REG_PLAN_MAX 16
+#define BT_REG_PLAN_MAX 24
 
-/* Fill `out` (capacity `max`) with the reads to poll for `dev` (NULL =
- * generic). UPS-critical fields come first. Returns the count. */
-size_t bt_regs_plan(const bt_device_t *dev, bt_reg_read_t *out, size_t max);
+/*
+ * Fill `out` (capacity `max`) with the reads to poll for `dev` (NULL =
+ * generic). UPS-critical fields come first. With `with_controls`, an EL10
+ * plan also reads the writeable control registers so the UI can show
+ * their current state. Returns the count.
+ */
+size_t bt_regs_plan(const bt_device_t *dev, bool with_controls,
+                    bt_reg_read_t *out, size_t max);
 
 /*
  * Apply one field's response to the state. `start_addr`/`data`/`len` are a
@@ -89,6 +103,26 @@ size_t bt_regs_plan(const bt_device_t *dev, bt_reg_read_t *out, size_t max);
  */
 int bt_regs_apply(const bt_device_t *dev, uint16_t start_addr,
                   const uint8_t *data, size_t len, bluetti_state_t *st);
+
+/*
+ * A writeable control, addressed by a stable API field name so the web
+ * layer never handles a raw register. Only the EL10 family has these.
+ */
+typedef struct {
+    const char *field;      /* "ac_output", "charging_mode", ...          */
+    uint16_t    reg;        /* Modbus holding register                    */
+    bool        is_bool;    /* true: 0/1; false: `allowed` list           */
+    const char *allowed;    /* comma-separated ints, e.g. "0,1,2,4"       */
+} bt_control_t;
+
+extern const bt_control_t BT_CONTROLS[];
+extern const size_t       BT_CONTROL_COUNT;
+
+const bt_control_t *bt_control_lookup(const char *field);
+bool bt_control_valid(const bt_control_t *c, int value);
+
+/* Current value of a control in `st`, or -1 if unknown. */
+int bt_control_current(const bt_control_t *c, const bluetti_state_t *st);
 
 #ifdef __cplusplus
 }

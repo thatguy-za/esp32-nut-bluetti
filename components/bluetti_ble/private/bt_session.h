@@ -31,9 +31,15 @@ typedef int (*bt_sess_tx_t)(const uint8_t *data, size_t len, void *user);
 typedef void (*bt_sess_regs_t)(uint16_t start_addr, const uint8_t *data,
                                size_t len, void *user);
 
+/* A validated echo of a write-single-register (0x06). `ok` is false when
+ * the device answered with a Modbus exception instead. */
+typedef void (*bt_sess_ack_t)(uint16_t addr, uint16_t value, bool ok,
+                              void *user);
+
 typedef struct bt_session bt_session_t;
 
-bt_session_t *bt_session_new(bt_sess_tx_t tx, bt_sess_regs_t on_regs, void *user);
+bt_session_t *bt_session_new(bt_sess_tx_t tx, bt_sess_regs_t on_regs,
+                             bt_sess_ack_t on_ack, void *user);
 void          bt_session_free(bt_session_t *s);
 
 /* Drop all negotiated state; call on every (re)connect. */
@@ -58,6 +64,13 @@ void bt_session_feed(bt_session_t *s, const uint8_t *data, size_t len);
 
 /* Request `count` holding registers from `addr`. Only valid once ready. */
 int bt_session_read_regs(bt_session_t *s, uint16_t addr, uint16_t count);
+
+/*
+ * Write one holding register (Modbus function 0x06). Only valid once
+ * ready. The device echoes the frame back; that echo arrives via the
+ * on_ack callback. Same AES wrapping as a read.
+ */
+int bt_session_write_reg(bt_session_t *s, uint16_t addr, uint16_t value);
 
 #ifdef __cplusplus
 }

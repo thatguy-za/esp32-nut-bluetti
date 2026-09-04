@@ -650,6 +650,8 @@ static esp_err_t h_notify_test(httpd_req_t *r)
 
 static esp_err_t h_admin_reboot(httpd_req_t *r);
 static esp_err_t h_led_toggle(httpd_req_t *r);
+static esp_err_t h_controls_get(httpd_req_t *r);
+static esp_err_t h_control_set(httpd_req_t *r);
 static esp_err_t h_factory_reset(httpd_req_t *r);
 #if CONFIG_ENABLE_WEB_OTA
 static esp_err_t h_ota(httpd_req_t *r);
@@ -663,7 +665,7 @@ static esp_err_t start_httpd(bool captive)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 26;
+    c.max_uri_handlers = 28;
     c.stack_size = 8192;
     if (captive) {
         c.uri_match_fn = httpd_uri_match_wildcard;
@@ -706,6 +708,8 @@ static esp_err_t start_httpd(bool captive)
         reg(P.httpd, "/api/wifi-scan", HTTP_GET, h_wifi_scan);
         reg(P.httpd, "/api/reboot", HTTP_POST, h_admin_reboot);
         reg(P.httpd, "/api/led", HTTP_POST, h_led_toggle);
+        reg(P.httpd, "/api/controls", HTTP_GET, h_controls_get);
+        reg(P.httpd, "/api/control", HTTP_POST, h_control_set);
         reg(P.httpd, "/api/factory-reset", HTTP_POST, h_factory_reset);
 #if CONFIG_ENABLE_WEB_OTA
         reg(P.httpd, "/api/ota", HTTP_POST, h_ota);
@@ -868,9 +872,9 @@ static esp_err_t h_admin_config(httpd_req_t *r)
     REQUIRE_AUTH(r);
     char def_ap[33];
     wifi_mgr_default_ap_ssid(def_ap, sizeof(def_ap));
-    char out[1000];  /* ssid + ap_ssid + users + addressing + telegram */
+    char out[1040];  /* ssid + ap_ssid + users + addressing + telegram */
     snprintf(out, sizeof(out),
-             "{\"ble_addr\":\"%s\",\"ble_probe\":%s,"
+             "{\"ble_addr\":\"%s\",\"ble_probe\":%s,\"controls_enabled\":%s,"
              "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
              "\"nut_user\":\"%s\",\"nut_auth_set\":%s,"
              "\"ac_rating_w\":%u,\"runtime_low_s\":%u,"
@@ -883,6 +887,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              "\"tg_on_power\":%s,\"tg_on_low_batt\":%s,\"tg_on_link\":%s}",
              P.cfg->ble_addr,
              P.cfg->ble_probe ? "true" : "false",
+             P.cfg->controls_enabled ? "true" : "false",
              P.cfg->ups_name, P.cfg->nut_port, P.cfg->low_pct, P.cfg->poll_ms,
              P.cfg->nut_user, P.cfg->nut_auth_set ? "true" : "false",
              P.cfg->ac_rating_w, P.cfg->runtime_low_s,
@@ -994,6 +999,8 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         }
         P.pending.ble_probe =
             form_get(body, "ble_probe", v, sizeof(v)) && v[0] == '1';
+        P.pending.controls_enabled =
+            form_get(body, "controls_enabled", v, sizeof(v)) && v[0] == '1';
         free(body);
 
         /* The address is the only way to name a unit, so it has to be one:
@@ -1215,6 +1222,52 @@ static esp_err_t h_led_toggle(httpd_req_t *r)
     snprintf(out, sizeof(out), "{\"led\":%s,\"led_gpio\":%d}",
              led_status_enabled() ? "true" : "false", led_status_gpio());
     return send_json(r, out);
+}
+
+/* ---- device controls (EL10, web UI only — NUT stays read-only) ---- */
+
+static esp_err_t h_controls_get(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    char out[640];
+    if (bluetti_ble_controls_json(out, sizeof(out)) < 0) {
+        return httpd_resp_send_500(r);
+    }
+    return send_json(r, out);
+}
+
+static esp_err_t h_control_set(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    int len = r->content_len;
+    if (len <= 0 || len > 64) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
+    }
+    char body[65];
+    int got = 0;
+    while (got < len) {
+        int k = httpd_req_recv(r, body + got, len - got);
+        if (k <= 0) return httpd_resp_send_500(r);
+        got += k;
+    }
+    body[len] = '\0';
+
+    char field[24] = "", val[8] = "";
+    if (!form_get(body, "field", field, sizeof(field)) ||
+        !form_get(body, "value", val, sizeof(val)) || !field[0] || !val[0]) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "field and value");
+    }
+    for (const char *c = val; *c; c++) {
+        if (!isdigit((unsigned char)*c)) {
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "value");
+        }
+    }
+    if (bluetti_ble_write_control(field, atoi(val)) != 0) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                   "not available, disabled, or bad value");
+    }
+    ESP_LOGW(TAG, "device control from the web: %s = %s", field, val);
+    return send_json(r, "{\"queued\":true}");
 }
 
 static esp_err_t h_admin_reboot(httpd_req_t *r)

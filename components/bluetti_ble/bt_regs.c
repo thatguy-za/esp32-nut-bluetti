@@ -33,7 +33,8 @@ const bt_device_t *bt_device_lookup(const char *name)
     return NULL;
 }
 
-size_t bt_regs_plan(const bt_device_t *dev, bt_reg_read_t *out, size_t max)
+size_t bt_regs_plan(const bt_device_t *dev, bool with_controls,
+                    bt_reg_read_t *out, size_t max)
 {
     /* Common to every V2 unit, most-important-first. */
     static const bt_reg_read_t COMMON[] = {
@@ -44,7 +45,7 @@ size_t bt_regs_plan(const bt_device_t *dev, bt_reg_read_t *out, size_t max)
         { REG_DC_OUTPUT_POWER, 1 },
         { REG_DEVICE_TYPE,     6 },
     };
-    /* Elite-10 extras. */
+    /* Elite-10 extras: telemetry, then the two output switches. */
     static const bt_reg_read_t EL10_EXTRA[] = {
         { REG_TIME_REMAINING,    1 },
         { REG_AC_INPUT_VOLTAGE,  1 },
@@ -53,6 +54,17 @@ size_t bt_regs_plan(const bt_device_t *dev, bt_reg_read_t *out, size_t max)
         { REG_CTRL_AC,           1 },
         { REG_CTRL_DC,           1 },
         { REG_DEVICE_SN,         4 },
+    };
+    /* Only polled when device controls are enabled, so a monitoring-only
+     * setup keeps a short, fast sweep. */
+    static const bt_reg_read_t EL10_CONTROLS[] = {
+        { REG_CTRL_ECO_DC,        1 },
+        { REG_CTRL_ECO_MODE_DC,   1 },
+        { REG_CTRL_ECO_AC,        1 },
+        { REG_CTRL_ECO_MODE_AC,   1 },
+        { REG_CTRL_CHARGING_MODE, 1 },
+        { REG_CTRL_POWER_LIFTING, 1 },
+        { REG_CTRL_DISPLAY_TIME,  1 },
     };
 
     size_t n = 0;
@@ -64,8 +76,85 @@ size_t bt_regs_plan(const bt_device_t *dev, bt_reg_read_t *out, size_t max)
              i < sizeof(EL10_EXTRA) / sizeof(EL10_EXTRA[0]) && n < max; i++) {
             out[n++] = EL10_EXTRA[i];
         }
+        if (with_controls) {
+            for (size_t i = 0;
+                 i < sizeof(EL10_CONTROLS) / sizeof(EL10_CONTROLS[0]) && n < max;
+                 i++) {
+                out[n++] = EL10_CONTROLS[i];
+            }
+        }
     }
     return n;
+}
+
+/* ------------------------------------------------------------------ */
+/* Writeable controls                                                  */
+/* ------------------------------------------------------------------ */
+
+const bt_control_t BT_CONTROLS[] = {
+    { "ac_output",       REG_CTRL_AC,             true,  NULL      },
+    { "dc_output",       REG_CTRL_DC,             true,  NULL      },
+    { "eco_ac",          REG_CTRL_ECO_AC,         true,  NULL      },
+    { "eco_dc",          REG_CTRL_ECO_DC,         true,  NULL      },
+    { "eco_mode_ac",     REG_CTRL_ECO_MODE_AC,    false, "1,2,3,4" },
+    { "eco_mode_dc",     REG_CTRL_ECO_MODE_DC,    false, "1,2,3,4" },
+    { "charging_mode",   REG_CTRL_CHARGING_MODE,  false, "0,1,2,4" },
+    { "power_lifting",   REG_CTRL_POWER_LIFTING,  true,  NULL      },
+    { "display_time",    REG_CTRL_DISPLAY_TIME,   false, "2,3,4,5" },
+};
+const size_t BT_CONTROL_COUNT = sizeof(BT_CONTROLS) / sizeof(BT_CONTROLS[0]);
+
+const bt_control_t *bt_control_lookup(const char *field)
+{
+    if (!field) {
+        return NULL;
+    }
+    for (size_t i = 0; i < BT_CONTROL_COUNT; i++) {
+        if (strcmp(field, BT_CONTROLS[i].field) == 0) {
+            return &BT_CONTROLS[i];
+        }
+    }
+    return NULL;
+}
+
+bool bt_control_valid(const bt_control_t *c, int value)
+{
+    if (!c) {
+        return false;
+    }
+    if (c->is_bool) {
+        return value == 0 || value == 1;
+    }
+    /* Membership in the comma-separated allow list. */
+    for (const char *p = c->allowed; p && *p; ) {
+        int v = 0;
+        bool digits = false;
+        while (*p >= '0' && *p <= '9') { v = v * 10 + (*p++ - '0'); digits = true; }
+        if (digits && v == value) {
+            return true;
+        }
+        while (*p == ',') p++;
+    }
+    return false;
+}
+
+int bt_control_current(const bt_control_t *c, const bluetti_state_t *st)
+{
+    if (!c || !st) {
+        return -1;
+    }
+    switch (c->reg) {
+    case REG_CTRL_AC:             return st->ac_switch;
+    case REG_CTRL_DC:             return st->dc_switch;
+    case REG_CTRL_ECO_AC:         return st->eco_ac;
+    case REG_CTRL_ECO_DC:         return st->eco_dc;
+    case REG_CTRL_ECO_MODE_AC:    return st->eco_mode_ac;
+    case REG_CTRL_ECO_MODE_DC:    return st->eco_mode_dc;
+    case REG_CTRL_CHARGING_MODE:  return st->charging_mode;
+    case REG_CTRL_POWER_LIFTING:  return st->power_lifting;
+    case REG_CTRL_DISPLAY_TIME:   return st->display_time;
+    default:                      return -1;
+    }
 }
 
 /* One register out of a single field's response, or -1 if not present. */
@@ -206,12 +295,32 @@ int bt_regs_apply(const bt_device_t *dev, uint16_t start_addr,
         /* Switch fields are strictly 0 or 1; anything else means the
          * register is not really there (bluetti-bt-lib returns None). */
         if ((v = reg(start_addr, data, len, REG_CTRL_AC)) == 0 || v == 1) {
-            st->ac_switch = v;
-            matched++;
+            st->ac_switch = v; matched++;
         }
         if ((v = reg(start_addr, data, len, REG_CTRL_DC)) == 0 || v == 1) {
-            st->dc_switch = v;
-            matched++;
+            st->dc_switch = v; matched++;
+        }
+        if ((v = reg(start_addr, data, len, REG_CTRL_ECO_AC)) == 0 || v == 1) {
+            st->eco_ac = v; matched++;
+        }
+        if ((v = reg(start_addr, data, len, REG_CTRL_ECO_DC)) == 0 || v == 1) {
+            st->eco_dc = v; matched++;
+        }
+        if ((v = reg(start_addr, data, len, REG_CTRL_POWER_LIFTING)) == 0 || v == 1) {
+            st->power_lifting = v; matched++;
+        }
+        if ((v = reg(start_addr, data, len, REG_CTRL_ECO_MODE_AC)) >= 1 && v <= 4) {
+            st->eco_mode_ac = v; matched++;
+        }
+        if ((v = reg(start_addr, data, len, REG_CTRL_ECO_MODE_DC)) >= 1 && v <= 4) {
+            st->eco_mode_dc = v; matched++;
+        }
+        if ((v = reg(start_addr, data, len, REG_CTRL_CHARGING_MODE)) >= 0 &&
+            (v == 0 || v == 1 || v == 2 || v == 4)) {
+            st->charging_mode = v; matched++;
+        }
+        if ((v = reg(start_addr, data, len, REG_CTRL_DISPLAY_TIME)) >= 2 && v <= 5) {
+            st->display_time = v; matched++;
         }
     }
 

@@ -21,6 +21,7 @@ static const char *TAG = "app_config";
  *   2: dropped the advertised-name BLE targeting fallback.
  *   3: added the status-LED on/off toggle.
  *   4: added the status-LED pin.
+ *   5: added the device-controls toggle.
  *
  * From v3 on, fields are only ever appended, and a stored blob of an
  * older-but-recognised version (3 or 4) is kept: the bytes that were
@@ -28,7 +29,7 @@ static const char *TAG = "app_config";
  * up at their defaults. A newer, much older, or unreadable blob is still
  * discarded.
  */
-#define CFG_VERSION 4u
+#define CFG_VERSION 5u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -70,6 +71,7 @@ void app_config_defaults(app_config_t *cfg)
     cfg->provisioned = false;
     cfg->led_enabled = true;
     cfg->led_gpio    = CONFIG_STATUS_LED_GPIO;
+    cfg->controls_enabled = false;
 
     /* A blank SSID from Kconfig means "must provision". */
     if (strcmp(cfg->wifi_ssid, "myssid") == 0) {
@@ -97,10 +99,10 @@ esp_err_t app_config_load(app_config_t *cfg)
     err = nvs_get_blob(h, CFG_KEY, &blob, &len);
     nvs_close(h);
 
-    /* Accept a v3 blob (0.6.0) as well as v4: v4 only appends led_gpio, so
-     * a shorter v3 blob still means what it says and led_gpio stays at its
-     * default. Anything older, newer, or a length that cannot be a v3/v4
-     * blob is discarded and the device re-provisions. */
+    /* Accept any v3+ blob: every version since only appends fields, so a
+     * shorter blob still means what it says and the trailing fields stay
+     * at their defaults. Anything older, newer, or a length that cannot be
+     * a v3-or-later blob is discarded and the device re-provisions. */
     const size_t min_len =
         offsetof(cfg_blob_t, cfg) + offsetof(app_config_t, led_gpio);
     if (err != ESP_OK || len > sizeof(blob) || len < min_len ||

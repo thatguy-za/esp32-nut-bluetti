@@ -36,6 +36,8 @@ static bluetti_state_t fresh(void)
     st.dc_in_watts = st.dc_out_watts = BLUETTI_UNKNOWN_F;
     st.ac_in_volts = st.ac_in_amps = st.ac_out_volts = BLUETTI_UNKNOWN_F;
     st.ac_switch = st.dc_switch = BLUETTI_UNKNOWN_I;
+    st.eco_ac = st.eco_dc = st.eco_mode_ac = st.eco_mode_dc = BLUETTI_UNKNOWN_I;
+    st.charging_mode = st.power_lifting = st.display_time = BLUETTI_UNKNOWN_I;
     return st;
 }
 
@@ -68,23 +70,50 @@ int main(void)
 
     /* ---- polling plan ---- */
     bt_reg_read_t plan[BT_REG_PLAN_MAX];
-    size_t gn = bt_regs_plan(&BT_DEVICE_GENERIC, plan, BT_REG_PLAN_MAX);
+    size_t gn = bt_regs_plan(&BT_DEVICE_GENERIC, false, plan, BT_REG_PLAN_MAX);
     OKF(gn >= 5 && gn <= 8, "generic plan is the small common set (%zu)", gn);
     OKF(plan[0].addr == REG_BATTERY_SOC, "charge is polled first");
     bool has_type = false;
     for (size_t i = 0; i < gn; i++) if (plan[i].addr == REG_DEVICE_TYPE) has_type = true;
     OKF(has_type, "generic plan still reads register 110 to identify the model");
 
-    size_t en = bt_regs_plan(&BT_DEVICE_EL10, plan, BT_REG_PLAN_MAX);
+    size_t en = bt_regs_plan(&BT_DEVICE_EL10, false, plan, BT_REG_PLAN_MAX);
     OKF(en > gn, "EL10 plan has more fields than generic (%zu > %zu)", en, gn);
-    bool has_ctrl = false, has_sn = false, has_rt = false;
+    bool has_ctrl = false, has_sn = false, has_rt = false, has_cm = false;
     for (size_t i = 0; i < en; i++) {
         if (plan[i].addr == REG_CTRL_AC)     has_ctrl = true;
         if (plan[i].addr == REG_DEVICE_SN)   has_sn = true;
         if (plan[i].addr == REG_TIME_REMAINING) has_rt = true;
+        if (plan[i].addr == REG_CTRL_CHARGING_MODE) has_cm = true;
     }
     OKF(has_ctrl && has_sn && has_rt, "EL10 plan covers switches, serial, runtime");
+    OKF(!has_cm, "without controls, the EL10 plan skips the control registers");
     OKF(en <= BT_REG_PLAN_MAX, "plan fits the buffer");
+
+    size_t cn = bt_regs_plan(&BT_DEVICE_EL10, true, plan, BT_REG_PLAN_MAX);
+    OKF(cn > en && cn <= BT_REG_PLAN_MAX, "with controls the plan grows (%zu)", cn);
+    has_cm = false;
+    for (size_t i = 0; i < cn; i++)
+        if (plan[i].addr == REG_CTRL_CHARGING_MODE) has_cm = true;
+    OKF(has_cm, "with controls, the charging-mode register is polled");
+    OKF(bt_regs_plan(&BT_DEVICE_GENERIC, true, plan, BT_REG_PLAN_MAX) == gn,
+        "a generic (non-EL10) unit gets no control reads even if asked");
+
+    /* ---- control table ---- */
+    OKF(bt_control_lookup("ac_output")->reg == REG_CTRL_AC, "ac_output -> 2011");
+    OKF(bt_control_lookup("charging_mode")->reg == REG_CTRL_CHARGING_MODE,
+        "charging_mode -> 2020");
+    OKF(bt_control_lookup("nope") == NULL, "unknown control name -> NULL");
+    const bt_control_t *acc = bt_control_lookup("ac_output");
+    OKF(bt_control_valid(acc, 0) && bt_control_valid(acc, 1) &&
+        !bt_control_valid(acc, 2), "a bool control accepts only 0 or 1");
+    const bt_control_t *cm = bt_control_lookup("charging_mode");
+    OKF(bt_control_valid(cm, 0) && bt_control_valid(cm, 4) &&
+        !bt_control_valid(cm, 3), "charging_mode allows 0,1,2,4 but not 3");
+    const bt_control_t *eco = bt_control_lookup("eco_mode_ac");
+    OKF(bt_control_valid(eco, 1) && bt_control_valid(eco, 4) &&
+        !bt_control_valid(eco, 0) && !bt_control_valid(eco, 5),
+        "eco timeout allows 1..4 only");
 
     /* ---- decode: charge ---- */
     bluetti_state_t st = fresh();
@@ -156,6 +185,37 @@ int main(void)
     st = fresh();
     one(&BT_DEVICE_EL10, &st, REG_CTRL_AC, 0xFFFF);
     OKF(st.ac_switch == BLUETTI_UNKNOWN_I, "CTRL_AC 0xFFFF -> absent");
+
+    /* ---- decode: the other controls, and bt_control_current mapping ---- */
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_CTRL_CHARGING_MODE, 2);
+    OKF(st.charging_mode == 2, "charging mode 2 (turbo) decodes");
+    OKF(bt_control_current(bt_control_lookup("charging_mode"), &st) == 2,
+        "bt_control_current reads it back");
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_CTRL_CHARGING_MODE, 3);
+    OKF(st.charging_mode == BLUETTI_UNKNOWN_I,
+        "charging mode 3 is not a valid value -> absent");
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_CTRL_ECO_MODE_AC, 4);
+    OKF(st.eco_mode_ac == 4, "AC ECO timeout 4h decodes");
+    one(&BT_DEVICE_EL10, &st, REG_CTRL_ECO_MODE_AC, 9);
+    OKF(st.eco_mode_ac == 4, "AC ECO timeout 9 is out of range -> unchanged");
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_CTRL_DISPLAY_TIME, 5);
+    OKF(st.display_time == 5, "screen timeout 5 (never) decodes");
+    one(&BT_DEVICE_EL10, &st, REG_CTRL_DISPLAY_TIME, 1);
+    OKF(st.display_time == 5, "screen timeout 1 is out of range -> unchanged");
+    st = fresh();
+    one(&BT_DEVICE_EL10, &st, REG_CTRL_POWER_LIFTING, 1);
+    OKF(st.power_lifting == 1 &&
+        bt_control_current(bt_control_lookup("power_lifting"), &st) == 1,
+        "power lifting on decodes and reads back");
+    /* generic model ignores all of them */
+    st = fresh();
+    one(&BT_DEVICE_GENERIC, &st, REG_CTRL_CHARGING_MODE, 2);
+    OKF(st.charging_mode == BLUETTI_UNKNOWN_I,
+        "a generic unit does not decode control registers");
 
     /* ---- decode: serial across four words, least-significant first ---- */
     st = fresh();

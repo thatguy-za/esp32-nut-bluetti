@@ -127,8 +127,9 @@ altogether.
 | 2011 | AC output switch | bool — **only** 0 or 1; anything else = absent |
 | 2012 | DC output switch | bool — as above |
 
-The remaining EL10 registers upstream lists (2014–6175: ECO settings, charging
-mode, display timeout, BMS version) are controls this bridge does not surface.
+Registers 2014–2067 are the writeable controls — polled only when device
+controls are enabled, and documented in the "Writing" section below. Register
+6175 (BMS version) is not surfaced.
 
 Advertised name matches `^EL10(\d+)$` or `^EL100V2(\d+)$`. `EL10` is a prefix
 of `EL100V2`; the digit-after-the-name check keeps them apart (both resolve to
@@ -194,6 +195,39 @@ handshake. The reference gets this for free by reconnecting every poll cycle.
 - session key: raw ECDH X coordinate on secp256r1, used directly as AES-256
 - frame wrapping: `len_be16` then, when secure, a 4-byte seed whose `MD5` is the
   per-message IV; zero padding to the AES block
+
+## Writing (device controls)
+
+Read-only monitoring is the default; the admin page can optionally issue
+control writes (never NUT — see the README). A write is Modbus **function
+0x06, write single register**:
+
+```
+01 06 <addr_hi> <addr_lo> <val_hi> <val_lo> <crc_lo> <crc_hi>
+```
+
+Same 8-byte shape as a read request, same AES wrapping, same one-at-a-time
+serialisation in the poll loop (the write jumps the queue ahead of the next
+read). The device echoes the frame back; `bt_session.c` validates the echo
+(`on_ack`) and the new value is confirmed by the next poll of that register.
+
+EL10 control registers and their values:
+
+| Register | Control | Values |
+| --- | --- | --- |
+| 2011 | AC output | 0 / 1 |
+| 2012 | DC output | 0 / 1 |
+| 2014 | DC ECO mode | 0 / 1 |
+| 2015 | DC ECO timeout | 1..4 (hours) |
+| 2017 | AC ECO mode | 0 / 1 |
+| 2018 | AC ECO timeout | 1..4 |
+| 2020 | Charging mode | 0 std / 1 silent / 2 turbo / 4 custom |
+| 2021 | Power lifting | 0 / 1 |
+| 2067 | Screen timeout | 2 / 3 / 4 / 5 (30 s / 1 m / 5 m / never) |
+
+These addresses come from `bluetti-bt-lib`'s `SwitchField` / `SelectField`
+definitions. Its own integration disables writes on encrypted units, so as
+far as is known nobody has confirmed a write lands on an Elite 10. Untested.
 
 ## Probe mode
 

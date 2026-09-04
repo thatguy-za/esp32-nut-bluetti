@@ -34,14 +34,15 @@ lb_test: lb_test.c
 bt_frame_test: bt_frame_test.c
 	$(CC) $(CFLAGS) $^ -o $@
 
-bt_regs_test: bt_regs_test.c ../components/bluetti_ble/bt_regs.c
-	$(CC) $(CFLAGS) -Ishim -I../components/bluetti_ble/include -I../components/bluetti_ble/private $^ -o $@
+BT_HDRS := ../components/bluetti_ble/include/bluetti_ble.h ../components/bluetti_ble/private/bt_regs.h
+bt_regs_test: bt_regs_test.c ../components/bluetti_ble/bt_regs.c $(BT_HDRS)
+	$(CC) $(CFLAGS) -Ishim -I../components/bluetti_ble/include -I../components/bluetti_ble/private bt_regs_test.c ../components/bluetti_ble/bt_regs.c -o $@
 
 ota_gh_test: ota_gh_test.c
 	$(CC) $(CFLAGS) $^ -o $@
 
-config_compat_test: config_compat_test.c
-	$(CC) $(CFLAGS) -Ishim -I../components/app_config/include $^ -o $@
+config_compat_test: config_compat_test.c ../components/app_config/include/app_config.h
+	$(CC) $(CFLAGS) -Ishim -I../components/app_config/include config_compat_test.c -o $@
 
 clean:
 	rm -rf nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test ota_gh_test config_compat_test *.dSYM

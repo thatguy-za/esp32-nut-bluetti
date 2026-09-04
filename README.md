@@ -194,7 +194,8 @@ In normal operation the device serves a page at `http://<device-ip>/`:
 - **Status** — the current state, with a live tail of the device log below it
   (~12 KB ring buffer) so you can watch the BLE handshake without a serial
   cable. Turn on `CONFIG_BLUETTI_BLE_TRACE` for the full dump.
-- **BLUETTI** — BLE target and BLUETTI account.
+- **BLUETTI** — BLE target, probe mode, and the optional device-controls toggle
+  (see below).
 - **NUT** — UPS name, TCP port, low-battery %.
 - **Wi-Fi** — switch between joining a network and running as an access point;
   hostname; and DHCP or a static IPv4 address (address, mask, gateway, DNS).
@@ -229,6 +230,35 @@ bridge on a trusted network.
 
 If stored Wi-Fi credentials ever stop working, the device falls back to setup
 mode on its own after a failed connect.
+
+### Device controls (Elite 10, web UI only)
+
+> **NUT stays read-only.** These controls live on the admin page and nowhere
+> else — nothing is exposed as a writable NUT variable, so a misconfigured
+> `upsmon` can never toggle the power station.
+
+Off by default. Enable it on the **BLUETTI** tab and a **Controls** box appears
+that can set, over the encrypted channel:
+
+| Control | Values |
+| --- | --- |
+| AC output, DC output | on / off |
+| AC ECO mode, DC ECO mode | on / off |
+| AC ECO timeout, DC ECO timeout | 1–4 hours |
+| Charging mode | Standard / Silent / Turbo / Custom |
+| Power lifting | on / off |
+| Screen timeout | 30 s / 1 min / 5 min / Never |
+
+A change is written as a Modbus *write single register* wrapped in the same AES
+layer as the reads, then confirmed by the next poll — so a switch takes a few
+seconds to settle. Turning **AC output off while the unit is on battery** asks
+for confirmation first, since it cuts power to whatever the unit is running.
+
+**This has not been tested against hardware.** Writing to the power station
+relies on register addresses that `bluetti-bt-lib` assumes but — because its own
+integration disables writes on encrypted units — nobody appears to have
+confirmed. Leave it off unless you are ready to verify it with probe mode. Only
+the Elite 10 (and EL100V2) expose these.
 
 ## Telegram alerts
 
@@ -311,7 +341,8 @@ trusted LAN.
 
 No `SET VAR` or `INSTCMD`, so nothing can be changed on the BLUETTI through NUT
 and there is no shutdown command — which is also why `ups.delay.shutdown` is not
-published: nothing would honour it.
+published: nothing would honour it. The device controls, when enabled, are on
+the admin page only and never touch NUT.
 
 ## What's implemented
 
