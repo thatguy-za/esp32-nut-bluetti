@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BLUETTI NUT Bridge</title>
+<title>Bluetti NUT Bridge</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -103,26 +103,26 @@
 </style>
 </head>
 <body>
-<h1 id="pageTitle">BLUETTI NUT Bridge</h1>
+<h1 id="pageTitle">Bluetti NUT Bridge</h1>
 <nav>
   <button data-tab="status" class="active">Status</button>
-  <button data-tab="bluetti">BLUETTI</button>
+  <button data-tab="bluetti">Bluetti</button>
   <button data-tab="nut">NUT</button>
-  <button data-tab="wifi">Wi-Fi</button>
+  <button data-tab="wifi">Network</button>
   <button data-tab="notify">Alerts</button>
   <button data-tab="maint">Maintenance</button>
   <button id="signout" style="margin-left:auto">Sign out</button>
 </nav>
 
 <div id="setupWarn" class="warn" hidden>
-  No BLUETTI unit selected yet — open the <b>BLUETTI</b> tab to pick one.
+  No Bluetti unit selected yet — open the <b>Bluetti</b> tab to pick one.
 </div>
 
 <!-- ---------------- Status ---------------- -->
 <section id="status" class="active">
   <div class="box">
     <h2>Status <span class="sub">refreshes every 3&nbsp;s</span> <span class="hint" id="statModel"></span></h2>
-    <p class="hint" id="statusWaiting" hidden>Waiting for telemetry from the BLUETTI unit…</p>
+    <p class="hint" id="statusWaiting" hidden>Waiting for telemetry from the Bluetti unit…</p>
     <div id="statLive">
       <div id="statBanner" class="banner ol">
         <svg id="statIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -177,7 +177,7 @@
   <form id="efForm">
     <input type="hidden" name="section" value="bluetti">
     <div class="box">
-      <h2>BLUETTI unit</h2>
+      <h2>Bluetti unit</h2>
       <label for="cfgBleSel">Device</label>
       <select id="cfgBleSel"><option value="">— select —</option></select>
       <div class="row"><button type="button" class="act" id="cfgBleScan">Scan for devices</button></div>
@@ -200,7 +200,7 @@
     </div>
 
     <div class="box">
-      <h2>Protocol <span class="sub">diagnostics</span></h2>
+      <h2>Diagnostics</h2>
       <label class="chk"><input type="checkbox" id="cfgProbe" name="ble_probe"
         value="1" style="width:auto"> Probe mode</label>
       <p class="hint">Leave this off for normal use. The decoder has not been
@@ -289,7 +289,7 @@
     </div>
 
     <div class="box" id="wifiStaBox">
-      <h2>Station <span class="sub">join an existing network</span></h2>
+      <h2>Client</h2>
       <label for="wifiSsid">Network</label>
       <select id="wifiSsid" name="wifi_ssid"></select>
       <div class="row"><button type="button" class="act" id="wifiScan">Scan for networks</button>
@@ -345,7 +345,7 @@
       <p class="hint">At least 8 characters. NUT clients must join this network.</p>
     </div>
 
-    <p><button class="act danger" id="wifiSave">Save &amp; reboot</button>
+    <p><button class="act primary" id="wifiSave">Save &amp; reboot</button>
        <span class="hint" id="wifiMsg"></span></p>
     <p class="hint">Changing this reboots the bridge and moves it to a different
       address — you'll need to reconnect there.</p>
@@ -372,6 +372,8 @@
         rel="noopener">@userinfobot</a> for your chat ID. Send your bot a message
         first, or it isn't allowed to message you. Group IDs start with
         <code>-</code>.</p>
+      <p><button type="button" class="act" id="tgTest">Send test message</button>
+         <span class="hint" id="tgTestMsg"></span></p>
     </div>
 
     <div class="box">
@@ -381,13 +383,12 @@
       <label class="chk"><input type="checkbox" id="tgLow" name="tg_on_low_batt"
         value="1" style="width:auto"> Battery low</label><br>
       <label class="chk"><input type="checkbox" id="tgLink" name="tg_on_link"
-        value="1" style="width:auto"> BLUETTI unit unreachable / back</label>
+        value="1" style="width:auto"> Bluetti unit unreachable / back</label>
       <p class="hint">Repeats of the same event inside a minute are suppressed,
         so a flapping supply won't spam the chat.</p>
     </div>
 
     <p><button class="act primary" id="tgSave">Save &amp; reboot</button>
-       <button type="button" class="act" id="tgTest">Send test message</button>
        <span class="hint" id="tgMsg"></span></p>
   </form>
 </section>
@@ -395,20 +396,17 @@
 <!-- ---------------- Maintenance ---------------- -->
 <section id="maint">
   <div class="box" id="otaBox" hidden>
-    <h2>Update from GitHub <span class="sub">no download needed</span></h2>
+    <h2>Update from GitHub</h2>
     <p>Running <code id="fwNow">?</code>. Checks this project's releases and
       installs the one you pick.</p>
     <div class="row">
       <button type="button" class="act" id="ghCheck">Check for updates</button>
       <select id="ghSel" style="max-width:14rem" hidden></select>
-      <button type="button" class="act danger" id="ghGo" hidden>Install</button>
+      <button type="button" class="act primary" id="ghGo" hidden>Install</button>
     </div>
     <progress id="ghProg" value="0" max="100" style="width:100%;display:none"></progress>
     <p class="hint" id="ghMsg">Older releases are listed too, so you can go back
       if a build misbehaves.</p>
-    <p class="hint">The image is downloaded over HTTPS but is <b>not signed</b>:
-      anyone who can intercept that connection, or who controls the repository,
-      controls what gets installed.</p>
   </div>
 
   <div class="box" id="otaFileBox" hidden>
@@ -418,35 +416,28 @@
       that was never released.</p>
     <div class="row">
       <input type="file" id="fwFile" accept=".bin,application/octet-stream" style="max-width:24rem">
-    </div>
-    <div class="row">
-      <span>Type <code>FLASH</code> to confirm:</span>
-      <input id="fwConfirm" size="8" autocomplete="off" style="width:6rem">
-      <button class="act danger" id="fwGo" disabled>Update</button>
+      <button class="act primary" id="fwGo" disabled>Update</button>
     </div>
     <progress id="fwProg" value="0" max="100" style="width:100%;display:none"></progress>
     <p class="hint" id="fwMsg"></p>
-    <p class="hint">Either way, the new build goes to the spare slot; if it will
-      not boot, the bootloader rolls back to the one running now.</p>
   </div>
 
   <div class="box">
     <h2>Status LED</h2>
     <p>The onboard addressable LED shows the bridge's state at a glance:
       <b style="color:#dc2626">red</b> while starting up,
-      <b style="color:#16a34a">green</b> once it is talking to the BLUETTI
+      <b style="color:#16a34a">green</b> once it is talking to the Bluetti
       unit over Bluetooth.</p>
     <label class="chk"><input type="checkbox" id="ledOn"> LED on</label>
     <div class="row" style="margin-top:.7rem">
-      <span><label for="ledGpio" style="display:inline">Data GPIO</label>
-        <input id="ledGpio" type="number" min="-1" max="48" style="width:5rem">
-      </span>
+      <label for="ledGpio" style="margin:0">Data GPIO</label>
+      <input id="ledGpio" type="number" min="-1" max="48" style="width:5rem">
       <button class="act" id="ledTest" type="button">Test</button>
     </div>
     <p class="hint" id="ledMsg">If nothing lights, the pin is probably wrong for
       your board. Common values are 48, 38 and 21; set <code>-1</code> to turn
       it off. Change it, then <b>Test</b> flashes red&nbsp;/ green&nbsp;/ blue on
-      that pin. A board with no addressable LED stays dark whatever you set.</p>
+      that pin.</p>
   </div>
 
   <div class="box">
@@ -462,7 +453,7 @@
              autocomplete="new-password" required>
       <label for="credNew2">Confirm new password</label>
       <input id="credNew2" type="password" autocomplete="new-password" required>
-      <p><button class="act" id="credSave">Update login</button>
+      <p><button class="act primary" id="credSave">Update credentials</button>
          <span class="hint" id="credMsg"></span></p>
       <p class="hint">Your browser caches the old login for this session — after
         changing it, close the tab (or use a private window) to be asked again.</p>
@@ -473,16 +464,16 @@
     <div class="box">
       <h2>Restart</h2>
       <p>Reboot the bridge. Every setting is kept.</p>
-      <button class="act" id="reboot">Reboot</button>
-      <p class="hint" id="rebootMsg"></p>
+      <p><button class="act primary" id="reboot">Reboot</button>
+         <span class="hint" id="rebootMsg"></span></p>
     </div>
 
     <div class="box">
       <h2>Reset</h2>
-      <p>Forget every setting (Wi-Fi, admin login, BLUETTI, NUT) and reboot into
+      <p>Forget every setting (Wi-Fi, admin login, Bluetti, NUT) and reboot into
         the setup access point.</p>
-      <button class="act danger" id="reset">Reset &amp; reboot</button>
-      <p class="hint" id="resetMsg"></p>
+      <p><button class="act danger" id="reset">Reset &amp; reboot</button>
+         <span class="hint" id="resetMsg"></span></p>
     </div>
   </div>
 </section>
@@ -551,10 +542,10 @@ function renderStatus(j) {
     ['Firmware', (j.fw_version || '?') + (j.fw_date ? ' (' + j.fw_date + ')' : '')],
   ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
   $('#statusDots').innerHTML =
-    `<span class="dot${j.ble_connected ? ' up' : ''}">BLE ${j.ble_connected ? 'linked' : 'down'}</span>` +
+    `<span class="dot${j.ble_connected ? ' up' : ''}">BLE${j.ble_connected ? ' linked' : ''}</span>` +
     `<span class="dot up">NUT :${j.nut_port || 3493}</span>`;
   if (!valid) {
-    $('#nutTable').innerHTML = '<tr><td colspan="2">Waiting for the link…</td></tr>';
+    $('#nutTable').innerHTML = '<tr><td colspan="2">Waiting for Bluetti…</td></tr>';
     return;
   }
 
@@ -610,7 +601,7 @@ async function refreshStatus() {
     if (bounceIfSignedOut(res)) return;
     const j = await res.json();
     lastStatus = j;
-    $('#statModel').textContent = j.model ? '· BLUETTI ' + j.model : '';
+    $('#statModel').textContent = j.model ? '· Bluetti ' + j.model : '';
     renderStatus(j);
     $('#setupWarn').hidden = !!j.configured;
     /* Name the tab after the device, so several bridges are told apart in
@@ -1293,7 +1284,7 @@ $('#tgTest').onclick = async () => {
   if ($('#tgToken').value) fd.set('tg_token', $('#tgToken').value);
   if ($('#tgChat').value) fd.set('tg_chat', $('#tgChat').value);
   $('#tgTest').disabled = true;
-  $('#tgMsg').textContent = 'Sending…';
+  $('#tgTestMsg').textContent = 'Sending…';
   try {
     const r = await fetch('/api/notify-test',
       { method: 'POST', body: new URLSearchParams(fd) });
@@ -1303,22 +1294,21 @@ $('#tgTest').onclick = async () => {
       if (!why || why.length > 120 || why.includes('<')) why = 'HTTP ' + r.status;
       throw new Error(why);
     }
-    $('#tgMsg').textContent = 'Sent — check Telegram.';
+    $('#tgTestMsg').textContent = 'Sent — check Telegram.';
   } catch (e) {
-    $('#tgMsg').textContent = 'Failed: ' + e.message;
+    $('#tgTestMsg').textContent = 'Failed: ' + e.message;
   }
   $('#tgTest').disabled = false;
 };
 
 /* ---- firmware update ---- */
 function otaReady() {
-  $('#fwGo').disabled = !($('#fwFile').files[0] && $('#fwConfirm').value === 'FLASH');
+  $('#fwGo').disabled = !$('#fwFile').files[0];
 }
 $('#fwFile').onchange = otaReady;
-$('#fwConfirm').oninput = otaReady;
 $('#fwGo').onclick = () => {
   const f = $('#fwFile').files[0];
-  if (!f || $('#fwConfirm').value !== 'FLASH') return;
+  if (!f) return;
   if (!confirm(`Flash ${f.name} (${(f.size/1024/1024).toFixed(2)} MB) and reboot?`)) return;
   $('#fwGo').disabled = true;
   $('#fwProg').style.display = 'block';
