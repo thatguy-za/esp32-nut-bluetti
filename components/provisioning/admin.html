@@ -113,12 +113,11 @@
     </div>
 
     <div class="box">
-      <h2>Device controls</h2>
-      <label class="chk"><input type="checkbox" id="cfgControls" name="controls_enabled"
-        value="1" style="width:auto"> Allow controlling the unit</label>
-      <p class="hint">Off by default. Web page only — NUT stays read-only.
-        Writing to the unit is <b>unverified against hardware</b>. Save and
-        reboot to apply; the controls then appear here.</p>
+      <h2>Device controls <span class="sub">experimental</span></h2>
+      <label class="chk"><input type="checkbox" id="cfgControls"
+        style="width:auto"> Allow controlling the unit</label>
+      <p class="hint">Experimental. Control the power station from this UI; NUT
+        stays read-only.</p>
       <div id="ctrlList" hidden style="margin-top:.8rem; border-top:1px solid #8883; padding-top:.6rem"></div>
       <p class="hint" id="ctrlMsg" hidden></p>
     </div>
@@ -703,7 +702,14 @@ async function sendControl(field, value) {
 
 function renderControls(j) {
   const list = $('#ctrlList');
-  if (!j.enabled) { list.hidden = true; $('#ctrlMsg').hidden = true; return; }
+  /* Collapsed when off: only the toggle and its one-line hint. */
+  const hint = $('#cfgControls').closest('.box').querySelector('.hint');
+  if (!j.enabled) {
+    list.hidden = true; $('#ctrlMsg').hidden = true;
+    if (hint) hint.hidden = false;
+    return;
+  }
+  if (hint) hint.hidden = true;
   list.hidden = false;
   list.innerHTML = '';
 
@@ -796,6 +802,21 @@ async function refreshControls() {
   }
   ctrlTimer = setTimeout(refreshControls, 3000);
 }
+
+/* The toggle applies live — no save-and-reboot. */
+$('#cfgControls').onchange = async (e) => {
+  const on = e.target.checked;
+  try {
+    const r = await fetch('/api/controls', {
+      method: 'POST', body: new URLSearchParams({ enable: on ? 1 : 0 }),
+    });
+    if (bounceIfSignedOut(r)) return;
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    refreshControls();
+  } catch (err) {
+    e.target.checked = !on;
+  }
+};
 
 /* ---- firmware updates from GitHub ---- */
 let ghTimer = null;

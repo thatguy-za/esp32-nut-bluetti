@@ -237,8 +237,9 @@ mode on its own after a failed connect.
 > else — nothing is exposed as a writable NUT variable, so a misconfigured
 > `upsmon` can never toggle the power station.
 
-Off by default. Enable "Allow controlling the unit" on the **BLUETTI** tab, save
-and reboot, and the controls the unit reports appear in that box.
+Off by default. Tick "Allow controlling the unit" on the **BLUETTI** tab — it
+applies immediately, no reboot — and the controls the unit reports appear in
+that box.
 
 | Control | Values | Models |
 | --- | --- | --- |

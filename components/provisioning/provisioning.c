@@ -651,6 +651,7 @@ static esp_err_t h_notify_test(httpd_req_t *r)
 static esp_err_t h_admin_reboot(httpd_req_t *r);
 static esp_err_t h_led_toggle(httpd_req_t *r);
 static esp_err_t h_controls_get(httpd_req_t *r);
+static esp_err_t h_controls_enable(httpd_req_t *r);
 static esp_err_t h_control_set(httpd_req_t *r);
 static esp_err_t h_factory_reset(httpd_req_t *r);
 #if CONFIG_ENABLE_WEB_OTA
@@ -665,7 +666,7 @@ static esp_err_t start_httpd(bool captive)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 28;
+    c.max_uri_handlers = 29;
     c.stack_size = 8192;
     if (captive) {
         c.uri_match_fn = httpd_uri_match_wildcard;
@@ -709,6 +710,7 @@ static esp_err_t start_httpd(bool captive)
         reg(P.httpd, "/api/reboot", HTTP_POST, h_admin_reboot);
         reg(P.httpd, "/api/led", HTTP_POST, h_led_toggle);
         reg(P.httpd, "/api/controls", HTTP_GET, h_controls_get);
+        reg(P.httpd, "/api/controls", HTTP_POST, h_controls_enable);
         reg(P.httpd, "/api/control", HTTP_POST, h_control_set);
         reg(P.httpd, "/api/factory-reset", HTTP_POST, h_factory_reset);
 #if CONFIG_ENABLE_WEB_OTA
@@ -999,8 +1001,8 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         }
         P.pending.ble_probe =
             form_get(body, "ble_probe", v, sizeof(v)) && v[0] == '1';
-        P.pending.controls_enabled =
-            form_get(body, "controls_enabled", v, sizeof(v)) && v[0] == '1';
+        /* controls_enabled is applied live via POST /api/controls, not here. */
+        P.pending.controls_enabled = P.cfg->controls_enabled;
         free(body);
 
         /* The address is the only way to name a unit, so it has to be one:
@@ -1234,6 +1236,35 @@ static esp_err_t h_controls_get(httpd_req_t *r)
         return httpd_resp_send_500(r);
     }
     return send_json(r, out);
+}
+
+/* POST /api/controls  — enable/disable device controls, applied live. */
+static esp_err_t h_controls_enable(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    char body[32] = "";
+    int len = r->content_len;
+    if (len <= 0 || len >= (int)sizeof(body)) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
+    }
+    int got = 0;
+    while (got < len) {
+        int k = httpd_req_recv(r, body + got, len - got);
+        if (k <= 0) return httpd_resp_send_500(r);
+        got += k;
+    }
+    body[len] = '\0';
+
+    char v[8] = "";
+    if (!form_get(body, "enable", v, sizeof(v)) || !v[0]) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "missing 'enable'");
+    }
+    bool on = (v[0] == '1' || v[0] == 't');
+    P.cfg->controls_enabled = on;
+    app_config_save(P.cfg);
+    bluetti_ble_set_controls(on);
+    ESP_LOGW(TAG, "device controls %s", on ? "enabled" : "disabled");
+    return send_json(r, on ? "{\"enabled\":true}" : "{\"enabled\":false}");
 }
 
 static esp_err_t h_control_set(httpd_req_t *r)

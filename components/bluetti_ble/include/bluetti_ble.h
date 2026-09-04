@@ -123,6 +123,13 @@ bool bluetti_ble_connected(void);
 int bluetti_ble_write_control(const char *field, int value);
 
 /*
+ * Turn device controls on or off at runtime. Rebuilds the poll plan so
+ * the control registers start (or stop) being read within a poll cycle —
+ * no reconnect. Persisting the setting is the caller's job.
+ */
+void bluetti_ble_set_controls(bool on);
+
+/*
  * Write a JSON object describing the controls into `buf`:
  *   {"available":bool,          // EL10 family, connected, session ready
  *    "enabled":bool,            // the config toggle

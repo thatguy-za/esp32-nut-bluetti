@@ -886,6 +886,21 @@ bool bluetti_ble_connected(void)
     return b.connected;
 }
 
+void bluetti_ble_set_controls(bool on)
+{
+    b.cfg.controls = on;
+    xSemaphoreTake(b.lock, portMAX_DELAY);
+    if (!on) {
+        b.write_pending = false;
+    }
+    if (b.device) {
+        b.plan_n = bt_regs_plan(b.device, on, b.plan, BT_REG_PLAN_MAX);
+        b.plan_i = 0;
+    }
+    xSemaphoreGive(b.lock);
+    ESP_LOGI(TAG, "device controls %s", on ? "on" : "off");
+}
+
 int bluetti_ble_controls_json(char *buf, size_t len)
 {
     uint16_t mask = b.device ? b.device->controls : 0;
