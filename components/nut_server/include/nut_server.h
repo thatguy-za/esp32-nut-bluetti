@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -31,6 +32,10 @@ void nut_server_set_var_float(const char *name, float value, int decimals);
 
 /* Remove a variable so it no longer appears in LIST VAR. */
 void nut_server_clear_var(const char *name);
+
+/* Copy a variable's current value into `out` (always NUL-terminated).
+ * Returns false and writes "" if the variable is not set. Thread-safe. */
+bool nut_server_get_var(const char *name, char *out, size_t len);
 
 /* Convenience: set ups.status, the field upsmon watches
  * (e.g. "OL", "OB", "OB LB", "OL CHRG"). */

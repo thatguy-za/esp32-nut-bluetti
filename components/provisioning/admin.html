@@ -56,10 +56,54 @@
           border-radius: .3rem; font-size: .88rem; margin: 0 0 1rem; }
   code { background: #8882; padding: .05em .3em; border-radius: .25em; }
   a { color: #2563eb; }
+
+  /* ---- status banner / flow ---- */
+  .banner { display: flex; align-items: center; gap: .8rem; padding: .7rem .9rem;
+            border-radius: .6rem; margin: 0 0 1rem; }
+  .banner.ol { background: #16a34a1a; }
+  .banner.ob { background: #d9822b1a; }
+  .banner svg { flex: none; width: 26px; height: 26px; }
+  .banner.ol svg, .banner.ol .head, .banner.ol .pill { color: #16a34a; }
+  .banner.ob svg, .banner.ob .head, .banner.ob .pill { color: #d9822b; }
+  .banner .head { font-size: 1.05rem; font-weight: 600; }
+  .banner .sub2 { font-size: .8rem; opacity: .8; margin-top: .1rem; }
+  .banner .pill { margin-left: auto; flex: none; font-size: .72rem; font-weight: 600;
+                  border: 1px solid currentColor; border-radius: 20px; padding: .15rem .6rem;
+                  white-space: nowrap; }
+  .battrow { display: flex; align-items: center; gap: .8rem; margin: 0 0 1.1rem; }
+  .battbar { flex: 1; height: 1.5rem; border: 1.5px solid #8886; border-radius: .35rem;
+             position: relative; overflow: hidden; }
+  .battfill { position: absolute; inset: 2px; width: 0; border-radius: .25rem;
+              background: #2563eb; transition: width .4s; }
+  .battfill.low { background: #c00; }
+  .battpct { min-width: 3.6rem; text-align: right; font-size: 1.5rem; font-weight: 600;
+             font-variant-numeric: tabular-nums; }
+  .battpct .u { font-size: .85rem; opacity: .6; font-weight: 400; }
+  .flow { display: flex; align-items: stretch; gap: .5rem; margin: 0 0 1.1rem; flex-wrap: wrap; }
+  .flowsources { display: flex; flex-direction: column; gap: .4rem; flex: 1 1 8rem; justify-content: center; }
+  .flownode { flex: 1 1 8rem; display: flex; align-items: center; justify-content: center;
+              gap: .4rem; text-align: center; padding: .5rem .5rem; border: 1px solid #8886;
+              border-radius: .5rem; font-size: .82rem; }
+  .flownode.amber { border-color: #d9822b88; background: #d9822b14; color: #d9822b; }
+  .flownode.dim { opacity: .45; }
+  .flownode svg { flex: none; width: 16px; height: 16px; }
+  .flownode .v { font-weight: 600; }
+  .flowarrow { align-self: center; opacity: .4; font-size: 1.1rem; flex: none; }
+  .minibox { flex: 1 1 14rem; background: #8881; border: 1px solid #8884; border-radius: .5rem;
+             padding: .6rem .7rem; }
+  .minibox h3 { font-size: .78rem; font-weight: 600; opacity: .75; margin: 0 0 .4rem;
+                text-transform: uppercase; letter-spacing: .02em; }
+  .minibox table td { padding: .18rem 0; border: 0; font-size: .82rem; }
+  .minibox table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .statusDots { font-size: .78rem; opacity: .8; margin: .8rem 0 0; }
+  .statusDots .dot { display: inline-flex; align-items: center; gap: .35rem; margin-right: 1rem; }
+  .statusDots .dot::before { content: ''; width: 7px; height: 7px; border-radius: 50%;
+                              background: #8886; }
+  .statusDots .dot.up::before { background: #16a34a; }
 </style>
 </head>
 <body>
-<h1>BLUETTI NUT Bridge</h1>
+<h1 id="pageTitle">BLUETTI NUT Bridge</h1>
 <nav>
   <button data-tab="status" class="active">Status</button>
   <button data-tab="bluetti">BLUETTI</button>
@@ -77,8 +121,41 @@
 <!-- ---------------- Status ---------------- -->
 <section id="status" class="active">
   <div class="box">
-    <h2>Status <span class="sub">refreshes every 3&nbsp;s</span></h2>
-    <table id="statusTable"><tr><td>loading…</td><td></td></tr></table>
+    <h2>Status <span class="sub">refreshes every 3&nbsp;s</span> <span class="hint" id="statModel"></span></h2>
+    <p class="hint" id="statusWaiting" hidden>Waiting for telemetry from the BLUETTI unit…</p>
+    <div id="statLive">
+      <div id="statBanner" class="banner ol">
+        <svg id="statIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>
+        <div>
+          <div id="statHeadline" class="head">—</div>
+          <div id="statSub" class="sub2"></div>
+        </div>
+        <span id="statPill" class="pill"></span>
+      </div>
+      <div class="battrow">
+        <div class="battbar"><div id="battFill" class="battfill"></div></div>
+        <div id="battPct" class="battpct">—</div>
+      </div>
+      <div class="flow">
+        <div id="flowSources" class="flowsources"></div>
+        <span class="flowarrow">&#8594;</span>
+        <div id="flowBatt" class="flownode"></div>
+        <span class="flowarrow">&#8594;</span>
+        <div id="flowLoad" class="flownode"></div>
+      </div>
+    </div>
+    <div class="pair">
+      <div class="minibox">
+        <h3>NUT</h3>
+        <table id="nutTable"></table>
+      </div>
+      <div class="minibox">
+        <h3>Network</h3>
+        <table id="netTable"></table>
+      </div>
+    </div>
+    <div class="statusDots" id="statusDots"></div>
   </div>
   <div class="box">
     <h2>Logs <span class="sub">device log tail, ~12&nbsp;KB</span></h2>
@@ -170,13 +247,22 @@
     </div>
 
     <div class="box">
-      <h2>Login <span class="sub">for upsmon</span></h2>
+      <h2>Credentials</h2>
       <p class="hint" id="nutAuthState"></p>
       <label for="nutUser">Username</label>
       <input id="nutUser" name="nut_user" autocomplete="off">
       <label for="nutPass">Password</label>
-      <input id="nutPass" name="nut_pass" type="password" autocomplete="new-password"
-             placeholder="unchanged">
+      <div style="display:flex; gap:6px; max-width:24rem">
+        <input id="nutPass" name="nut_pass" type="password" autocomplete="new-password"
+               placeholder="unchanged" style="max-width:none">
+        <button type="button" class="act" id="nutPassEye" aria-label="Show password"
+                style="padding:.35rem .5rem; flex:none">
+          <svg id="nutPassEyeIcon" width="18" height="18" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+               style="display:block"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/>
+          <circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
       <label class="chk" style="margin-top:.5rem"><input type="checkbox" id="nutNoAuth"
         name="nut_noauth" value="1" style="width:auto"> No login required</label>
       <p class="hint">These gate <code>LOGIN</code> and <code>PRIMARY</code> — the
@@ -185,7 +271,7 @@
         <code>upsc</code> has no way to send credentials.</p>
       <p class="hint">In <code>upsmon.conf</code>:<br>
         <code>MONITOR <span id="monName">bluetti</span>@<span id="monIp">&lt;ip&gt;</span> 1
-        <span id="monUser">upsmon</span> &lt;password&gt; slave</code></p>
+        <span id="monUser">upsmon</span> <span id="monPass">&lt;password&gt;</span> slave</code></p>
     </div>
 
     <p><button class="act primary" id="nutSave">Save &amp; reboot</button>
@@ -432,32 +518,107 @@ tabs.forEach(b => b.onclick = () => {
 
 /* ---- status ---- */
 let lastStatus = {};
-const STATUS_LABELS = {
-  wifi_mode: 'Wi-Fi mode', network: 'Network', hostname: 'Hostname',
-  addressing: 'Addressing', ip: 'IP address', gateway: 'Gateway', dns: 'DNS',
-  fw_version: 'Firmware', fw_date: 'Built', ups: 'UPS name',
-  nut_port: 'NUT port', ble_target: 'BLUETTI target',
-  ble_connected: 'BLE connected', telemetry_valid: 'Telemetry',
-  battery_pct: 'Battery %', ac_input: 'AC input', charging: 'Charging',
-  model: 'Model',
-};
+const NA = -100000;                 /* "not in the last decode", from the firmware */
+const w = (v) => (typeof v === 'number' && v > NA ? Math.round(v) : null);
+const SUN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/>' +
+  '<path d="M12 3v2M12 19v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2 12h2M20 12h2M4.6 19.4l1.4-1.4M18 6l1.4-1.4"/></svg>';
+const PLUG_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6M15 2v6M6 10h12v3a6 6 0 0 1-12 0v-3Z"/>' +
+  '<path d="M12 19v3"/></svg>';
+const BOLT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>';
+function flowNode(icon, label, valueText, cls) {
+  return `<div class="flownode${cls ? ' ' + cls : ''}">${icon}` +
+         `<span>${label}${valueText ? ` <span class="v">${valueText}</span>` : ''}</span></div>`;
+}
+function fmtRuntime(sec) {
+  if (sec == null || sec < 0) return null;
+  const m = Math.round(sec / 60);
+  if (m < 60) return m + ' min';
+  return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+}
+function renderStatus(j) {
+  const valid = !!j.telemetry_valid;
+  $('#statusWaiting').hidden = valid;
+  $('#statLive').hidden = !valid;
+  $('#netTable').innerHTML = [
+    ['IP address', j.ip || '—'],
+    ['Hostname', j.hostname || '—'],
+    ['Wi-Fi', (j.wifi_mode || '—') + ' · ' + (j.network || '—')],
+    ['Addressing', j.addressing || '—'],
+    ['Gateway', j.gateway || '—'],
+    ['Firmware', (j.fw_version || '?') + (j.fw_date ? ' (' + j.fw_date + ')' : '')],
+  ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  $('#statusDots').innerHTML =
+    `<span class="dot${j.ble_connected ? ' up' : ''}">BLE ${j.ble_connected ? 'linked' : 'down'}</span>` +
+    `<span class="dot up">NUT :${j.nut_port || 3493}</span>`;
+  if (!valid) {
+    $('#nutTable').innerHTML = '<tr><td colspan="2">Waiting for the link…</td></tr>';
+    return;
+  }
+
+  const onBattery = !j.ac_input;
+  const pct = Math.max(0, Math.min(100, j.battery_pct || 0));
+  const solarW = w(j.dc_in_watts);
+  const mainsW = w(j.ac_in_watts);
+  const loadW  = w(j.output_watts);
+  const battW  = w(j.battery_watts);          /* >0 discharging, <0 charging */
+  const hasSolar = solarW !== null && solarW > 0;
+
+  $('#statBanner').className = 'banner ' + (onBattery ? 'ob' : 'ol');
+  $('#statHeadline').textContent = onBattery ? 'On battery' : 'On line';
+  const bits = [];
+  if (hasSolar) bits.push('solar ' + solarW + ' W in');
+  if (!onBattery) bits.push('mains ' + (mainsW ?? 0) + ' W in');
+  if (loadW !== null) bits.push('load ' + loadW + ' W');
+  if (battW !== null) {
+    bits.push(battW <= 0 ? 'battery gaining ' + Math.abs(battW) + ' W'
+                          : 'battery draining ' + battW + ' W');
+  }
+  const runtime = fmtRuntime(j.battery_runtime_s ?? j.minutes_remaining * 60);
+  if (onBattery && runtime) bits.push(runtime + ' left');
+  $('#statSub').textContent = bits.join(' · ');
+  $('#statPill').textContent = j.ups_status || (onBattery ? 'OB' : 'OL');
+
+  $('#battFill').style.width = pct + '%';
+  $('#battFill').classList.toggle('low', pct > 0 && pct <= (j.low_pct || 20));
+  $('#battPct').innerHTML = pct + '<span class="u">%</span>';
+
+  let sources = '';
+  if (hasSolar) sources += flowNode(SUN_SVG, 'Solar', solarW + ' W', 'amber');
+  sources += onBattery ? flowNode(PLUG_SVG, 'Mains off', '', 'dim')
+                        : flowNode(PLUG_SVG, 'Mains', (mainsW ?? 0) + ' W', '');
+  $('#flowSources').innerHTML = sources;
+  $('#flowBatt').innerHTML = flowNode(BOLT_SVG, 'Battery',
+    battW !== null ? (battW <= 0 ? '+' : '−') + Math.abs(battW) + ' W' : '',
+    onBattery ? 'amber' : '');
+  $('#flowLoad').innerHTML = flowNode(BOLT_SVG, 'Load', loadW !== null ? loadW + ' W' : '', '');
+
+  $('#nutTable').innerHTML = [
+    ['ups.status', j.ups_status || '—'],
+    ['battery.charge', pct],
+    ['battery.runtime', runtime || '—'],
+    ['ups.realpower', loadW !== null ? loadW : '—'],
+    ['input.realpower', w(j.input_watts) ?? '—'],
+    ['input.realpower.ac', mainsW ?? 0],
+  ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+}
 async function refreshStatus() {
   try {
     const res = await fetch('/api/status');
     if (bounceIfSignedOut(res)) return;
     const j = await res.json();
     lastStatus = j;
-    const rows = Object.entries(j)
-      .filter(([k]) => k in STATUS_LABELS)
-      .map(([k, v]) => `<tr><td>${STATUS_LABELS[k]}</td><td>${String(v) || '—'}</td></tr>`)
-      .join('');
-    $('#statusTable').innerHTML = rows;
+    $('#statModel').textContent = j.model ? '· BLUETTI ' + j.model : '';
+    renderStatus(j);
     $('#setupWarn').hidden = !!j.configured;
     /* Name the tab after the device, so several bridges are told apart in
        a row of tabs. Falls back to the static title before the first poll
        lands, or if the hostname is somehow empty. */
     if (j.hostname) {
       document.title = j.hostname;
+      $('#pageTitle').textContent = j.hostname;
     }
     $('#upscIp').textContent = j.ip || '<ip>';
     $('#monIp').textContent = j.ip || '<ip>';
@@ -531,8 +692,12 @@ async function loadConfig() {
     $('#nutPass').placeholder = cfg.nut_auth_set ? 'unchanged' : 'none set';
     $('#nutNoAuth').checked = !cfg.nut_auth_set;
     $('#nutAuthState').textContent = cfg.nut_auth_set
-      ? 'A login is required for LOGIN / PRIMARY.'
-      : 'No login set — any client may LOGIN.';
+      ? 'A password is required for LOGIN / PRIMARY.'
+      : 'No password set — any client may LOGIN.';
+    /* The device ships with "bluetti<XXXX>" (last 4 of the MAC). Only a
+       hash is stored, so this is just the initial value for the example. */
+    const mac4 = (cfg.default_ap_ssid || cfg.hostname || '').slice(-4);
+    $('#monPass').textContent = mac4 ? 'bluetti' + mac4 : '<password>';
     syncNutAuth();
     $('#cfgLow').value = cfg.low_pct || 20;
     $('#cfgProbe').checked = !!cfg.ble_probe;
@@ -905,8 +1070,17 @@ function syncNutAuth() {
   const off = $('#nutNoAuth').checked;
   $('#nutUser').disabled = off;
   $('#nutPass').disabled = off;
+  $('#nutPassEye').disabled = off;
 }
 $('#nutNoAuth').onchange = syncNutAuth;
+$('#nutPassEye').onclick = () => {
+  const i = $('#nutPass'), show = i.type === 'password';
+  i.type = show ? 'text' : 'password';
+  $('#nutPassEye').setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+  $('#nutPassEyeIcon').innerHTML = show
+    ? '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/><line x1="3" y1="3" x2="21" y2="21"/>'
+    : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>';
+};
 $('#cfgUps').oninput = () => { $('#monName').textContent = $('#cfgUps').value || 'bluetti'; };
 $('#nutUser').oninput = () => { $('#monUser').textContent = $('#nutUser').value || 'upsmon'; };
 

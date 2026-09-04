@@ -170,7 +170,9 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
         if (low_charge || low_runtime) {
             strlcat(status, " LB", sizeof(status));
         }
-        strlcat(status, " DISCHRG", sizeof(status));
+        /* Off mains but a solar/DC source is still charging the pack: say
+         * so rather than DISCHRG, matching the derived battery flow. */
+        strlcat(status, st->charging ? " CHRG" : " DISCHRG", sizeof(status));
     }
     nut_server_set_status(status);
 

@@ -251,11 +251,21 @@ static void recompute(bluetti_state_t *st)
      * line voltage (a plugged-in but idle unit reads 0 W but shows volts). */
     st->ac_input_present = (st->ac_in_watts  > 0.0f) ||
                            (st->ac_in_volts  > 0.0f);
-    st->charging = st->ac_input_present && st->soc_pct >= 0 && st->soc_pct < 100;
 
     if (st->input_watts >= 0.0f && st->output_watts >= 0.0f) {
-        /* NUT-layer sign convention: >0 = discharging. */
+        /* NUT-layer sign convention: >0 = discharging, <0 = charging. */
         st->battery_watts = st->output_watts - st->input_watts;
+    }
+
+    /* Charging = the pack is gaining energy, from any source. Prefer the
+     * net figure (input beats load); fall back to "some input present"
+     * when we can't compute one. Solar/DC counts, not just mains. */
+    bool any_input = st->ac_input_present || (st->dc_in_watts > 0.0f);
+    bool room_to_charge = st->soc_pct >= 0 && st->soc_pct < 100;
+    if (st->input_watts >= 0.0f && st->output_watts >= 0.0f) {
+        st->charging = st->battery_watts < 0.0f && room_to_charge;
+    } else {
+        st->charging = any_input && room_to_charge;
     }
 }
 

@@ -40,6 +40,26 @@ static void ring_write(const char *data, size_t len)
     portEXIT_CRITICAL(&r.mux);
 }
 
+/* Drop ANSI CSI sequences (ESC '[' ... final byte 0x40-0x7E) in place.
+ * The serial console keeps its colour (CONFIG_LOG_COLORS); the web tail
+ * renders in a <pre>, where the raw escapes would show as "[0;32m" litter
+ * around every line. Returns the new length. */
+static size_t strip_ansi(char *s, size_t len)
+{
+    size_t w = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] == '\033' && i + 1 < len && s[i + 1] == '[') {
+            i += 2;
+            while (i < len && (s[i] < 0x40 || s[i] > 0x7E)) {
+                i++;
+            }
+            continue;   /* also drops the final byte */
+        }
+        s[w++] = s[i];
+    }
+    return w;
+}
+
 static int ring_vprintf(const char *fmt, va_list ap)
 {
     char line[256];
@@ -48,7 +68,8 @@ static int ring_vprintf(const char *fmt, va_list ap)
     int n = vsnprintf(line, sizeof(line), fmt, ap2);
     va_end(ap2);
     if (n > 0) {
-        ring_write(line, (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1);
+        size_t len = (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1;
+        ring_write(line, strip_ansi(line, len));
     }
     return r.prev ? r.prev(fmt, ap) : vprintf(fmt, ap);
 }

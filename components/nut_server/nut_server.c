@@ -127,6 +127,25 @@ void nut_server_clear_var(const char *name)
     xSemaphoreGive(s.lock);
 }
 
+bool nut_server_get_var(const char *name, char *out, size_t len)
+{
+    if (!name || !out || len == 0 || !s.lock) {
+        return false;
+    }
+    bool found = false;
+    xSemaphoreTake(s.lock, portMAX_DELAY);
+    const nut_var_t *v = var_find_locked(name);
+    if (v) {
+        strlcpy(out, v->value, len);
+        found = true;
+    }
+    xSemaphoreGive(s.lock);
+    if (!found) {
+        out[0] = '\0';
+    }
+    return found;
+}
+
 void nut_server_set_auth(nut_auth_cb_t verify, void *ctx)
 {
     s.auth_cb = verify;

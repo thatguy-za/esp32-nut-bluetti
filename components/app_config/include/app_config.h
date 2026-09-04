@@ -85,6 +85,10 @@ typedef struct {
  * Reads the MAC from eFuse, so it is valid before Wi-Fi starts. */
 void app_config_default_name(char *buf, size_t len);
 
+/* This board's out-of-the-box NUT password, "bluetti<XXXX>" (XXXX = last
+ * two MAC bytes). Only the initial value — the stored one is a hash. */
+void app_config_default_nut_password(char *buf, size_t len);
+
 /* Populate cfg from Kconfig defaults (no NVS access). */
 void app_config_defaults(app_config_t *cfg);
 

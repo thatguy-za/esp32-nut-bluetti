@@ -46,6 +46,13 @@ void app_config_default_name(char *buf, size_t len)
     snprintf(buf, len, "esp-nut-bluetti-%02X%02X", mac[4], mac[5]);
 }
 
+void app_config_default_nut_password(char *buf, size_t len)
+{
+    uint8_t mac[6] = { 0 };
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(buf, len, "bluetti%02X%02X", mac[4], mac[5]);
+}
+
 void app_config_defaults(app_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
@@ -65,7 +72,14 @@ void app_config_defaults(app_config_t *cfg)
     cfg->tg_on_low_batt = true;
     cfg->tg_on_link = false;
     strlcpy(cfg->nut_user, "upsmon", sizeof(cfg->nut_user));
-    cfg->nut_auth_set = false;       /* LOGIN open until set */
+    /* A fresh device ships with a per-unit NUT password, "bluetti<XXXX>"
+     * (XXXX = last two MAC bytes), so LOGIN is not wide open out of the
+     * box. The UI shows it; the user can change or clear it. */
+    {
+        char pw[24];
+        app_config_default_nut_password(pw, sizeof(pw));
+        app_config_set_nut_password(cfg, pw);
+    }
     strlcpy(cfg->auth_user, "admin", sizeof(cfg->auth_user));
     cfg->auth_set = false;           /* setup must choose a password */
     cfg->provisioned = false;

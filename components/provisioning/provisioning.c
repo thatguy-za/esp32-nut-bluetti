@@ -30,6 +30,7 @@
 
 #include "wifi_mgr.h"
 #include "bluetti_ble.h"
+#include "nut_server.h"
 #include "notify.h"
 
 static const char *TAG = "provisioning";
@@ -798,7 +799,28 @@ static esp_err_t h_admin_status(httpd_req_t *r)
 #else
     const bool ota = false;
 #endif
-    char out[860];
+    /* Power-flow figures in whole watts. -100000 = "not in the last
+     * decode", so the status page can hide that leg. */
+#define WROUND(f) ((int)((f) + ((f) < 0.0f ? -0.5f : 0.5f)))
+#define WFIG(f)   (have && (f) > BLUETTI_UNKNOWN_F ? WROUND(f) : -100000)
+    int w_out  = WFIG(st.output_watts);
+    int w_in   = WFIG(st.input_watts);
+    int w_acin = WFIG(st.ac_in_watts);
+    int w_dcin = WFIG(st.dc_in_watts);
+    int w_batt = WFIG(st.battery_watts);
+#undef WFIG
+#undef WROUND
+    int mins = have && st.minutes_remaining >= 0 ? st.minutes_remaining : -1;
+
+    /* The composed NUT status string and runtime, straight from the NUT
+     * layer, so the page can never disagree with what upsmon sees. */
+    char ups_status[24] = "";
+    nut_server_get_var("ups.status", ups_status, sizeof(ups_status));
+    char runtime[16] = "";
+    int rt_s = nut_server_get_var("battery.runtime", runtime, sizeof(runtime))
+                   ? atoi(runtime) : -1;
+
+    char out[1100];
     snprintf(out, sizeof(out),
              "{\"wifi_mode\":\"%s\",\"network\":\"%s\",\"ip\":\"%s\","
              "\"addressing\":\"%s\",\"gateway\":\"%s\",\"dns\":\"%s\","
@@ -808,6 +830,10 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              "\"ble_target\":\"%s\",\"ble_connected\":%s,"
              "\"telemetry_valid\":%s,\"battery_pct\":%d,"
              "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\","
+             "\"ups_status\":\"%s\",\"battery_runtime_s\":%d,"
+             "\"minutes_remaining\":%d,"
+             "\"output_watts\":%d,\"input_watts\":%d,"
+             "\"ac_in_watts\":%d,\"dc_in_watts\":%d,\"battery_watts\":%d,"
              "\"led\":%s,\"led_gpio\":%d,\"configured\":%s}",
              ap ? "ap" : "station",
              ap ? P.cfg->ap_ssid : P.cfg->wifi_ssid, ip,
@@ -822,6 +848,8 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              have && st.ac_input_present ? "true" : "false",
              have && st.charging ? "true" : "false",
              have && st.model[0] ? st.model : "",
+             ups_status, rt_s, mins,
+             w_out, w_in, w_acin, w_dcin, w_batt,
              led_status_enabled() ? "true" : "false",
              led_status_gpio(),
              P.cfg->ble_addr[0] ? "true" : "false");
