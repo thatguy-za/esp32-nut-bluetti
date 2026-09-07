@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27 fill=%27none%27 stroke=%27%2316a34a%27 stroke-width=%272%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27%3E%3Crect x=%272%27 y=%277%27 width=%2716%27 height=%2710%27 rx=%272%27/%3E%3Cline x1=%2721%27 y1=%2710%27 x2=%2721%27 y2=%2714%27/%3E%3Crect x=%274.5%27 y=%279.5%27 width=%277%27 height=%275%27 rx=%271%27 fill=%27%2316a34a%27 stroke=%27none%27/%3E%3C/svg%3E">
 <title>Bluetti NUT Bridge</title>
 <style>
   :root { color-scheme: light dark; }
@@ -580,7 +581,9 @@ function renderStatus(j) {
   $('#statPill').textContent = j.ups_status || (onBattery ? 'OB' : 'OL');
 
   $('#battFill').style.width = pct + '%';
-  $('#battFill').classList.toggle('low', pct > 0 && pct <= (j.low_pct || 20));
+  /* Red only at/below the NUT "Low battery %" — the same point NUT raises LB. */
+  const lowPct = j.low_pct || 20;
+  $('#battFill').classList.toggle('low', pct > 0 && pct <= lowPct);
   $('#battPct').innerHTML = pct + '<span class="u">%</span>';
 
   const lo = j.soc_min, hi = j.soc_max;

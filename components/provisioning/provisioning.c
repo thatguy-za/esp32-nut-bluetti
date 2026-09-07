@@ -824,7 +824,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
     int rt_s = nut_server_get_var("battery.runtime", runtime, sizeof(runtime))
                    ? atoi(runtime) : -1;
 
-    char out[1260];
+    char out[1300];
     snprintf(out, sizeof(out),
              "{\"wifi_mode\":\"%s\",\"network\":\"%s\",\"ip\":\"%s\","
              "\"addressing\":\"%s\",\"gateway\":\"%s\",\"dns\":\"%s\","
@@ -832,7 +832,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              "\"fw_version\":\"%s\",\"fw_date\":\"%s %s\",\"ota\":%s,"
              "\"ups\":\"%s\",\"nut_port\":%u,"
              "\"ble_target\":\"%s\",\"ble_connected\":%s,"
-             "\"telemetry_valid\":%s,\"battery_pct\":%d,"
+             "\"telemetry_valid\":%s,\"battery_pct\":%d,\"low_pct\":%u,"
              "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\",\"log_level\":%d,"
              "\"ups_status\":\"%s\",\"battery_runtime_s\":%d,"
              "\"minutes_remaining\":%d,"
@@ -850,6 +850,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              bluetti_ble_connected() ? "true" : "false",
              have && st.valid ? "true" : "false",
              have ? st.soc_pct : 0,
+             P.cfg->low_pct,
              have && st.ac_input_present ? "true" : "false",
              have && st.charging ? "true" : "false",
              have && st.model[0] ? st.model : "",
