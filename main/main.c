@@ -291,7 +291,7 @@ static void start_services(const app_config_t *cfg)
     } else {
         bluetti_ble_config_t ef_cfg = {
             .ble_address = cfg->ble_addr,
-            .probe = cfg->log_level >= APP_LOG_VERBOSE,
+            .probe = false,
             .controls = cfg->controls_enabled,
             .poll_interval_ms = cfg->poll_ms,
             .low_battery_pct = cfg->low_pct,
@@ -299,6 +299,7 @@ static void start_services(const app_config_t *cfg)
         if (bluetti_ble_start(&ef_cfg, bluetti_cb, NULL) != 0) {
             ESP_LOGE(TAG, "bluetti_ble_start failed");
         }
+        bluetti_ble_set_verbose(cfg->log_level >= APP_LOG_VERBOSE);
     }
 
     notify_config_t ncfg = {

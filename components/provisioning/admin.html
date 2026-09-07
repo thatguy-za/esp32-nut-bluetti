@@ -173,10 +173,11 @@
       <span class="hint" id="logInfo"></span>
     </div>
     <pre id="logView">…</pre>
-    <p class="hint"><b>Verbose</b> dumps the raw BLE traffic here instead of
-      decoding it — use it if a reading looks wrong or the link never comes up;
-      it applies on the next reconnect. <b>Off</b> silences the device log
-      entirely. Anyone on this network can read this — trusted LAN only.</p>
+    <p class="hint"><b>Verbose</b> keeps decoding but also hex-dumps every BLE
+      frame here — each register read and the value it returned — for tracking
+      down a wrong reading or a link that won't come up. <b>Off</b> silences
+      the device log entirely. Anyone on this network can read this — trusted
+      LAN only.</p>
   </div>
 </section>
 

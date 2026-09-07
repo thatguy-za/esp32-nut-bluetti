@@ -130,13 +130,11 @@ int bluetti_ble_write_control(const char *field, int value);
 void bluetti_ble_set_controls(bool on);
 
 /*
- * Debugging mode (was "probe mode"): after connecting, dump the GATT tree
- * and every notification to the log instead of handshaking and decoding.
- * Toggled live — the link is bounced to apply. Persisting is the caller's
- * job.
+ * Verbose logging ("Verbose" log level): keep decoding normally but
+ * hex-dump every handshake stage and every Modbus frame — including each
+ * register read and the value it returned — at INFO. Live; no reconnect.
  */
-void bluetti_ble_set_debug(bool on);
-bool bluetti_ble_debug(void);
+void bluetti_ble_set_verbose(bool on);
 
 /*
  * Write a JSON object describing the controls into `buf`:

@@ -904,26 +904,13 @@ void bluetti_ble_set_controls(bool on)
     ESP_LOGI(TAG, "device controls %s", on ? "on" : "off");
 }
 
-/* Debugging mode (formerly "probe mode"): after connecting, enumerate the
- * whole GATT tree and hex-dump every notification instead of running the
- * handshake and decoding. Toggled live — the connect/disconnect handlers
- * branch on b.cfg.probe, so bounce the link to apply it. */
-void bluetti_ble_set_debug(bool on)
+/* Verbose mode: keep decoding normally, but hex-dump every handshake
+ * stage and every Modbus frame (with the decoded register values) to the
+ * log. No reconnect needed — it only changes what gets logged. */
+void bluetti_ble_set_verbose(bool on)
 {
-    if (b.cfg.probe == on) {
-        return;
-    }
-    b.cfg.probe = on;
-    ESP_LOGW(TAG, "debugging mode %s — reconnecting to apply", on ? "on" : "off");
-    if (b.connected) {
-        ble_gap_terminate(b.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-        /* the DISCONNECT handler reconnects in MODE_CONNECT */
-    }
-}
-
-bool bluetti_ble_debug(void)
-{
-    return b.cfg.probe;
+    bt_session_set_trace(on);
+    ESP_LOGW(TAG, "verbose BLE logging %s", on ? "on" : "off");
 }
 
 int bluetti_ble_controls_json(char *buf, size_t len)

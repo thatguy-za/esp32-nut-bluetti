@@ -1033,10 +1033,9 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         if (form_get(body, "ble_addr", v, sizeof(v))) {
             strlcpy(P.pending.ble_addr, v, sizeof(P.pending.ble_addr));
         }
-        /* log_level (and the derived ble_probe) and controls_enabled are
-         * applied live via /api/loglevel and /api/controls, not here. */
+        /* log_level and controls_enabled are applied live via
+         * /api/loglevel and /api/controls, not through this form. */
         P.pending.log_level = P.cfg->log_level;
-        P.pending.ble_probe = P.cfg->ble_probe;
         P.pending.controls_enabled = P.cfg->controls_enabled;
         free(body);
 
@@ -1331,10 +1330,9 @@ static esp_err_t h_loglevel_set(httpd_req_t *r)
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "level 0..2");
     }
     P.cfg->log_level = (uint8_t)lvl;
-    P.cfg->ble_probe = (lvl >= APP_LOG_VERBOSE);
     app_config_save(P.cfg);
     esp_log_level_set("*", lvl == APP_LOG_OFF ? ESP_LOG_NONE : ESP_LOG_INFO);
-    bluetti_ble_set_debug(lvl >= APP_LOG_VERBOSE);
+    bluetti_ble_set_verbose(lvl >= APP_LOG_VERBOSE);
     ESP_LOGW(TAG, "log level -> %d", lvl);
     char out[24];
     snprintf(out, sizeof(out), "{\"log_level\":%d}", lvl);

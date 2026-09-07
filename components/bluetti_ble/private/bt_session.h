@@ -45,6 +45,10 @@ void          bt_session_free(bt_session_t *s);
 /* Drop all negotiated state; call on every (re)connect. */
 void bt_session_reset(bt_session_t *s);
 
+/* Hex-dump every handshake stage and Modbus frame at INFO. Global, not
+ * per-session. Prints key material — diagnostics only. */
+void bt_session_set_trace(bool on);
+
 bt_sess_state_t bt_session_state(const bt_session_t *s);
 bool            bt_session_ready(const bt_session_t *s);
 

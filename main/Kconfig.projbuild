@@ -62,15 +62,16 @@ menu "BLUETTI NUT Bridge"
         default 5000
 
     config BLUETTI_BLE_TRACE
-        bool "Trace the BLUETTI BLE handshake (verbose, logs derived keys)"
+        bool "Start with verbose BLE tracing on"
         default n
         help
-            Hex-dumps every stage of the BLE link at INFO level: the
-            challenge, the derived handshake IV and key, both public keys
-            and their signatures, the ECDH secure key, every frame sent and
-            received, and every decoded inner packet. Use it to bring the
-            link up on new hardware, then turn it back off — it prints key
-            material to the log.
+            Sets the boot default for the frame trace that the web UI's
+            "Verbose" log level also controls: hex-dumps every stage of the
+            BLE link at INFO — challenge, derived IV/key, both public keys
+            and signatures, the ECDH secure key, every frame in and out,
+            and every register read with its value. Prints key material, so
+            it is a diagnostics aid. Leave this off; flip Verbose in the UI
+            when you need it.
 
     config NUT_UPS_NAME
         string "NUT UPS name"

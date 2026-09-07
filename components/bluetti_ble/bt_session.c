@@ -9,22 +9,31 @@
 static const char *TAG = "bt_session";
 
 /*
- * Handshake trace (Kconfig: BLUETTI_BLE_TRACE). Off by default. When on,
- * every handshake stage and every frame in/out is hex-dumped at INFO —
- * challenge, derived IV/keys, both public keys, the shared secret, the
- * wrapped replies, and each decoded inner packet. It prints key
- * material, so it is only for bringing the link up on new hardware.
+ * Frame trace. Runtime-toggleable via bt_session_set_trace() (the web UI's
+ * "Verbose" log level turns it on); CONFIG_BLUETTI_BLE_TRACE just sets the
+ * boot default. When on, every handshake stage and every Modbus frame in
+ * and out is hex-dumped at INFO — challenge, derived IV/keys, both public
+ * keys, the shared secret, the wrapped replies, each decoded packet, and
+ * every register read with its response. It prints key material, so it is
+ * a bring-up / diagnostics aid, not something to leave on.
  */
-#if CONFIG_BLUETTI_BLE_TRACE
-#define TRACE(label, buf, len) do {                                       \
-        ESP_LOGI(TAG, "trace: %s (%u B)", (label), (unsigned)(len));      \
-        ESP_LOG_BUFFER_HEXDUMP(TAG, (buf), (len), ESP_LOG_INFO);          \
-    } while (0)
-#define TRACE_MSG(...) ESP_LOGI(TAG, "trace: " __VA_ARGS__)
+#ifdef CONFIG_BLUETTI_BLE_TRACE
+static bool s_trace = true;
 #else
-#define TRACE(label, buf, len) do { (void)(label); (void)(buf); (void)(len); } while (0)
-#define TRACE_MSG(...) do { } while (0)
+static bool s_trace = false;
 #endif
+
+void bt_session_set_trace(bool on) { s_trace = on; }
+
+#define TRACE(label, buf, len) do {                                        \
+        if (s_trace) {                                                     \
+            ESP_LOGI(TAG, "trace: %s (%u B)", (label), (unsigned)(len));   \
+            ESP_LOG_BUFFER_HEXDUMP(TAG, (buf), (len), ESP_LOG_INFO);       \
+        }                                                                  \
+    } while (0)
+#define TRACE_MSG(...) do {                                                \
+        if (s_trace) ESP_LOGI(TAG, "trace: " __VA_ARGS__);                 \
+    } while (0)
 
 /* The static AES key the handshake starts from, from the vendor app. */
 static const uint8_t LOCAL_AES_KEY[16] = {
@@ -442,6 +451,12 @@ static void handle_modbus(bt_session_t *s, const uint8_t *f, size_t len)
     }
     if (!modbus_crc_ok(f, 3 + count)) {
         return;
+    }
+    if (s_trace) {
+        /* First register of the response, as the common single-reg case. */
+        int v0 = count >= 2 ? ((int)f[3] << 8 | f[4]) : -1;
+        TRACE_MSG("reg %u = %d (%u byte%s)", s->pending_addr, v0,
+                  (unsigned)count, count == 1 ? "" : "s");
     }
     if (s->on_regs) {
         s->on_regs(s->pending_addr, f + 3, count, s->user);
