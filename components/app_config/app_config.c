@@ -88,7 +88,7 @@ void app_config_defaults(app_config_t *cfg)
     cfg->led_gpio    = CONFIG_STATUS_LED_GPIO;
     cfg->controls_enabled = false;
     cfg->battery_wh = 0;
-    cfg->log_level = APP_LOG_BASIC;
+    cfg->log_level = APP_LOG_OFF;   /* quiet out of the box */
     cfg->ble_probe = false;   /* kept in sync with (log_level >= 2) */
 
     /* A blank SSID from Kconfig means "must provision". */
@@ -137,8 +137,9 @@ esp_err_t app_config_load(app_config_t *cfg)
     }
     *cfg = blob.cfg;
     if (blob.version < 6u) {
-        /* Pre-v6 had only the ble_probe bool; map it onto the new level. */
-        cfg->log_level = cfg->ble_probe ? APP_LOG_VERBOSE : APP_LOG_BASIC;
+        /* Pre-v6 had only the ble_probe bool; map it onto the new level.
+         * A device that wasn't in probe mode comes up quiet (the default). */
+        cfg->log_level = cfg->ble_probe ? APP_LOG_VERBOSE : APP_LOG_OFF;
     }
     cfg->ble_probe = (cfg->log_level >= APP_LOG_VERBOSE);
     ESP_LOGI(TAG, "loaded config: ssid='%s' ble='%s' ups='%s' provisioned=%d",

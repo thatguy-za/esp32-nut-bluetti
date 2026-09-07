@@ -29,8 +29,9 @@
         overflow: auto; max-height: 50vh; font: 12px/1.45 ui-monospace, monospace;
         white-space: pre-wrap; word-break: break-word; margin: 0; }
   .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .5rem 0; }
-  button.act { padding: .45rem .8rem; font: inherit; border-radius: .35rem;
-               border: 1px solid #8886; background: #8882; color: inherit; cursor: pointer; }
+  .act { padding: .45rem .8rem; font: inherit; border-radius: .35rem;
+         border: 1px solid #8886; background: #8882; color: inherit; cursor: pointer; }
+  select.act { padding-right: .5rem; }
   button.act:disabled { opacity: .5; cursor: progress; }
   button.danger { border-color: #c00; background: #c00; color: #fff; }
   button.primary { border-color: #2563eb; background: #2563eb; color: #fff; }
@@ -161,7 +162,7 @@
     <h2>Logs <span class="sub">device log tail, ~12&nbsp;KB</span></h2>
     <div class="row">
       <label class="chk" for="logLevel">Level</label>
-      <select id="logLevel" style="width:auto">
+      <select id="logLevel" class="act" style="width:auto">
         <option value="0">Off</option>
         <option value="1">Basic</option>
         <option value="2">Verbose</option>
@@ -398,7 +399,7 @@
       installs the one you pick.</p>
     <div class="row">
       <button type="button" class="act" id="ghCheck">Check for updates</button>
-      <select id="ghSel" style="max-width:14rem" hidden></select>
+      <select id="ghSel" class="act" style="max-width:14rem" hidden></select>
       <button type="button" class="act primary" id="ghGo" hidden>Install</button>
     </div>
     <progress id="ghProg" value="0" max="100" style="width:100%;display:none"></progress>
