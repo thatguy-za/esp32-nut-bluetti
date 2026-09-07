@@ -233,9 +233,11 @@
              style="width:8rem">
       <label for="cfgBattWh">Battery capacity (Wh)</label>
       <p class="hint" style="margin:.15rem 0 .3rem">Sets
-        <code>battery.capacity</code>, and lets the bridge estimate
-        <code>battery.runtime</code> on units that don't report one. 0 to
-        leave it off. ~1000&nbsp;Wh on an Elite&nbsp;10.</p>
+        <code>battery.capacity</code> and lets the bridge publish an estimated
+        <code>battery.runtime</code> — capacity &times; charge &divide; load
+        (the measured output, or the AC rating above if the unit doesn't
+        report output power). Shown on mains too. 0 to leave it off.
+        ~1000&nbsp;Wh on an Elite&nbsp;10.</p>
       <input id="cfgBattWh" name="battery_wh" type="number" min="0" max="65535"
              style="width:8rem">
       <label for="cfgRtLow">Low runtime (s)</label>
@@ -566,7 +568,7 @@ function renderStatus(j) {
                           : 'battery draining ' + battW + ' W');
   }
   const runtime = fmtRuntime(j.battery_runtime_s ?? j.minutes_remaining * 60);
-  if (onBattery && runtime) bits.push(runtime + ' left');
+  if (runtime) bits.push(onBattery ? runtime + ' left' : '~' + runtime + ' on battery');
   $('#statSub').textContent = bits.join(' · ');
   $('#statPill').textContent = j.ups_status || (onBattery ? 'OB' : 'OL');
 

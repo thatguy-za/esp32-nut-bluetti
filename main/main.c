@@ -87,20 +87,35 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
     }
     nut_server_set_var_int("battery.charge.low", st->soc_low_pct);
 
-    /* battery.runtime, seconds until empty. Prefer the unit's own estimate;
-     * otherwise derive it from the configured capacity and the current net
-     * battery draw. Only meaningful while discharging. */
-    if (st->ac_input_present) {
-        nut_server_clear_var("battery.runtime");
-    } else if (st->minutes_remaining >= 0) {
-        nut_server_set_var_int("battery.runtime", st->minutes_remaining * 60);
-    } else if (s_cfg.battery_wh > 0 && st->soc_pct > 0 &&
-               st->battery_watts > 1.0f) {
-        float wh_left = (float)s_cfg.battery_wh * (float)st->soc_pct / 100.0f;
-        int secs = (int)(wh_left / st->battery_watts * 3600.0f);
-        nut_server_set_var_int("battery.runtime", secs);
-    } else {
-        nut_server_clear_var("battery.runtime");
+    /*
+     * battery.runtime, seconds the battery would last at the current load.
+     * Use the unit's own estimate when it is discharging and reports one;
+     * otherwise derive it from the configured capacity, charge and output
+     * power. Published on mains too — it is then "what you'd get if the
+     * supply dropped now", which is exactly what upsmon wants to plan for.
+     */
+    {
+        int rt = -1;
+        if (!st->ac_input_present && st->minutes_remaining >= 0) {
+            rt = st->minutes_remaining * 60;
+        } else if (s_cfg.battery_wh > 0 && st->soc_pct > 0) {
+            /* Load: the measured output if the unit reports it, else the
+             * configured AC rating as a conservative full-load figure. */
+            float load_w = st->output_watts >= 1.0f
+                               ? st->output_watts
+                               : (float)s_cfg.ac_rating_w;
+            if (load_w >= 1.0f) {
+                float wh_left =
+                    (float)s_cfg.battery_wh * (float)st->soc_pct / 100.0f;
+                float secs = wh_left / load_w * 3600.0f;
+                rt = secs > 4000000.0f ? 4000000 : (int)secs;  /* cap ~46 d */
+            }
+        }
+        if (rt >= 0) {
+            nut_server_set_var_int("battery.runtime", rt);
+        } else {
+            nut_server_clear_var("battery.runtime");
+        }
     }
     if (st->battery_temp_c > -100.0f) {
         nut_server_set_var_float("battery.temperature", st->battery_temp_c, 1);
