@@ -81,6 +81,15 @@ int main(void)
         "EL100V2 has the SOC min/max controls");
     OKF(!(EL10->controls & BT_C_SOC_MIN) && !(EL10->controls & BT_C_SOC_MAX),
         "EL10 has no SOC range (regs 2022/2023 read 0 on hardware)");
+    OKF(EL10->wh == 1024 && GEN->wh == 0,
+        "EL10 carries its spec capacity; an unknown unit does not");
+    {
+        bluetti_state_t s = fresh();
+        s.design_capacity_wh = 0;
+        one(EL10, &s, REG_BATTERY_SOC, 50);
+        OKF(s.design_capacity_wh == 1024,
+            "decode seeds design_capacity_wh from the model spec");
+    }
     OKF((AC70->controls & BT_C_ECO_AC) && (AC70->controls & BT_C_CHARGE_MODE) &&
         !(AC70->controls & BT_C_DISPLAY) && !(AC70->controls & BT_C_SOC_MAX),
         "AC70 has ECO + charging mode but not screen timeout or SOC");

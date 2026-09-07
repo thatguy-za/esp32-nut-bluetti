@@ -234,12 +234,11 @@
       <input id="cfgRating" name="ac_rating_w" type="number" min="1" max="65535"
              style="width:8rem">
       <label for="cfgBattWh">Battery capacity (Wh)</label>
-      <p class="hint" style="margin:.15rem 0 .3rem">Sets
-        <code>battery.capacity</code> and lets the bridge publish an estimated
-        <code>battery.runtime</code> — capacity &times; charge &divide; load
-        (the measured output, or the AC rating above if the unit doesn't
-        report output power). Shown on mains too. 0 to leave it off.
-        ~1000&nbsp;Wh on an Elite&nbsp;10.</p>
+      <p class="hint" style="margin:.15rem 0 .3rem">Feeds
+        <code>battery.capacity</code> and an estimated <code>battery.runtime</code>
+        (capacity &times; charge &divide; load, shown on mains too). Recognised
+        models use their spec value automatically — leave this at 0 unless
+        you want to override it or your model isn't known.</p>
       <input id="cfgBattWh" name="battery_wh" type="number" min="0" max="65535"
              style="width:8rem">
       <label for="cfgRtLow">Low runtime (s)</label>
@@ -569,7 +568,9 @@ function renderStatus(j) {
     bits.push(battW <= 0 ? 'battery gaining ' + Math.abs(battW) + ' W'
                           : 'battery draining ' + battW + ' W');
   }
-  const runtime = fmtRuntime(j.battery_runtime_s ?? j.minutes_remaining * 60);
+  const rtSec = j.battery_runtime_s >= 0 ? j.battery_runtime_s
+              : j.minutes_remaining >= 0 ? j.minutes_remaining * 60 : -1;
+  const runtime = fmtRuntime(rtSec);
   if (runtime) bits.push(onBattery ? runtime + ' left' : '~' + runtime + ' on battery');
   $('#statSub').textContent = bits.join(' · ');
   $('#statPill').textContent = j.ups_status || (onBattery ? 'OB' : 'OL');

@@ -95,18 +95,20 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
      * supply dropped now", which is exactly what upsmon wants to plan for.
      */
     {
+        /* Capacity: a user override wins, else the model's spec value. */
+        int cap_wh = s_cfg.battery_wh > 0 ? s_cfg.battery_wh
+                                          : st->design_capacity_wh;
         int rt = -1;
         if (!st->ac_input_present && st->minutes_remaining >= 0) {
             rt = st->minutes_remaining * 60;
-        } else if (s_cfg.battery_wh > 0 && st->soc_pct > 0) {
+        } else if (cap_wh > 0 && st->soc_pct > 0) {
             /* Load: the measured output if the unit reports it, else the
              * configured AC rating as a conservative full-load figure. */
             float load_w = st->output_watts >= 1.0f
                                ? st->output_watts
                                : (float)s_cfg.ac_rating_w;
             if (load_w >= 1.0f) {
-                float wh_left =
-                    (float)s_cfg.battery_wh * (float)st->soc_pct / 100.0f;
+                float wh_left = (float)cap_wh * (float)st->soc_pct / 100.0f;
                 float secs = wh_left / load_w * 3600.0f;
                 rt = secs > 4000000.0f ? 4000000 : (int)secs;  /* cap ~46 d */
             }

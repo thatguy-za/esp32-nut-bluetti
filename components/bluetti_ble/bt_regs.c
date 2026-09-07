@@ -6,7 +6,7 @@
 
 static const char *TAG = "bt_regs";
 
-const bt_device_t BT_DEVICE_GENERIC = { "unknown", false, 0 };
+const bt_device_t BT_DEVICE_GENERIC = { "unknown", false, 0, 0 };
 
 /* The output-switch pair every controllable model shares. */
 #define C_OUT   (BT_C_AC_OUT | BT_C_DC_OUT)
@@ -25,18 +25,22 @@ const bt_device_t BT_DEVICE_GENERIC = { "unknown", false, 0 };
  * SOC min/max (2022/2023): declared for the EL100V2 upstream. The EL10
  * has no such field in bluetti-bt-lib and returns 0 for both registers on
  * real hardware, so it does not get the capability.
+ *
+ * `wh` is the nominal battery capacity from the product spec, used only to
+ * estimate battery.runtime (no V2 model reports its capacity). Left 0
+ * where it is not known; the user can set it on the NUT tab.
  */
 static const bt_device_t DEVICES[] = {
-    { "EL100V2",     true,  C_FULL | BT_C_DISPLAY | BT_C_SOC_MIN | BT_C_SOC_MAX },
-    { "EL10",        true,  C_FULL | BT_C_DISPLAY },
-    { "AC70",        false, C_FULL },
-    { "AC180",       false, C_FULL },
-    { "EL30V2",      false, C_FULL },
-    { "AC180P",      false, C_OUT | BT_C_CHARGE_MODE | BT_C_POWER_LIFT },
-    { "AC2P",        false, C_OUT | BT_C_POWER_LIFT },
-    { "AC60",        false, C_OUT | BT_C_POWER_LIFT },
-    { "AC60P",       false, C_OUT | BT_C_POWER_LIFT },
-    { "Handsfree 2", false, C_OUT },
+    { "EL100V2",     true,  C_FULL | BT_C_DISPLAY | BT_C_SOC_MIN | BT_C_SOC_MAX, 1024 },
+    { "EL10",        true,  C_FULL | BT_C_DISPLAY,                               1024 },
+    { "AC70",        false, C_FULL,                                              768  },
+    { "AC180",       false, C_FULL,                                              1152 },
+    { "EL30V2",      false, C_FULL,                                              288  },
+    { "AC180P",      false, C_OUT | BT_C_CHARGE_MODE | BT_C_POWER_LIFT,          1440 },
+    { "AC2P",        false, C_OUT | BT_C_POWER_LIFT,                             0    },
+    { "AC60",        false, C_OUT | BT_C_POWER_LIFT,                             403  },
+    { "AC60P",       false, C_OUT | BT_C_POWER_LIFT,                             0    },
+    { "Handsfree 2", false, C_OUT,                                              960  },
 };
 
 const bt_device_t *bt_device_lookup(const char *name)
@@ -290,6 +294,13 @@ int bt_regs_apply(const bt_device_t *dev, uint16_t start_addr,
 
     if (!dev) {
         dev = &BT_DEVICE_GENERIC;
+    }
+
+    /* No V2 unit reports its pack capacity; seed it from the spec so the
+     * runtime estimate has something to work with. A user override in the
+     * config takes priority over this in the NUT layer. */
+    if (dev->wh > 0 && st->design_capacity_wh <= 0) {
+        st->design_capacity_wh = dev->wh;
     }
 
     if ((v = reg(start_addr, data, len, REG_BATTERY_SOC)) >= 0 && v <= 100) {

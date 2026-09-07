@@ -85,6 +85,9 @@ typedef struct {
     const char *name;      /* advertised name; digits follow */
     bool        full;
     uint16_t    controls;
+    uint16_t    wh;        /* nominal battery capacity, Wh; 0 = unknown.
+                              Used to estimate runtime when the unit has no
+                              capacity register (none of them do). */
 } bt_device_t;
 
 extern const bt_device_t BT_DEVICE_GENERIC;   /* unrecognised V2 unit */
