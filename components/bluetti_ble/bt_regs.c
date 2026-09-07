@@ -29,10 +29,14 @@ const bt_device_t BT_DEVICE_GENERIC = { "unknown", false, 0, 0 };
  * `wh` is the nominal battery capacity from the product spec, used only to
  * estimate battery.runtime (no V2 model reports its capacity). Left 0
  * where it is not known; the user can set it on the NUT tab.
+ *
+ * "EL10" is the Elite 10 Mini (128 Wh) — confirmed on hardware. If a
+ * larger unit also advertises as "EL10", override the capacity on the
+ * NUT tab.
  */
 static const bt_device_t DEVICES[] = {
     { "EL100V2",     true,  C_FULL | BT_C_DISPLAY | BT_C_SOC_MIN | BT_C_SOC_MAX, 1024 },
-    { "EL10",        true,  C_FULL | BT_C_DISPLAY,                               1024 },
+    { "EL10",        true,  C_FULL | BT_C_DISPLAY,                               128  },
     { "AC70",        false, C_FULL,                                              768  },
     { "AC180",       false, C_FULL,                                              1152 },
     { "EL30V2",      false, C_FULL,                                              288  },
