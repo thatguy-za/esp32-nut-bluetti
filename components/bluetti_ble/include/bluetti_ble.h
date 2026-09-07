@@ -130,6 +130,15 @@ int bluetti_ble_write_control(const char *field, int value);
 void bluetti_ble_set_controls(bool on);
 
 /*
+ * Debugging mode (was "probe mode"): after connecting, dump the GATT tree
+ * and every notification to the log instead of handshaking and decoding.
+ * Toggled live — the link is bounced to apply. Persisting is the caller's
+ * job.
+ */
+void bluetti_ble_set_debug(bool on);
+bool bluetti_ble_debug(void);
+
+/*
  * Write a JSON object describing the controls into `buf`:
  *   {"available":bool,          // EL10 family, connected, session ready
  *    "enabled":bool,            // the config toggle

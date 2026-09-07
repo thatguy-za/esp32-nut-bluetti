@@ -141,6 +141,9 @@ static void state_reset(void)
     b.state.display_time      = BLUETTI_UNKNOWN_I;
     b.state.soc_min           = BLUETTI_UNKNOWN_I;
     b.state.soc_max           = BLUETTI_UNKNOWN_I;
+    /* Not in the V2 register map — kept unknown so nothing bogus is
+     * published for it. */
+    b.state.battery_temp_c    = BLUETTI_UNKNOWN_F;
 }
 static void start_disc(bool report_all);
 static int  gap_event(struct ble_gap_event *event, void *arg);
@@ -276,7 +279,7 @@ static int on_probe_svc(uint16_t conn, const struct ble_gatt_error *err,
         ble_gattc_disc_all_chrs(conn, svc->start_handle, svc->end_handle,
                                 on_probe_chr, NULL);
     } else if (err->status == BLE_HS_EDONE) {
-        ESP_LOGW(TAG, "probe: GATT enumeration done. Watch for notifications "
+        ESP_LOGW(TAG, "debug: GATT enumeration done. Watch for notifications "
                       "below; nothing is decoded yet.");
     }
     return 0;
@@ -503,7 +506,7 @@ static int on_disc_notify_chr(uint16_t conn, const struct ble_gatt_error *err,
     if (err->status == BLE_HS_EDONE) {
         if (b.notify_cccd == 0 || b.write_handle == 0) {
             ESP_LOGE(TAG, "ff01/ff02 not found — is this a BLUETTI? "
-                          "Try probe mode.");
+                          "Try debugging mode.");
             ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
             return 0;
         }
@@ -635,7 +638,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             b.device = NULL;   /* re-identify on the next connect */
             ble_gattc_exchange_mtu(b.conn_handle, NULL, NULL);
             if (b.cfg.probe) {
-                ESP_LOGW(TAG, "probe mode: enumerating GATT, nothing decoded");
+                ESP_LOGW(TAG, "debugging mode: enumerating GATT, nothing decoded");
                 ble_gattc_disc_all_svcs(b.conn_handle, on_probe_svc, NULL);
             } else {
                 ESP_LOGI(TAG, "connected, discovering the BLUETTI service");
@@ -901,6 +904,28 @@ void bluetti_ble_set_controls(bool on)
     ESP_LOGI(TAG, "device controls %s", on ? "on" : "off");
 }
 
+/* Debugging mode (formerly "probe mode"): after connecting, enumerate the
+ * whole GATT tree and hex-dump every notification instead of running the
+ * handshake and decoding. Toggled live — the connect/disconnect handlers
+ * branch on b.cfg.probe, so bounce the link to apply it. */
+void bluetti_ble_set_debug(bool on)
+{
+    if (b.cfg.probe == on) {
+        return;
+    }
+    b.cfg.probe = on;
+    ESP_LOGW(TAG, "debugging mode %s — reconnecting to apply", on ? "on" : "off");
+    if (b.connected) {
+        ble_gap_terminate(b.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        /* the DISCONNECT handler reconnects in MODE_CONNECT */
+    }
+}
+
+bool bluetti_ble_debug(void)
+{
+    return b.cfg.probe;
+}
+
 int bluetti_ble_controls_json(char *buf, size_t len)
 {
     uint16_t mask = b.device ? b.device->controls : 0;
@@ -1005,7 +1030,7 @@ int bluetti_ble_start(const bluetti_ble_config_t *config,
     ESP_LOGI(TAG, "target address %s", config->ble_address);
 
     if (config->probe) {
-        ESP_LOGW(TAG, "PROBE MODE: GATT and notifications will be logged, "
+        ESP_LOGW(TAG, "DEBUGGING MODE: GATT and notifications will be logged, "
                       "nothing will be decoded");
     } else {
         ESP_LOGI(TAG, "polling one field per read, ~%u ms per sweep",

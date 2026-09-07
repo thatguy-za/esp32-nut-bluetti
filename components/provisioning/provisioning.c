@@ -654,6 +654,7 @@ static esp_err_t h_led_toggle(httpd_req_t *r);
 static esp_err_t h_controls_get(httpd_req_t *r);
 static esp_err_t h_controls_enable(httpd_req_t *r);
 static esp_err_t h_control_set(httpd_req_t *r);
+static esp_err_t h_debug_enable(httpd_req_t *r);
 static esp_err_t h_factory_reset(httpd_req_t *r);
 #if CONFIG_ENABLE_WEB_OTA
 static esp_err_t h_ota(httpd_req_t *r);
@@ -667,7 +668,7 @@ static esp_err_t start_httpd(bool captive)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 29;
+    c.max_uri_handlers = 30;
     c.stack_size = 8192;
     if (captive) {
         c.uri_match_fn = httpd_uri_match_wildcard;
@@ -713,6 +714,7 @@ static esp_err_t start_httpd(bool captive)
         reg(P.httpd, "/api/controls", HTTP_GET, h_controls_get);
         reg(P.httpd, "/api/controls", HTTP_POST, h_controls_enable);
         reg(P.httpd, "/api/control", HTTP_POST, h_control_set);
+        reg(P.httpd, "/api/debug", HTTP_POST, h_debug_enable);
         reg(P.httpd, "/api/factory-reset", HTTP_POST, h_factory_reset);
 #if CONFIG_ENABLE_WEB_OTA
         reg(P.httpd, "/api/ota", HTTP_POST, h_ota);
@@ -820,7 +822,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
     int rt_s = nut_server_get_var("battery.runtime", runtime, sizeof(runtime))
                    ? atoi(runtime) : -1;
 
-    char out[1100];
+    char out[1160];
     snprintf(out, sizeof(out),
              "{\"wifi_mode\":\"%s\",\"network\":\"%s\",\"ip\":\"%s\","
              "\"addressing\":\"%s\",\"gateway\":\"%s\",\"dns\":\"%s\","
@@ -829,7 +831,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              "\"ups\":\"%s\",\"nut_port\":%u,"
              "\"ble_target\":\"%s\",\"ble_connected\":%s,"
              "\"telemetry_valid\":%s,\"battery_pct\":%d,"
-             "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\","
+             "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\",\"debug\":%s,"
              "\"ups_status\":\"%s\",\"battery_runtime_s\":%d,"
              "\"minutes_remaining\":%d,"
              "\"output_watts\":%d,\"input_watts\":%d,"
@@ -848,6 +850,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              have && st.ac_input_present ? "true" : "false",
              have && st.charging ? "true" : "false",
              have && st.model[0] ? st.model : "",
+             bluetti_ble_debug() ? "true" : "false",
              ups_status, rt_s, mins,
              w_out, w_in, w_acin, w_dcin, w_batt,
              led_status_enabled() ? "true" : "false",
@@ -904,7 +907,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
     wifi_mgr_default_ap_ssid(def_ap, sizeof(def_ap));
     char out[1040];  /* ssid + ap_ssid + users + addressing + telegram */
     snprintf(out, sizeof(out),
-             "{\"ble_addr\":\"%s\",\"ble_probe\":%s,\"controls_enabled\":%s,"
+             "{\"ble_addr\":\"%s\",\"debug\":%s,\"controls_enabled\":%s,"
              "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
              "\"nut_user\":\"%s\",\"nut_auth_set\":%s,"
              "\"ac_rating_w\":%u,\"runtime_low_s\":%u,"
@@ -1027,9 +1030,9 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         if (form_get(body, "ble_addr", v, sizeof(v))) {
             strlcpy(P.pending.ble_addr, v, sizeof(P.pending.ble_addr));
         }
-        P.pending.ble_probe =
-            form_get(body, "ble_probe", v, sizeof(v)) && v[0] == '1';
-        /* controls_enabled is applied live via POST /api/controls, not here. */
+        /* debug (was ble_probe) and controls_enabled are applied live via
+         * POST /api/debug and /api/controls, not through this form. */
+        P.pending.ble_probe = P.cfg->ble_probe;
         P.pending.controls_enabled = P.cfg->controls_enabled;
         free(body);
 
@@ -1293,6 +1296,35 @@ static esp_err_t h_controls_enable(httpd_req_t *r)
     bluetti_ble_set_controls(on);
     ESP_LOGW(TAG, "device controls %s", on ? "enabled" : "disabled");
     return send_json(r, on ? "{\"enabled\":true}" : "{\"enabled\":false}");
+}
+
+/* POST /api/debug  — enable/disable debugging mode, applied live. */
+static esp_err_t h_debug_enable(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    char body[32] = "";
+    int len = r->content_len;
+    if (len <= 0 || len >= (int)sizeof(body)) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
+    }
+    int got = 0;
+    while (got < len) {
+        int k = httpd_req_recv(r, body + got, len - got);
+        if (k <= 0) return httpd_resp_send_500(r);
+        got += k;
+    }
+    body[len] = '\0';
+
+    char v[8] = "";
+    if (!form_get(body, "enable", v, sizeof(v)) || !v[0]) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "missing 'enable'");
+    }
+    bool on = (v[0] == '1' || v[0] == 't');
+    P.cfg->ble_probe = on;
+    app_config_save(P.cfg);
+    bluetti_ble_set_debug(on);
+    ESP_LOGW(TAG, "debugging mode %s", on ? "enabled" : "disabled");
+    return send_json(r, on ? "{\"debug\":true}" : "{\"debug\":false}");
 }
 
 static esp_err_t h_control_set(httpd_req_t *r)

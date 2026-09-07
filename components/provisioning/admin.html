@@ -163,12 +163,14 @@
       <label class="chk"><input type="checkbox" id="follow" checked> Follow</label>
       <button class="act" id="clearView">Clear view</button>
       <button class="act" id="copyLog">Copy</button>
+      <button class="act" id="dbgToggle" hidden></button>
       <span class="hint" id="logInfo"></span>
     </div>
     <pre id="logView">…</pre>
-    <p class="hint">Enable <code>Trace the BLUETTI BLE handshake</code> in
-      <code>menuconfig</code> for the full handshake dump. Anyone on this network
-      can read this — trusted LAN only.</p>
+    <p class="hint"><b>Debugging mode</b> dumps the raw BLE traffic here instead
+      of decoding it — use it if a reading looks wrong or the link never comes
+      up. Applies on the next reconnect. Anyone on this network can read this —
+      trusted LAN only.</p>
   </div>
 </section>
 
@@ -201,14 +203,14 @@
 
     <div class="box">
       <h2>Diagnostics</h2>
-      <label class="chk"><input type="checkbox" id="cfgProbe" name="ble_probe"
-        value="1" style="width:auto"> Probe mode</label>
-      <p class="hint">Leave this off for normal use. The decoder has not been
-        confirmed on hardware, so if a reading looks wrong or the link never
-        reaches <b>ready</b>, probe mode connects, enumerates the GATT services
-        and characteristics, subscribes to anything that notifies, and hex-dumps
-        what arrives to the <b>Status</b> tab's log — without decoding it. See
-        <code>docs/PROTOCOL.md</code> for what to look for.</p>
+      <label class="chk"><input type="checkbox" id="cfgProbe"
+        style="width:auto"> Debugging mode</label>
+      <p class="hint">Leave this off for normal use. When on, the bridge
+        connects, enumerates every GATT service and characteristic, subscribes
+        to anything that notifies, and hex-dumps what arrives to the
+        <b>Status</b> tab's log — without running the handshake or decoding
+        anything. Applies on the next reconnect; no reboot. There is also a
+        quick toggle on the <b>Status</b> tab.</p>
     </div>
 
     <p><button class="act primary" id="efSave">Save &amp; reboot</button>
@@ -621,10 +623,37 @@ async function refreshStatus() {
       $('#otaFileBox').hidden = false;
       $('#fwNow').textContent = (j.fw_version || '?') + ' (' + (j.fw_date || '') + ')';
     }
+    if (document.activeElement !== $('#dbgToggle')) syncDebug(!!j.debug);
   } catch (e) { /* keep last */ }
 }
 refreshStatus();
 setInterval(refreshStatus, 3000);
+
+/* ---- debugging mode (was "probe mode") ---- */
+let dbgOn = false;
+function syncDebug(on) {
+  dbgOn = on;
+  const b = $('#dbgToggle');
+  b.hidden = false;
+  b.textContent = on ? 'Stop debugging' : 'Debugging mode';
+  b.classList.toggle('primary', on);
+  if (document.activeElement !== $('#cfgProbe')) $('#cfgProbe').checked = on;
+}
+async function setDebug(on) {
+  syncDebug(on);                       /* optimistic */
+  try {
+    const r = await fetch('/api/debug', {
+      method: 'POST',
+      body: new URLSearchParams({ enable: on ? '1' : '0' }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    syncDebug((await r.json()).debug);
+  } catch (e) {
+    $('#logInfo').textContent = 'debug toggle failed: ' + e.message;
+  }
+}
+$('#dbgToggle').onclick = () => setDebug(!dbgOn);
+$('#cfgProbe').onchange = () => setDebug($('#cfgProbe').checked);
 
 /* ---- logs ---- */
 let logCursor = 0, logText = '', logTimer = null;
@@ -687,7 +716,7 @@ async function loadConfig() {
     $('#monPass').textContent = mac4 ? 'bluetti' + mac4 : '<password>';
     syncNutAuth();
     $('#cfgLow').value = cfg.low_pct || 20;
-    $('#cfgProbe').checked = !!cfg.ble_probe;
+    $('#cfgProbe').checked = !!cfg.debug;
     $('#cfgControls').checked = !!cfg.controls_enabled;
     const ap = cfg.wifi_mode === 'ap';
     document.querySelector(`input[name=wifi_mode][value=${ap ? 'ap' : 'station'}]`).checked = true;
