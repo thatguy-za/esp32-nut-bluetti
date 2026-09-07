@@ -81,10 +81,12 @@
              font-variant-numeric: tabular-nums; }
   .battpct .u { font-size: .85rem; opacity: .6; font-weight: 400; }
   .flow { display: flex; align-items: stretch; gap: .5rem; margin: 0 0 1.1rem; flex-wrap: wrap; }
-  .flowsources { display: flex; flex-direction: column; gap: .4rem; flex: 1 1 8rem; justify-content: center; }
-  .flownode { flex: 1 1 8rem; display: flex; align-items: center; justify-content: center;
+  .flowsources { display: flex; flex-direction: column; gap: .4rem; flex: 1 1 8rem; }
+  .flownode { flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
               gap: .4rem; text-align: center; padding: .5rem .5rem; border: 1px solid #8886;
               border-radius: .5rem; font-size: .82rem; }
+  /* Mains and Battery are one box each, as tall as the two load nodes stacked. */
+  #flowSources .flownode, #flowBatt .flownode { flex: 1 1 auto; }
   .flownode.amber { border-color: #d9822b88; background: #d9822b14; color: #d9822b; }
   .flownode.dim { opacity: .45; }
   .flownode svg { flex: none; width: 16px; height: 16px; }
@@ -142,7 +144,7 @@
       <div class="flow">
         <div id="flowSources" class="flowsources"></div>
         <span class="flowarrow">&#8594;</span>
-        <div id="flowBatt" class="flownode"></div>
+        <div id="flowBatt" class="flowsources"></div>
         <span class="flowarrow">&#8594;</span>
         <div id="flowLoad" class="flowsources"></div>
       </div>
