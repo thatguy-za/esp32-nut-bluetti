@@ -654,7 +654,7 @@ static esp_err_t h_led_toggle(httpd_req_t *r);
 static esp_err_t h_controls_get(httpd_req_t *r);
 static esp_err_t h_controls_enable(httpd_req_t *r);
 static esp_err_t h_control_set(httpd_req_t *r);
-static esp_err_t h_debug_enable(httpd_req_t *r);
+static esp_err_t h_loglevel_set(httpd_req_t *r);
 static esp_err_t h_factory_reset(httpd_req_t *r);
 #if CONFIG_ENABLE_WEB_OTA
 static esp_err_t h_ota(httpd_req_t *r);
@@ -714,7 +714,7 @@ static esp_err_t start_httpd(bool captive)
         reg(P.httpd, "/api/controls", HTTP_GET, h_controls_get);
         reg(P.httpd, "/api/controls", HTTP_POST, h_controls_enable);
         reg(P.httpd, "/api/control", HTTP_POST, h_control_set);
-        reg(P.httpd, "/api/debug", HTTP_POST, h_debug_enable);
+        reg(P.httpd, "/api/loglevel", HTTP_POST, h_loglevel_set);
         reg(P.httpd, "/api/factory-reset", HTTP_POST, h_factory_reset);
 #if CONFIG_ENABLE_WEB_OTA
         reg(P.httpd, "/api/ota", HTTP_POST, h_ota);
@@ -831,7 +831,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              "\"ups\":\"%s\",\"nut_port\":%u,"
              "\"ble_target\":\"%s\",\"ble_connected\":%s,"
              "\"telemetry_valid\":%s,\"battery_pct\":%d,"
-             "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\",\"debug\":%s,"
+             "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\",\"log_level\":%d,"
              "\"ups_status\":\"%s\",\"battery_runtime_s\":%d,"
              "\"minutes_remaining\":%d,"
              "\"output_watts\":%d,\"input_watts\":%d,"
@@ -850,7 +850,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              have && st.ac_input_present ? "true" : "false",
              have && st.charging ? "true" : "false",
              have && st.model[0] ? st.model : "",
-             bluetti_ble_debug() ? "true" : "false",
+             P.cfg->log_level,
              ups_status, rt_s, mins,
              w_out, w_in, w_acin, w_dcin, w_batt,
              led_status_enabled() ? "true" : "false",
@@ -905,12 +905,12 @@ static esp_err_t h_admin_config(httpd_req_t *r)
     REQUIRE_AUTH(r);
     char def_ap[33];
     wifi_mgr_default_ap_ssid(def_ap, sizeof(def_ap));
-    char out[1040];  /* ssid + ap_ssid + users + addressing + telegram */
+    char out[1060];  /* ssid + ap_ssid + users + addressing + telegram */
     snprintf(out, sizeof(out),
-             "{\"ble_addr\":\"%s\",\"debug\":%s,\"controls_enabled\":%s,"
+             "{\"ble_addr\":\"%s\",\"log_level\":%d,\"controls_enabled\":%s,"
              "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
              "\"nut_user\":\"%s\",\"nut_auth_set\":%s,"
-             "\"ac_rating_w\":%u,\"runtime_low_s\":%u,"
+             "\"ac_rating_w\":%u,\"battery_wh\":%u,\"runtime_low_s\":%u,"
              "\"wifi_mode\":\"%s\",\"wifi_ssid\":\"%s\",\"has_wifi_pass\":%s,"
              "\"ap_ssid\":\"%s\",\"has_ap_pass\":%s,\"default_ap_ssid\":\"%s\","
              "\"auth_user\":\"%s\",\"auth_set\":%s,"
@@ -919,11 +919,11 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              "\"tg_enabled\":%s,\"tg_chat\":\"%s\",\"has_tg_token\":%s,"
              "\"tg_on_power\":%s,\"tg_on_low_batt\":%s,\"tg_on_link\":%s}",
              P.cfg->ble_addr,
-             P.cfg->ble_probe ? "true" : "false",
+             P.cfg->log_level,
              P.cfg->controls_enabled ? "true" : "false",
              P.cfg->ups_name, P.cfg->nut_port, P.cfg->low_pct, P.cfg->poll_ms,
              P.cfg->nut_user, P.cfg->nut_auth_set ? "true" : "false",
-             P.cfg->ac_rating_w, P.cfg->runtime_low_s,
+             P.cfg->ac_rating_w, P.cfg->battery_wh, P.cfg->runtime_low_s,
              P.cfg->wifi_mode == APP_WIFI_AP ? "ap" : "station",
              P.cfg->wifi_ssid, P.cfg->wifi_pass[0] ? "true" : "false",
              P.cfg->ap_ssid[0] ? P.cfg->ap_ssid : def_ap,
@@ -1030,8 +1030,9 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         if (form_get(body, "ble_addr", v, sizeof(v))) {
             strlcpy(P.pending.ble_addr, v, sizeof(P.pending.ble_addr));
         }
-        /* debug (was ble_probe) and controls_enabled are applied live via
-         * POST /api/debug and /api/controls, not through this form. */
+        /* log_level (and the derived ble_probe) and controls_enabled are
+         * applied live via /api/loglevel and /api/controls, not here. */
+        P.pending.log_level = P.cfg->log_level;
         P.pending.ble_probe = P.cfg->ble_probe;
         P.pending.controls_enabled = P.cfg->controls_enabled;
         free(body);
@@ -1057,6 +1058,9 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         }
         if (form_get(body, "ac_rating_w", v, sizeof(v)) && atoi(v) > 0) {
             P.pending.ac_rating_w = (uint16_t)atoi(v);
+        }
+        if (form_get(body, "battery_wh", v, sizeof(v)) && atoi(v) >= 0) {
+            P.pending.battery_wh = (uint16_t)atoi(v);
         }
         if (form_get(body, "runtime_low_s", v, sizeof(v)) && atoi(v) >= 0) {
             P.pending.runtime_low_s = (uint16_t)atoi(v);
@@ -1298,8 +1302,8 @@ static esp_err_t h_controls_enable(httpd_req_t *r)
     return send_json(r, on ? "{\"enabled\":true}" : "{\"enabled\":false}");
 }
 
-/* POST /api/debug  — enable/disable debugging mode, applied live. */
-static esp_err_t h_debug_enable(httpd_req_t *r)
+/* POST /api/loglevel  — 0 off / 1 basic / 2 verbose, applied live. */
+static esp_err_t h_loglevel_set(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
     char body[32] = "";
@@ -1316,15 +1320,22 @@ static esp_err_t h_debug_enable(httpd_req_t *r)
     body[len] = '\0';
 
     char v[8] = "";
-    if (!form_get(body, "enable", v, sizeof(v)) || !v[0]) {
-        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "missing 'enable'");
+    if (!form_get(body, "level", v, sizeof(v)) || !v[0]) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "missing 'level'");
     }
-    bool on = (v[0] == '1' || v[0] == 't');
-    P.cfg->ble_probe = on;
+    int lvl = atoi(v);
+    if (lvl < APP_LOG_OFF || lvl > APP_LOG_VERBOSE) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "level 0..2");
+    }
+    P.cfg->log_level = (uint8_t)lvl;
+    P.cfg->ble_probe = (lvl >= APP_LOG_VERBOSE);
     app_config_save(P.cfg);
-    bluetti_ble_set_debug(on);
-    ESP_LOGW(TAG, "debugging mode %s", on ? "enabled" : "disabled");
-    return send_json(r, on ? "{\"debug\":true}" : "{\"debug\":false}");
+    esp_log_level_set("*", lvl == APP_LOG_OFF ? ESP_LOG_NONE : ESP_LOG_INFO);
+    bluetti_ble_set_debug(lvl >= APP_LOG_VERBOSE);
+    ESP_LOGW(TAG, "log level -> %d", lvl);
+    char out[24];
+    snprintf(out, sizeof(out), "{\"log_level\":%d}", lvl);
+    return send_json(r, out);
 }
 
 static esp_err_t h_control_set(httpd_req_t *r)

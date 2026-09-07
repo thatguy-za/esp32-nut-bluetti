@@ -160,17 +160,21 @@
   <div class="box">
     <h2>Logs <span class="sub">device log tail, ~12&nbsp;KB</span></h2>
     <div class="row">
-      <label class="chk"><input type="checkbox" id="follow" checked> Follow</label>
+      <label class="chk" for="logLevel">Level</label>
+      <select id="logLevel" style="width:auto">
+        <option value="0">Off</option>
+        <option value="1">Basic</option>
+        <option value="2">Verbose</option>
+      </select>
       <button class="act" id="clearView">Clear view</button>
       <button class="act" id="copyLog">Copy</button>
-      <button class="act" id="dbgToggle" hidden></button>
       <span class="hint" id="logInfo"></span>
     </div>
     <pre id="logView">…</pre>
-    <p class="hint"><b>Debugging mode</b> dumps the raw BLE traffic here instead
-      of decoding it — use it if a reading looks wrong or the link never comes
-      up. Applies on the next reconnect. Anyone on this network can read this —
-      trusted LAN only.</p>
+    <p class="hint"><b>Verbose</b> dumps the raw BLE traffic here instead of
+      decoding it — use it if a reading looks wrong or the link never comes up;
+      it applies on the next reconnect. <b>Off</b> silences the device log
+      entirely. Anyone on this network can read this — trusted LAN only.</p>
   </div>
 </section>
 
@@ -201,18 +205,6 @@
       <p class="hint" id="ctrlMsg" hidden></p>
     </div>
 
-    <div class="box">
-      <h2>Diagnostics</h2>
-      <label class="chk"><input type="checkbox" id="cfgProbe"
-        style="width:auto"> Debugging mode</label>
-      <p class="hint">Leave this off for normal use. When on, the bridge
-        connects, enumerates every GATT service and characteristic, subscribes
-        to anything that notifies, and hex-dumps what arrives to the
-        <b>Status</b> tab's log — without running the handshake or decoding
-        anything. Applies on the next reconnect; no reboot. There is also a
-        quick toggle on the <b>Status</b> tab.</p>
-    </div>
-
     <p><button class="act primary" id="efSave">Save &amp; reboot</button>
        <span class="hint" id="efMsg"></span></p>
   </form>
@@ -237,6 +229,13 @@
         <code>ups.realpower.nominal</code>, the 100% mark for
         <code>ups.load</code>. 200&nbsp;W on an Elite&nbsp;10.</p>
       <input id="cfgRating" name="ac_rating_w" type="number" min="1" max="65535"
+             style="width:8rem">
+      <label for="cfgBattWh">Battery capacity (Wh)</label>
+      <p class="hint" style="margin:.15rem 0 .3rem">Sets
+        <code>battery.capacity</code>, and lets the bridge estimate
+        <code>battery.runtime</code> on units that don't report one. 0 to
+        leave it off. ~1000&nbsp;Wh on an Elite&nbsp;10.</p>
+      <input id="cfgBattWh" name="battery_wh" type="number" min="0" max="65535"
              style="width:8rem">
       <label for="cfgRtLow">Low runtime (s)</label>
       <p class="hint" style="margin:.15rem 0 .3rem">Sets
@@ -623,37 +622,29 @@ async function refreshStatus() {
       $('#otaFileBox').hidden = false;
       $('#fwNow').textContent = (j.fw_version || '?') + ' (' + (j.fw_date || '') + ')';
     }
-    if (document.activeElement !== $('#dbgToggle')) syncDebug(!!j.debug);
+    if (document.activeElement !== $('#logLevel') && j.log_level !== undefined) {
+      $('#logLevel').value = String(j.log_level);
+    }
   } catch (e) { /* keep last */ }
 }
 refreshStatus();
 setInterval(refreshStatus, 3000);
 
-/* ---- debugging mode (was "probe mode") ---- */
-let dbgOn = false;
-function syncDebug(on) {
-  dbgOn = on;
-  const b = $('#dbgToggle');
-  b.hidden = false;
-  b.textContent = on ? 'Stop debugging' : 'Debugging mode';
-  b.classList.toggle('primary', on);
-  if (document.activeElement !== $('#cfgProbe')) $('#cfgProbe').checked = on;
-}
-async function setDebug(on) {
-  syncDebug(on);                       /* optimistic */
+/* ---- log level (Off / Basic / Verbose) ---- */
+$('#logLevel').onchange = async () => {
+  const lvl = $('#logLevel').value;
   try {
-    const r = await fetch('/api/debug', {
+    const r = await fetch('/api/loglevel', {
       method: 'POST',
-      body: new URLSearchParams({ enable: on ? '1' : '0' }),
+      body: new URLSearchParams({ level: lvl }),
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    syncDebug((await r.json()).debug);
+    $('#logLevel').value = String((await r.json()).log_level);
+    $('#logInfo').textContent = '';
   } catch (e) {
-    $('#logInfo').textContent = 'debug toggle failed: ' + e.message;
+    $('#logInfo').textContent = 'level change failed: ' + e.message;
   }
-}
-$('#dbgToggle').onclick = () => setDebug(!dbgOn);
-$('#cfgProbe').onchange = () => setDebug($('#cfgProbe').checked);
+};
 
 /* ---- logs ---- */
 let logCursor = 0, logText = '', logTimer = null;
@@ -670,8 +661,9 @@ async function pollLogs() {
     if (chunk) {
       logText = (logText + chunk).slice(-60000);
       const v = $('#logView');
+      const atBottom = v.scrollTop + v.clientHeight >= v.scrollHeight - 40;
       v.textContent = logText;
-      if ($('#follow').checked) v.scrollTop = v.scrollHeight;
+      if (atBottom) v.scrollTop = v.scrollHeight;   /* follow unless scrolled up */
     }
     $('#logInfo').textContent = 'at byte ' + logCursor;
   } catch (e) {
@@ -701,6 +693,7 @@ async function loadConfig() {
     $('#upscName').textContent = cfg.ups_name || 'bluetti';
     $('#cfgPort').value = cfg.nut_port || 3493;
     $('#cfgRating').value = cfg.ac_rating_w || 300;
+    $('#cfgBattWh').value = cfg.battery_wh ?? 0;
     $('#cfgRtLow').value = cfg.runtime_low_s ?? 300;
     $('#nutUser').value = cfg.nut_user || 'upsmon';
     $('#monUser').textContent = cfg.nut_user || 'upsmon';
@@ -716,8 +709,8 @@ async function loadConfig() {
     $('#monPass').textContent = mac4 ? 'bluetti' + mac4 : '<password>';
     syncNutAuth();
     $('#cfgLow').value = cfg.low_pct || 20;
-    $('#cfgProbe').checked = !!cfg.debug;
     $('#cfgControls').checked = !!cfg.controls_enabled;
+    if (cfg.log_level !== undefined) $('#logLevel').value = String(cfg.log_level);
     const ap = cfg.wifi_mode === 'ap';
     document.querySelector(`input[name=wifi_mode][value=${ap ? 'ap' : 'station'}]`).checked = true;
     $('#apSsid').value = cfg.ap_ssid || cfg.default_ap_ssid || '';

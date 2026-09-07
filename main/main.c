@@ -87,9 +87,18 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
     }
     nut_server_set_var_int("battery.charge.low", st->soc_low_pct);
 
-    int rem = st->ac_input_present ? -1 : st->minutes_remaining;
-    if (rem >= 0) {
-        nut_server_set_var_int("battery.runtime", rem * 60);
+    /* battery.runtime, seconds until empty. Prefer the unit's own estimate;
+     * otherwise derive it from the configured capacity and the current net
+     * battery draw. Only meaningful while discharging. */
+    if (st->ac_input_present) {
+        nut_server_clear_var("battery.runtime");
+    } else if (st->minutes_remaining >= 0) {
+        nut_server_set_var_int("battery.runtime", st->minutes_remaining * 60);
+    } else if (s_cfg.battery_wh > 0 && st->soc_pct > 0 &&
+               st->battery_watts > 1.0f) {
+        float wh_left = (float)s_cfg.battery_wh * (float)st->soc_pct / 100.0f;
+        int secs = (int)(wh_left / st->battery_watts * 3600.0f);
+        nut_server_set_var_int("battery.runtime", secs);
     } else {
         nut_server_clear_var("battery.runtime");
     }
@@ -101,6 +110,8 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
     }
     if (st->design_capacity_wh > 0) {
         nut_server_set_var_int("battery.capacity", st->design_capacity_wh);
+    } else if (s_cfg.battery_wh > 0) {
+        nut_server_set_var_int("battery.capacity", s_cfg.battery_wh);
     }
     if (st->output_watts >= 0.0f) {
         nut_server_set_var_float("ups.realpower", st->output_watts, 0);
@@ -265,7 +276,7 @@ static void start_services(const app_config_t *cfg)
     } else {
         bluetti_ble_config_t ef_cfg = {
             .ble_address = cfg->ble_addr,
-            .probe = cfg->ble_probe,
+            .probe = cfg->log_level >= APP_LOG_VERBOSE,
             .controls = cfg->controls_enabled,
             .poll_interval_ms = cfg->poll_ms,
             .low_battery_pct = cfg->low_pct,
@@ -302,6 +313,12 @@ void app_main(void)
 
     app_config_t *cfg = &s_cfg;
     app_config_load(cfg);
+
+    /* Apply the saved log level. "Off" silences everything from here on;
+     * the boot lines above it are always kept. */
+    if (cfg->log_level == APP_LOG_OFF) {
+        esp_log_level_set("*", ESP_LOG_NONE);
+    }
 
     /* Up as early as possible so the red "booting" light is on for the
      * whole startup, not just the tail of it. */

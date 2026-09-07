@@ -22,14 +22,15 @@ static const char *TAG = "app_config";
  *   3: added the status-LED on/off toggle.
  *   4: added the status-LED pin.
  *   5: added the device-controls toggle.
+ *   6: added the battery capacity (Wh) and the log level.
  *
  * From v3 on, fields are only ever appended, and a stored blob of an
- * older-but-recognised version (3 or 4) is kept: the bytes that were
+ * older-but-recognised version (3, 4 or 5) is kept: the bytes that were
  * written still mean what they meant, and the newer trailing fields come
  * up at their defaults. A newer, much older, or unreadable blob is still
  * discarded.
  */
-#define CFG_VERSION 5u
+#define CFG_VERSION 6u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -86,6 +87,9 @@ void app_config_defaults(app_config_t *cfg)
     cfg->led_enabled = true;
     cfg->led_gpio    = CONFIG_STATUS_LED_GPIO;
     cfg->controls_enabled = false;
+    cfg->battery_wh = 0;
+    cfg->log_level = APP_LOG_BASIC;
+    cfg->ble_probe = false;   /* kept in sync with (log_level >= 2) */
 
     /* A blank SSID from Kconfig means "must provision". */
     if (strcmp(cfg->wifi_ssid, "myssid") == 0) {
@@ -132,6 +136,11 @@ esp_err_t app_config_load(app_config_t *cfg)
                  (unsigned)blob.version, (unsigned)CFG_VERSION);
     }
     *cfg = blob.cfg;
+    if (blob.version < 6u) {
+        /* Pre-v6 had only the ble_probe bool; map it onto the new level. */
+        cfg->log_level = cfg->ble_probe ? APP_LOG_VERBOSE : APP_LOG_BASIC;
+    }
+    cfg->ble_probe = (cfg->log_level >= APP_LOG_VERBOSE);
     ESP_LOGI(TAG, "loaded config: ssid='%s' ble='%s' ups='%s' provisioned=%d",
              cfg->wifi_ssid, cfg->ble_addr,
              cfg->ups_name, cfg->provisioned);

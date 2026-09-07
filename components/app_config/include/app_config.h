@@ -77,7 +77,22 @@ typedef struct {
     /* Device controls. Off by default: writing to the power station is
      * unverified against hardware and only makes sense for an EL10. */
     bool     controls_enabled;
+
+    /* Usable battery energy, Wh. 0 = unknown. Used to estimate
+     * battery.runtime on units that don't report a runtime themselves. */
+    uint16_t battery_wh;
+
+    /* Log verbosity, set from the Status page. 0 = off (esp_log silenced),
+     * 1 = basic (INFO), 2 = verbose (INFO + BLE debugging mode: dump the
+     * GATT tree and every notification instead of decoding). ble_probe is
+     * kept equal to (log_level >= 2). */
+    uint8_t  log_level;
 } app_config_t;
+
+/* Log-level values for app_config_t.log_level. */
+#define APP_LOG_OFF     0
+#define APP_LOG_BASIC   1
+#define APP_LOG_VERBOSE 2
 
 /* This board's default name, "esp-nut-bluetti-XXXX" (XXXX = last two
  * bytes of the Wi-Fi MAC). Used for both the setup AP SSID and the

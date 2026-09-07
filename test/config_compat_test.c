@@ -20,7 +20,7 @@
 #include "app_config.h"
 
 /* Must track the #define in app_config.c. */
-#define CFG_VERSION 5u
+#define CFG_VERSION 6u
 
 static int fails;
 #define OKF(c, ...) do { bool _ok = (c); printf(_ok ? "ok:   " : "FAIL: "); \
@@ -38,19 +38,21 @@ typedef struct {
 
 int main(void)
 {
-    /* Append-only: led_gpio (v4) and controls_enabled (v5) sit at the end,
-     * in order, each right after the previous field bar alignment. */
+    /* Append-only: led_gpio (v4), controls_enabled (v5) and log_level (v6)
+     * sit at the end, in order, each right after the previous field bar
+     * alignment. */
     OKF(V3_END > offsetof(app_config_t, led_enabled) &&
         V3_END - offsetof(app_config_t, led_enabled) <= 2,
         "led_gpio was appended right after led_enabled (the v3 boundary)");
     OKF(offsetof(app_config_t, controls_enabled) >= V3_END + sizeof(int16_t) &&
         offsetof(app_config_t, controls_enabled) <= V3_END + sizeof(int16_t) + 1,
         "controls_enabled was appended right after led_gpio");
-    OKF(offsetof(app_config_t, controls_enabled) + sizeof(bool) ==
-        sizeof(app_config_t) ||
-        offsetof(app_config_t, controls_enabled) + sizeof(bool) + 1 ==
-        sizeof(app_config_t),
-        "controls_enabled is the last field");
+    OKF(offsetof(app_config_t, log_level) > offsetof(app_config_t, controls_enabled) &&
+        offsetof(app_config_t, log_level) <= offsetof(app_config_t, controls_enabled) + 4,
+        "log_level was appended right after controls_enabled");
+    OKF(offsetof(app_config_t, log_level) + sizeof(uint8_t) == sizeof(app_config_t) ||
+        offsetof(app_config_t, log_level) + sizeof(uint8_t) + 3 >= sizeof(app_config_t),
+        "log_level is the last field");
 
     const size_t full_len = sizeof(blob_t);
     const size_t min_len  = offsetof(blob_t, cfg) + V3_END;
