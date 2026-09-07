@@ -144,7 +144,7 @@
         <span class="flowarrow">&#8594;</span>
         <div id="flowBatt" class="flownode"></div>
         <span class="flowarrow">&#8594;</span>
-        <div id="flowLoad" class="flownode"></div>
+        <div id="flowLoad" class="flowsources"></div>
       </div>
     </div>
     <div class="pair">
@@ -555,6 +555,8 @@ function renderStatus(j) {
   const solarW = w(j.dc_in_watts);
   const mainsW = w(j.ac_in_watts);
   const loadW  = w(j.output_watts);
+  const acLoadW = w(j.ac_out_watts);
+  const dcLoadW = w(j.dc_out_watts);
   const battW  = w(j.battery_watts);          /* >0 discharging, <0 charging */
   const hasSolar = solarW !== null && solarW > 0;
 
@@ -598,7 +600,17 @@ function renderStatus(j) {
   $('#flowBatt').innerHTML = flowNode(BOLT_SVG, 'Battery',
     battW !== null ? (battW <= 0 ? '+' : '−') + Math.abs(battW) + ' W' : '',
     onBattery ? 'amber' : '');
-  $('#flowLoad').innerHTML = flowNode(BOLT_SVG, 'Load', loadW !== null ? loadW + ' W' : '', '');
+  /* Split AC vs DC load when the unit reports them; otherwise one node. */
+  if (acLoadW !== null || dcLoadW !== null) {
+    let load = '';
+    if (acLoadW !== null)
+      load += flowNode(BOLT_SVG, 'AC load', acLoadW + ' W', acLoadW > 0 ? '' : 'dim');
+    if (dcLoadW !== null)
+      load += flowNode(BOLT_SVG, 'DC load', dcLoadW + ' W', dcLoadW > 0 ? '' : 'dim');
+    $('#flowLoad').innerHTML = load;
+  } else {
+    $('#flowLoad').innerHTML = flowNode(BOLT_SVG, 'Load', loadW !== null ? loadW + ' W' : '', '');
+  }
 
   $('#nutTable').innerHTML = [
     ['ups.status', j.ups_status || '—'],

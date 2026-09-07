@@ -326,7 +326,8 @@ MONITOR bluetti@<device-ip> 1 monuser somepass slave
 | `ups.load` | % of the configured continuous AC rating |
 | `ups.realpower` / `ups.realpower.nominal` | output W / the configured AC rating |
 | `input.realpower` / `input.realpower.ac` | total input W / mains input W |
-| `output.realpower` | AC output W |
+| `output.realpower` / `output.realpower.dc` | AC output W / DC output W |
+| `outlet.1.*` / `outlet.2.*` | AC and DC output banks — `desc`, `status`, `realpower` W |
 | `ups.type` | `online` when BLUETTI's backup mode is on, else `offline` |
 | `ups.alarm` | device fault code, when non-zero |
 | `ups.mfr` / `ups.model` / `ups.serial` | and the `device.*` equivalents |

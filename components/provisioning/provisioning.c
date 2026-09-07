@@ -805,11 +805,13 @@ static esp_err_t h_admin_status(httpd_req_t *r)
      * decode", so the status page can hide that leg. */
 #define WROUND(f) ((int)((f) + ((f) < 0.0f ? -0.5f : 0.5f)))
 #define WFIG(f)   (have && (f) > BLUETTI_UNKNOWN_F ? WROUND(f) : -100000)
-    int w_out  = WFIG(st.output_watts);
-    int w_in   = WFIG(st.input_watts);
-    int w_acin = WFIG(st.ac_in_watts);
-    int w_dcin = WFIG(st.dc_in_watts);
-    int w_batt = WFIG(st.battery_watts);
+    int w_out   = WFIG(st.output_watts);
+    int w_acout = WFIG(st.ac_out_watts);
+    int w_dcout = WFIG(st.dc_out_watts);
+    int w_in    = WFIG(st.input_watts);
+    int w_acin  = WFIG(st.ac_in_watts);
+    int w_dcin  = WFIG(st.dc_in_watts);
+    int w_batt  = WFIG(st.battery_watts);
 #undef WFIG
 #undef WROUND
     int mins = have && st.minutes_remaining >= 0 ? st.minutes_remaining : -1;
@@ -822,7 +824,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
     int rt_s = nut_server_get_var("battery.runtime", runtime, sizeof(runtime))
                    ? atoi(runtime) : -1;
 
-    char out[1200];
+    char out[1260];
     snprintf(out, sizeof(out),
              "{\"wifi_mode\":\"%s\",\"network\":\"%s\",\"ip\":\"%s\","
              "\"addressing\":\"%s\",\"gateway\":\"%s\",\"dns\":\"%s\","
@@ -834,9 +836,9 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              "\"ac_input\":%s,\"charging\":%s,\"model\":\"%s\",\"log_level\":%d,"
              "\"ups_status\":\"%s\",\"battery_runtime_s\":%d,"
              "\"minutes_remaining\":%d,"
-             "\"output_watts\":%d,\"input_watts\":%d,"
-             "\"ac_in_watts\":%d,\"dc_in_watts\":%d,\"battery_watts\":%d,"
-             "\"soc_min\":%d,\"soc_max\":%d,"
+             "\"output_watts\":%d,\"ac_out_watts\":%d,\"dc_out_watts\":%d,"
+             "\"input_watts\":%d,\"ac_in_watts\":%d,\"dc_in_watts\":%d,"
+             "\"battery_watts\":%d,\"soc_min\":%d,\"soc_max\":%d,"
              "\"led\":%s,\"led_gpio\":%d,\"configured\":%s}",
              ap ? "ap" : "station",
              ap ? P.cfg->ap_ssid : P.cfg->wifi_ssid, ip,
@@ -853,7 +855,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              have && st.model[0] ? st.model : "",
              P.cfg->log_level,
              ups_status, rt_s, mins,
-             w_out, w_in, w_acin, w_dcin, w_batt,
+             w_out, w_acout, w_dcout, w_in, w_acin, w_dcin, w_batt,
              have && st.soc_min >= 0 ? st.soc_min : -1,
              have && st.soc_max >= 0 ? st.soc_max : -1,
              led_status_enabled() ? "true" : "false",

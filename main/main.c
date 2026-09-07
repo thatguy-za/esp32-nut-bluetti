@@ -142,6 +142,9 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
     if (st->ac_out_watts >= 0.0f) {
         nut_server_set_var_float("output.realpower", st->ac_out_watts, 0);
     }
+    if (st->dc_out_watts >= 0.0f) {
+        nut_server_set_var_float("output.realpower.dc", st->dc_out_watts, 0);
+    }
     if (st->ac_in_volts >= 0.0f) {
         nut_server_set_var_float("input.voltage", st->ac_in_volts, 1);
     }
@@ -151,14 +154,30 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
     if (st->ac_out_volts >= 0.0f) {
         nut_server_set_var_float("output.voltage", st->ac_out_volts, 1);
     }
-    /* The unit's two output banks, as NUT outlets. */
-    if (st->ac_switch >= 0) {
+    /* The unit's two output banks, as NUT outlets. NUT has no top-level
+     * "DC load" var (it models an AC UPS), so the AC/DC split lives here:
+     * outlet.1 = AC, outlet.2 = DC, each with its own realpower. */
+    if (st->ac_switch >= 0 || st->ac_out_watts >= 0.0f) {
         nut_server_set_var("outlet.1.desc", "AC");
-        nut_server_set_var("outlet.1.status", st->ac_switch ? "on" : "off");
+        if (st->ac_switch >= 0) {
+            nut_server_set_var("outlet.1.status", st->ac_switch ? "on" : "off");
+        }
+        if (st->ac_out_watts >= 0.0f) {
+            nut_server_set_var_float("outlet.1.realpower", st->ac_out_watts, 0);
+        }
     }
-    if (st->dc_switch >= 0) {
+    if (st->dc_switch >= 0 || st->dc_out_watts >= 0.0f) {
         nut_server_set_var("outlet.2.desc", "DC");
-        nut_server_set_var("outlet.2.status", st->dc_switch ? "on" : "off");
+        if (st->dc_switch >= 0) {
+            nut_server_set_var("outlet.2.status", st->dc_switch ? "on" : "off");
+        }
+        if (st->dc_out_watts >= 0.0f) {
+            nut_server_set_var_float("outlet.2.realpower", st->dc_out_watts, 0);
+        }
+    }
+    if (st->ac_switch >= 0 || st->dc_switch >= 0 ||
+        st->ac_out_watts >= 0.0f || st->dc_out_watts >= 0.0f) {
+        nut_server_set_var("outlet.count", "2");
     }
     /* ups.load is a percentage of the unit's continuous AC rating, which
      * varies by model, so it comes from the config rather than a guess. */
