@@ -202,6 +202,14 @@ void notify_ups_status(const char *status, int soc_pct, int runtime_min)
         return;
     }
 
+    /* "OL WAIT" — link up, no telemetry yet (startup / brief stall). Not a
+     * power-state observation, so it must not drive edge detection: on
+     * reboot the sequence is UNKNOWN -> OFF -> OL WAIT -> OL, and treating
+     * WAIT as OL would turn the reconnect into a bogus "Mains restored". */
+    if (strstr(status, "WAIT")) {
+        return;
+    }
+
     power_state_t now;
     if (strncmp(status, "OFF", 3) == 0) {
         now = PWR_OFFLINE;
@@ -220,7 +228,10 @@ void notify_ups_status(const char *status, int soc_pct, int runtime_min)
     if (now != was && was != PWR_UNKNOWN && guard_allows(now)) {
         switch (now) {
         case PWR_BATTERY:
-            if (cfg.on_power) {
+            /* Only a genuine mains failure: was actually on line. Coming
+             * from OFFLINE means the link just returned, not that mains
+             * dropped. */
+            if (was == PWR_LINE && cfg.on_power) {
                 if (runtime_min > 0) {
                     snprintf(text, sizeof(text),
                              "\xE2\x9A\xA1 Mains lost — running on battery. "
@@ -231,13 +242,17 @@ void notify_ups_status(const char *status, int soc_pct, int runtime_min)
                              "%d%% charge.", soc_pct);
                 }
                 notify_send(text);
+            } else if (was == PWR_OFFLINE && cfg.on_link) {
+                notify_send("\xE2\x9C\x85 BLUETTI unit is back — on battery.");
             }
             break;
         case PWR_LINE:
-            if (cfg.on_power) {
+            if (was == PWR_BATTERY && cfg.on_power) {
                 snprintf(text, sizeof(text),
                          "\xE2\x9C\x85 Mains restored. %d%% charge.", soc_pct);
                 notify_send(text);
+            } else if (was == PWR_OFFLINE && cfg.on_link) {
+                notify_send("\xE2\x9C\x85 BLUETTI unit is back.");
             }
             break;
         case PWR_OFFLINE:
@@ -249,9 +264,6 @@ void notify_ups_status(const char *status, int soc_pct, int runtime_min)
         default:
             break;
         }
-    } else if (was == PWR_OFFLINE && now != PWR_OFFLINE && cfg.on_link &&
-               guard_allows(now)) {
-        notify_send("\xE2\x9C\x85 BLUETTI unit is back.");
     }
 
     /* Low battery is its own edge, independent of the mains transition. */
