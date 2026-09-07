@@ -79,8 +79,8 @@ int main(void)
         "EL10 has the full control set incl. screen timeout");
     OKF((EL100->controls & BT_C_SOC_MIN) && (EL100->controls & BT_C_SOC_MAX),
         "EL100V2 has the SOC min/max controls");
-    OKF((EL10->controls & BT_C_SOC_MIN) && (EL10->controls & BT_C_SOC_MAX),
-        "EL10 also polls SOC min/max (unconfirmed, self-selecting)");
+    OKF(!(EL10->controls & BT_C_SOC_MIN) && !(EL10->controls & BT_C_SOC_MAX),
+        "EL10 has no SOC range (regs 2022/2023 read 0 on hardware)");
     OKF((AC70->controls & BT_C_ECO_AC) && (AC70->controls & BT_C_CHARGE_MODE) &&
         !(AC70->controls & BT_C_DISPLAY) && !(AC70->controls & BT_C_SOC_MAX),
         "AC70 has ECO + charging mode but not screen timeout or SOC");
@@ -98,28 +98,32 @@ int main(void)
     OKF(gt, "generic plan reads register 110 to identify the model");
 
     size_t e0 = bt_regs_plan(EL10, false, plan, BT_REG_PLAN_MAX);
-    bool e0_soc_min = false, e0_soc_max = false;
-    for (size_t i = 0; i < e0; i++) {
-        if (plan[i].addr == REG_CTRL_SOC_MIN) e0_soc_min = true;
-        if (plan[i].addr == REG_CTRL_SOC_MAX) e0_soc_max = true;
-    }
-    OKF(e0_soc_min && e0_soc_max,
-        "SOC floor/ceiling are polled on the EL10 even with controls off");
     size_t e1 = bt_regs_plan(EL10, true,  plan, BT_REG_PLAN_MAX);
     OKF(e1 > e0, "controls add reads to the EL10 plan (%zu -> %zu)", e0, e1);
-    /* SOC min/max must appear once, not twice, when controls are on. */
-    int soc_max_count = 0;
+    OKF(e1 <= BT_REG_PLAN_MAX, "the EL10-with-controls plan fits the buffer");
+    bool e10_has_cm = false, e10_has_soc = false;
     for (size_t i = 0; i < e1; i++) {
+        if (plan[i].addr == REG_CTRL_CHARGING_MODE) e10_has_cm = true;
+        if (plan[i].addr == REG_CTRL_SOC_MAX)       e10_has_soc = true;
+    }
+    OKF(e10_has_cm && !e10_has_soc,
+        "the EL10 plan has charging mode but not SOC (no such register)");
+
+    /* EL100V2 does have the SOC range — polled even with controls off,
+     * and never queued twice when controls are on. */
+    size_t p0 = bt_regs_plan(EL100, false, plan, BT_REG_PLAN_MAX);
+    bool p0_lo = false, p0_hi = false;
+    for (size_t i = 0; i < p0; i++) {
+        if (plan[i].addr == REG_CTRL_SOC_MIN) p0_lo = true;
+        if (plan[i].addr == REG_CTRL_SOC_MAX) p0_hi = true;
+    }
+    OKF(p0_lo && p0_hi, "EL100V2 polls SOC floor/ceiling even with controls off");
+    size_t p1 = bt_regs_plan(EL100, true, plan, BT_REG_PLAN_MAX);
+    int soc_max_count = 0;
+    for (size_t i = 0; i < p1; i++) {
         if (plan[i].addr == REG_CTRL_SOC_MAX) soc_max_count++;
     }
-    OKF(soc_max_count == 1, "SOC max is queued exactly once with controls on");
-    OKF(e1 <= BT_REG_PLAN_MAX, "the EL10-with-controls plan fits the buffer");
-    bool has_cm = false, has_soc = false;
-    for (size_t i = 0; i < e1; i++) {
-        if (plan[i].addr == REG_CTRL_CHARGING_MODE) has_cm = true;
-        if (plan[i].addr == REG_CTRL_SOC_MAX)       has_soc = true;
-    }
-    OKF(has_cm && has_soc, "the EL10-with-controls plan covers charging mode and SOC max");
+    OKF(soc_max_count == 1, "EL100V2 SOC max is queued exactly once with controls on");
 
     size_t a1 = bt_regs_plan(AC70, true, plan, BT_REG_PLAN_MAX);
     bool ac70_disp = false, ac70_soc = false;
@@ -200,20 +204,20 @@ int main(void)
     one(EL10, &st, REG_CTRL_AC, 1);
     OKF(st.ac_switch == 1, "switch value 1 -> on");
 
-    /* ---- decode: SOC min/max ---- */
+    /* ---- decode: SOC min/max (EL100V2 only) ---- */
     st = fresh();
-    one(EL10, &st, REG_CTRL_SOC_MIN, 15);
-    one(EL10, &st, REG_CTRL_SOC_MAX, 90);
+    one(EL100, &st, REG_CTRL_SOC_MIN, 15);
+    one(EL100, &st, REG_CTRL_SOC_MAX, 90);
     OKF(st.soc_min == 15 && st.soc_max == 90, "SOC floor 15 / ceiling 90 decode");
     OKF(bt_control_current(bt_control_lookup("soc_min"), &st) == 15 &&
         bt_control_current(bt_control_lookup("soc_max"), &st) == 90,
         "bt_control_current maps soc_min/soc_max");
     st = fresh();
-    one(EL10, &st, REG_CTRL_SOC_MAX, 250);
+    one(EL100, &st, REG_CTRL_SOC_MAX, 250);
     OKF(st.soc_max == BLUETTI_UNKNOWN_I, "SOC max 250 out of range -> ignored");
     st = fresh();
-    one(AC70, &st, REG_CTRL_SOC_MAX, 90);
-    OKF(st.soc_max == BLUETTI_UNKNOWN_I, "AC70 has no SOC max in its mask");
+    one(EL10, &st, REG_CTRL_SOC_MAX, 90);
+    OKF(st.soc_max == BLUETTI_UNKNOWN_I, "EL10 has no SOC max in its mask");
 
     /* ---- decode: serial, least-significant word first ---- */
     st = fresh();

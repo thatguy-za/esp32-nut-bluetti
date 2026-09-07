@@ -22,13 +22,13 @@ const bt_device_t BT_DEVICE_GENERIC = { "unknown", false, 0 };
  * registers do not need per-model scaling. From bluetti-bt-lib's
  * SwitchField / SelectField / UIntField definitions.
  *
- * SOC min/max (2022/2023): declared for the EL100V2 upstream; also polled
- * on the EL10, where it is unconfirmed — the control only appears if the
- * register actually answers.
+ * SOC min/max (2022/2023): declared for the EL100V2 upstream. The EL10
+ * has no such field in bluetti-bt-lib and returns 0 for both registers on
+ * real hardware, so it does not get the capability.
  */
 static const bt_device_t DEVICES[] = {
     { "EL100V2",     true,  C_FULL | BT_C_DISPLAY | BT_C_SOC_MIN | BT_C_SOC_MAX },
-    { "EL10",        true,  C_FULL | BT_C_DISPLAY | BT_C_SOC_MIN | BT_C_SOC_MAX },
+    { "EL10",        true,  C_FULL | BT_C_DISPLAY },
     { "AC70",        false, C_FULL },
     { "AC180",       false, C_FULL },
     { "EL30V2",      false, C_FULL },
