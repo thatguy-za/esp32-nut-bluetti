@@ -23,6 +23,7 @@
 #include "esp_timer.h"
 #include "esp_netif_sntp.h"
 #include "esp_ota_ops.h"
+#include "esp_app_desc.h"
 #include "driver/gpio.h"
 
 #include "app_config.h"
@@ -239,6 +240,7 @@ static void start_services(const app_config_t *cfg)
     nut_server_config_t nut_cfg = {
         .ups_name = cfg->ups_name,
         .ups_desc = "BLUETTI via ESP32",
+        .fw_version = esp_app_get_description()->version,
         .tcp_port = cfg->nut_port,
         .max_clients = 4,
     };

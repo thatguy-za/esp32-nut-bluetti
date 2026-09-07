@@ -52,6 +52,7 @@ int main(void)
 {
     nut_server_config_t cfg = {
         .ups_name = "bluetti", .ups_desc = "BLUETTI River 3 UPS (245Wh)",
+        .fw_version = "9.9.9",
         .tcp_port = 3493, .max_clients = 4,
     };
     if (nut_server_start(&cfg) != 0) { fprintf(stderr, "start failed\n"); return 1; }
@@ -68,7 +69,8 @@ int main(void)
     if (fd < 0) return 1;
 
     char b[2048];
-    OKF(strstr(cmd(fd, "VER", b, sizeof b), "esp32-nut-bluetti") != NULL, "VER -> %s", b);
+    OKF(strcmp(cmd(fd, "VER", b, sizeof b), "esp32-nut-bluetti 9.9.9\n") == 0,
+        "VER carries the firmware version -> %s", b);
     OKF(strcmp(cmd(fd, "NETVER", b, sizeof b), "1.3\n") == 0, "NETVER -> %s", b);
 
     cmd(fd, "LIST UPS", b, sizeof b);
@@ -80,6 +82,7 @@ int main(void)
         strstr(b, "VAR bluetti ups.status \"OL\"") &&
         strstr(b, "VAR bluetti ups.model \"River 3 UPS (245Wh)\"") &&
         strstr(b, "VAR bluetti battery.temperature \"33.0\"") &&
+        strstr(b, "VAR bluetti driver.version \"esp32-nut-bluetti 9.9.9\"") &&
         strstr(b, "END LIST VAR bluetti"), "LIST VAR has expected vars");
 
     OKF(strcmp(cmd(fd, "GET VAR bluetti battery.charge", b, sizeof b),

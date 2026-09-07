@@ -15,6 +15,7 @@ extern "C" {
 typedef struct {
     const char *ups_name;      /* e.g. "bluetti" */
     const char *ups_desc;      /* e.g. "BLUETTI Delta 2" */
+    const char *fw_version;    /* firmware version, for driver.version and VER */
     uint16_t    tcp_port;      /* usually 3493 */
     uint8_t     max_clients;   /* concurrent NUT connections */
 } nut_server_config_t;

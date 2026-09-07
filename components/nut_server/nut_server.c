@@ -30,7 +30,7 @@
 
 static const char *TAG = "nut_server";
 
-#define NUT_SERVER_VERSION "esp32-nut-bluetti 0.1.0"
+#define NUT_SERVER_NAME    "esp32-nut-bluetti"
 #define CLIENT_RX_BUF      512
 #define CLIENT_TX_BUF      1024
 #define CLIENT_TASK_STACK  5120
@@ -55,6 +55,7 @@ static struct {
     nut_server_config_t cfg;
     char                ups_name[32];
     char                ups_desc[64];
+    char                driver_version[48];   /* "esp32-nut-bluetti <fw>" */
     nut_var_t           vars[NUT_MAX_VARS];
     SemaphoreHandle_t   lock;
     volatile int        client_count;
@@ -413,7 +414,9 @@ static int handle_line(int fd, client_ctx_t *c, char *line)
         return send_str(fd, "ERR FEATURE-NOT-CONFIGURED\n");
     }
     if (strcasecmp(tok[0], "VER") == 0) {
-        return send_str(fd, NUT_SERVER_VERSION "\n");
+        char line[52];
+        snprintf(line, sizeof(line), "%s\n", s.driver_version);
+        return send_str(fd, line);
     }
     if (strcasecmp(tok[0], "NETVER") == 0 || strcasecmp(tok[0], "PROTVER") == 0) {
         return send_str(fd, "1.3\n");
@@ -567,6 +570,8 @@ int nut_server_start(const nut_server_config_t *config)
             sizeof(s.ups_name));
     strlcpy(s.ups_desc, config->ups_desc ? config->ups_desc : "BLUETTI via ESP32",
             sizeof(s.ups_desc));
+    snprintf(s.driver_version, sizeof(s.driver_version), "%s %s",
+             NUT_SERVER_NAME, config->fw_version ? config->fw_version : "?");
 
     s.lock = xSemaphoreCreateMutex();
     if (!s.lock) {
@@ -576,12 +581,14 @@ int nut_server_start(const nut_server_config_t *config)
     /* Seed the mandatory NUT variables so clients see a coherent UPS
      * even before the first BLUETTI poll completes. */
     nut_server_set_var("device.mfr", "BLUETTI");
-    nut_server_set_var("device.model", s.ups_desc);
+    /* Placeholder until the first poll reads the real model from the unit
+     * (main.c overwrites device.model / ups.model then). */
+    nut_server_set_var("device.model", "BLUETTI");
     nut_server_set_var("device.type", "ups");
-    nut_server_set_var("driver.name", "esp32-nut-bluetti");
-    nut_server_set_var("driver.version", NUT_SERVER_VERSION);
+    nut_server_set_var("driver.name", NUT_SERVER_NAME);
+    nut_server_set_var("driver.version", s.driver_version);
     nut_server_set_var("ups.mfr", "BLUETTI");
-    nut_server_set_var("ups.model", s.ups_desc);
+    nut_server_set_var("ups.model", "BLUETTI");
     nut_server_set_var("ups.status", "OFF");
     nut_server_set_var("battery.charge", "0");
 
