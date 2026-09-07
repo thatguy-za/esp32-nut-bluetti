@@ -822,7 +822,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
     int rt_s = nut_server_get_var("battery.runtime", runtime, sizeof(runtime))
                    ? atoi(runtime) : -1;
 
-    char out[1160];
+    char out[1200];
     snprintf(out, sizeof(out),
              "{\"wifi_mode\":\"%s\",\"network\":\"%s\",\"ip\":\"%s\","
              "\"addressing\":\"%s\",\"gateway\":\"%s\",\"dns\":\"%s\","
@@ -836,6 +836,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              "\"minutes_remaining\":%d,"
              "\"output_watts\":%d,\"input_watts\":%d,"
              "\"ac_in_watts\":%d,\"dc_in_watts\":%d,\"battery_watts\":%d,"
+             "\"soc_min\":%d,\"soc_max\":%d,"
              "\"led\":%s,\"led_gpio\":%d,\"configured\":%s}",
              ap ? "ap" : "station",
              ap ? P.cfg->ap_ssid : P.cfg->wifi_ssid, ip,
@@ -853,6 +854,8 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              P.cfg->log_level,
              ups_status, rt_s, mins,
              w_out, w_in, w_acin, w_dcin, w_batt,
+             have && st.soc_min >= 0 ? st.soc_min : -1,
+             have && st.soc_max >= 0 ? st.soc_max : -1,
              led_status_enabled() ? "true" : "false",
              led_status_gpio(),
              P.cfg->ble_addr[0] ? "true" : "false");

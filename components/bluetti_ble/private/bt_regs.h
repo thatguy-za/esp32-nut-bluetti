@@ -109,7 +109,7 @@ typedef struct {
     uint8_t  words;
 } bt_reg_read_t;
 
-#define BT_REG_PLAN_MAX 24
+#define BT_REG_PLAN_MAX 28
 
 /*
  * Fill `out` (capacity `max`) with the reads to poll for `dev` (NULL =

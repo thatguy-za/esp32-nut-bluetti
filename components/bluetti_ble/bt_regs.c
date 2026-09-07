@@ -94,12 +94,25 @@ size_t bt_regs_plan(const bt_device_t *dev, bool with_controls,
             out[n++] = EL10_EXTRA[i];
         }
     }
-    /* Control registers: only the ones this model has, and only when the
-     * user has enabled controls — so a monitoring-only setup keeps a
-     * short, fast sweep. Each is its own single-register read. */
+    /* The battery charge range (discharge floor / charge ceiling) is
+     * read-only status people want to see, so poll it whenever the model
+     * has it, regardless of the controls toggle. */
+    if (dev && (dev->controls & BT_C_SOC_MIN) && n < max) {
+        out[n++] = (bt_reg_read_t){ REG_CTRL_SOC_MIN, 1 };
+    }
+    if (dev && (dev->controls & BT_C_SOC_MAX) && n < max) {
+        out[n++] = (bt_reg_read_t){ REG_CTRL_SOC_MAX, 1 };
+    }
+    /* The rest of the control registers: only when the user has enabled
+     * controls — a monitoring-only setup keeps a short, fast sweep. Each
+     * is its own single-register read. */
     if (with_controls && dev && dev->controls) {
         for (size_t i = 0; i < BT_CONTROL_COUNT && n < max; i++) {
-            if (dev->controls & BT_CONTROLS[i].bit) {
+            uint16_t bit = BT_CONTROLS[i].bit;
+            if (bit == BT_C_SOC_MIN || bit == BT_C_SOC_MAX) {
+                continue;      /* already queued above */
+            }
+            if (dev->controls & bit) {
                 out[n++] = (bt_reg_read_t){ BT_CONTROLS[i].reg, 1 };
             }
         }

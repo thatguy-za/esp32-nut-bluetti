@@ -98,8 +98,21 @@ int main(void)
     OKF(gt, "generic plan reads register 110 to identify the model");
 
     size_t e0 = bt_regs_plan(EL10, false, plan, BT_REG_PLAN_MAX);
+    bool e0_soc_min = false, e0_soc_max = false;
+    for (size_t i = 0; i < e0; i++) {
+        if (plan[i].addr == REG_CTRL_SOC_MIN) e0_soc_min = true;
+        if (plan[i].addr == REG_CTRL_SOC_MAX) e0_soc_max = true;
+    }
+    OKF(e0_soc_min && e0_soc_max,
+        "SOC floor/ceiling are polled on the EL10 even with controls off");
     size_t e1 = bt_regs_plan(EL10, true,  plan, BT_REG_PLAN_MAX);
     OKF(e1 > e0, "controls add reads to the EL10 plan (%zu -> %zu)", e0, e1);
+    /* SOC min/max must appear once, not twice, when controls are on. */
+    int soc_max_count = 0;
+    for (size_t i = 0; i < e1; i++) {
+        if (plan[i].addr == REG_CTRL_SOC_MAX) soc_max_count++;
+    }
+    OKF(soc_max_count == 1, "SOC max is queued exactly once with controls on");
     OKF(e1 <= BT_REG_PLAN_MAX, "the EL10-with-controls plan fits the buffer");
     bool has_cm = false, has_soc = false;
     for (size_t i = 0; i < e1; i++) {

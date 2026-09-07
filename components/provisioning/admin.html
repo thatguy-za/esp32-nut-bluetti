@@ -138,6 +138,7 @@
         <div class="battbar"><div id="battFill" class="battfill"></div></div>
         <div id="battPct" class="battpct">—</div>
       </div>
+      <p class="hint" id="socRange" hidden style="margin:-.6rem 0 1rem"></p>
       <div class="flow">
         <div id="flowSources" class="flowsources"></div>
         <span class="flowarrow">&#8594;</span>
@@ -575,6 +576,17 @@ function renderStatus(j) {
   $('#battFill').style.width = pct + '%';
   $('#battFill').classList.toggle('low', pct > 0 && pct <= (j.low_pct || 20));
   $('#battPct').innerHTML = pct + '<span class="u">%</span>';
+
+  const lo = j.soc_min, hi = j.soc_max;
+  const hasLo = lo !== undefined && lo >= 0, hasHi = hi !== undefined && hi >= 0;
+  if (hasLo || hasHi) {
+    $('#socRange').hidden = false;
+    $('#socRange').textContent =
+      'Discharge floor ' + (hasLo ? lo + '%' : '—') +
+      ' · Charge limit ' + (hasHi ? hi + '%' : '—');
+  } else {
+    $('#socRange').hidden = true;
+  }
 
   let sources = '';
   if (hasSolar) sources += flowNode(SUN_SVG, 'Solar', solarW + ' W', 'amber');
