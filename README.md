@@ -1,8 +1,8 @@
 # esp32-nut-bluetti
 
-ESP32 firmware that connects to an **BLUETTI** portable power station over
-**Bluetooth LE**, reads its battery / AC-input / load state, and exposes it on the
-network as a UPS using the **NUT** (Network UPS Tools) TCP protocol.
+ESP32 firmware that connects to a **BLUETTI** portable power station over
+**Bluetooth LE**, reads its battery, input and AC/DC load state, and exposes it
+on the network as a UPS using the **NUT** (Network UPS Tools) TCP protocol.
 
 Point your NAS, server, or Raspberry Pi's `upsmon` at the ESP32's IP on port
 `3493` and it will see the BLUETTI as a normal UPS — including `OB`
@@ -16,68 +16,40 @@ themselves down cleanly on a mains failure.
  └───────────┘          └─────────┘                    └──────────────┘
 ```
 
-> ## 🚧 Work in progress — never run against an Elite 10
->
-> A fork of [`esp32-nut-ecoflow`](https://github.com/thatguy-za/esp32-nut-ecoflow),
-> retargeted to BLUETTI. Releases here start at v0.1.0; anything earlier belongs
-> to the EcoFlow project and lives in that repo. Everything vendor-independent — NUT server, Wi-Fi
-> setup, admin page, OTA, alerts — carries over and works.
->
-> The BLUETTI BLE layer is **fully implemented but unverified**: the key
-> exchange, the AES channel, Modbus polling and the Elite 10 register decode
-> are all written, and none of it has touched real hardware. Two caveats worth
-> knowing before you trust a reading:
->
-> - The Elite 10 register map matches
->   [bluetti-bt-lib#89](https://github.com/Patrick762/bluetti-bt-lib/pull/89),
->   merged upstream on 2026-08-29 — but nobody has run it against a unit either.
-> - Some NUT values are **inferred**, not measured — see below.
->
-> Probe mode is still there for when something does not line up.
+A fork of [`esp32-nut-ecoflow`](https://github.com/thatguy-za/esp32-nut-ecoflow),
+retargeted to BLUETTI. Everything vendor-independent — NUT server, Wi-Fi setup,
+admin page, OTA, alerts — carries over from that project.
 
 ## Supported models
 
-**BLUETTI Elite 10**, and the byte-identical **EL100V2**. These two share the
-same register list and the same scaling, so one decoder covers both.
-
-Any other **V2**-protocol BLUETTI unit that you point the bridge at will still
-connect and report the fields that are identical across every V2 model — **state
-of charge** and the **AC/DC power** readings. That is enough for a working UPS:
-`ups.status`, `battery.charge`, `ups.realpower`, `ups.load`, and the
-`OL`/`OB`/`LB` transitions that drive a shutdown. Model-specific fields
-(runtime, line voltage/current, the output switches) stay off, because
-[`bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib) scales several
-of them differently per model — an AC60 reports AC-input voltage as a plain
-integer where the Elite 10 divides by ten, an AC70's runtime register is in
-6-minute units where the Elite 10's is in minutes — and reproducing every
-model's quirks unverified would publish confident wrong numbers.
+| Tier | Models | State |
+| --- | --- | --- |
+| **Verified on hardware** | **BLUETTI Elite 10 Mini** (advertises as `EL10`, 128 Wh) | The BLE handshake, the encrypted Modbus polling, the telemetry decode and the NUT output are all confirmed working against a real unit. |
+| **Expected equivalent** | `EL100V2` | `bluetti-bt-lib` treats it as byte-identical to the Elite 10 — same register list, same scaling. Full telemetry + controls should work; not yet run against one. |
+| **Partial, untested** | `AC70` `AC180` `EL30V2` `AC60` `AC60P` `AC180P` `AC2P` `Handsfree 2` | Connect and report **state of charge**, **AC/DC input & output power**, and the **model name** — enough for a working UPS (`ups.status`, `battery.charge`, `ups.realpower`, `ups.load`, the `OL`/`OB`/`LB` transitions). The Elite-10-only extras (line voltage/current, native runtime) stay off because [`bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib) scales several of them differently per model. Device controls are recognised for these. |
+| **Not supported** | `EP600` `EP760` `EP800` `EP2000` | V2, but grid/PV systems — three-phase and PV-string registers that share none of the portable-unit addresses. |
+| **Not supported** | `AC200L` `AC200M` `AC200PL` `AC300` `AC500` `EB3A` `EP500` `EP500P` | The older **V1** protocol — a different framing this firmware does not speak. |
 
 The bridge reads the model from the unit itself (register 110); it is not
-something you configure.
+something you configure. An unrecognised V2 unit falls back to the partial set
+(charge + power).
 
-### Not supported
+`EL10` in the model table is the **Elite 10 Mini** (128 Wh) — the unit this was
+built against. If a full-size Elite 10 also advertises as `EL10`, its battery
+capacity will be wrong for the runtime estimate; override it on the NUT tab.
 
-| Models | Why |
-| --- | --- |
-| `EP600` `EP760` `EP800` `EP2000` | V2, but grid/PV systems — three-phase grid and PV-string registers, sharing none of the addresses the portable units use |
-| `AC200L` `AC200M` `AC200PL` `AC300` `AC500` `EB3A` `EP500` `EP500P` | The older **V1** protocol, a different framing this firmware does not speak |
+### Bringing up a new model
 
-### A caveat on all of it
-
-This firmware has not been run against any BLUETTI unit. What it *has* been
-checked against, field by field, is
-[`bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib) — the library
-behind the Home Assistant integration: the `2a2a` key exchange, the AES framing,
-the one-request-at-a-time polling, and the Elite 10 register decode and scaling
-all match it. That library's device table lists the Elite 10 as
-contributor-validated for charge and the four power readings, so the register
-map is not purely theoretical. A faithful port of working Python is still not a
-tested build.
+Everything but the Elite 10 Mini is a port of `bluetti-bt-lib`'s field
+definitions that has never touched that hardware — the register **addresses and
+scaling** are only as good as that library. If you have another unit and a
+reading looks wrong, set the log level to **Verbose** on the Status tab and send
+a poll capture: it hex-dumps every register read with its value, which is what's
+needed to confirm or fix the map for that model.
 
 If a unit turns out not to encrypt, the bridge notices no key exchange starting
-and drops to plain Modbus after ~15 seconds — the same fallback the reference
-library makes. If a poll wedges with the link still up, it drops the connection
-and reconnects, the way the reference recovers by reconnecting every cycle.
+and drops to plain Modbus after ~15 seconds. If a poll wedges with the link
+still up, it drops the connection and reconnects.
 
 ### How it talks
 
@@ -93,17 +65,19 @@ is needed. mbedtls provides all of it.
 | NUT variable | Source |
 | --- | --- |
 | `battery.charge` | register 102, measured |
-| `battery.runtime` | register 104, measured (0 treated as unknown; absent on some models) |
+| `battery.runtime` | the unit's own estimate (register 104) while discharging; otherwise derived from capacity × charge ÷ load, published on mains too |
+| `battery.capacity` | the model's spec value, or your NUT-tab override |
 | `ups.realpower` | AC + DC output power, measured |
-| `input.realpower.ac` | register 146, measured |
-| `input.voltage`, `input.current`, `output.voltage` | measured, on models that have them |
+| `output.realpower` / `output.realpower.dc` | AC / DC output power, measured (also as `outlet.1` / `outlet.2`) |
+| `input.realpower` / `input.realpower.ac` | total / mains input power, measured |
+| `input.voltage`, `input.current`, `output.voltage` | measured, Elite-10 family only |
 | `ups.status` `OL`/`OB` | **inferred** from AC input power and line voltage |
-| `CHRG` | **inferred** from mains present and charge below 100% |
-| `battery.voltage`, `battery.temperature` | **absent** — no register in the map |
+| `CHRG` | **inferred** from net battery flow (any source, including solar/DC) |
+| `battery.voltage`, `battery.temperature` | **absent** — no register in the map for any model |
 
 The absent fields are the honest gap: the upstream map does not include pack
-voltage or temperature for any of these models, so those NUT variables are
-simply not published rather than guessed.
+voltage or temperature, so those NUT variables are simply not published rather
+than guessed.
 
 ## Updating
 
@@ -191,22 +165,22 @@ All settings live in NVS (flash), so later boots go straight to serving NUT.
 
 In normal operation the device serves a page at `http://<device-ip>/`:
 
-- **Status** — the current state, with a live tail of the device log below it
-  (~12 KB ring buffer) so you can watch the BLE handshake without a serial
-  cable. Turn on `CONFIG_BLUETTI_BLE_TRACE` for the full dump.
-- **BLUETTI** — BLE target, probe mode, and the optional device-controls toggle
-  (see below).
+- **Status** — the live power flow (sources → battery → AC/DC load), battery
+  charge, the NUT variables, and a tail of the device log below it (~12 KB ring
+  buffer). The **Level** selector there is Off / Basic / **Verbose**; Verbose
+  keeps decoding but also hex-dumps every BLE frame and register value to the
+  log, for tracking down a wrong reading without a serial cable.
+- **Bluetti** — BLE target and the optional device-controls toggle (see below).
 - **NUT** — UPS name, TCP port, low-battery %.
 - **Wi-Fi** — switch between joining a network and running as an access point;
   hostname; and DHCP or a static IPv4 address (address, mask, gateway, DNS).
   Addressing is station-only — the access point always serves `192.168.4.1`.
 - **Alerts** — Telegram push notifications for power events.
 - **Maintenance** —
-  - **Firmware update**: upload a newer
-    `esp32-nut-bluetti-<version>.bin`; it's written to the spare OTA slot and
-    the device reboots, with bootloader rollback if the new build won't come up.
-    Gated by a typed `FLASH` confirmation. Disable with
-    `CONFIG_ENABLE_WEB_OTA=n`.
+  - **Firmware update**: from GitHub (pick a release, no download) or by
+    uploading a `esp32-nut-bluetti-<version>.bin`. Either way it's written to
+    the spare OTA slot and the device reboots, with bootloader rollback if the
+    new build won't come up. Disable with `CONFIG_ENABLE_WEB_OTA=n`.
   - **Restart** — reboot, keeping settings.
   - **Admin login** — change the username / password (the current password is
     required).
@@ -237,7 +211,7 @@ mode on its own after a failed connect.
 > else — nothing is exposed as a writable NUT variable, so a misconfigured
 > `upsmon` can never toggle the power station.
 
-Off by default. Tick "Allow controlling the unit" on the **BLUETTI** tab — it
+Off by default. Tick "Allow controlling the unit" on the **Bluetti** tab — it
 applies immediately, no reboot — and the controls the unit reports appear in
 that box.
 
@@ -249,7 +223,7 @@ that box.
 | AC / DC ECO timeout | 1–4 hours | " |
 | Charging mode | Standard / Silent / Turbo / Custom | + AC180P |
 | Screen timeout | 30 s / 1 min / 5 min / Never | EL10, EL100V2 |
-| Discharge floor (min SOC), Charge limit (max SOC) | 0–100 % | EL100V2 (and tried on the EL10) |
+| Discharge floor (min SOC), Charge limit (max SOC) | 0–100 % | EL100V2 only |
 
 Recognised controllable models: **EL10, EL100V2, AC70, AC180, EL30V2, AC180P,
 AC2P, AC60, AC60P, Handsfree 2.** The bridge reads which control registers the
@@ -262,17 +236,20 @@ differently per model. The *controls* have no such problem — a switch register
 is 0/1 and the mode registers use shared enums — so any V2 model that declares
 them can use them.
 
+The Elite 10 has **no SOC-range register** — registers 2022/2023 read 0 on the
+unit and `bluetti-bt-lib` has no such field for it. That control is off for the
+EL10; set the charge limit in the BLUETTI app. The EL100V2 does have it.
+
 A change is a Modbus *write single register* wrapped in the same AES layer as
 the reads, then confirmed by the next poll — so a switch takes a few seconds to
 settle. Turning **AC output off while the unit is on battery** asks for
 confirmation first, since it cuts power to whatever the unit is running.
 
-**None of this has been tested against hardware.** The write registers come from
-`bluetti-bt-lib`'s field definitions, but its own integration disables writes on
-encrypted units, so as far as is known nobody has confirmed a control write
-lands. The SOC-limit registers in particular are declared upstream only for the
-EL100V2 — the EL10 is polled speculatively. Leave controls off unless you are
-ready to verify with probe mode.
+**Control writes have not been verified against hardware.** The write registers
+come from `bluetti-bt-lib`'s field definitions, but its own integration disables
+writes on encrypted units, so nobody has confirmed a write lands. Reads are
+solid on the Elite 10 Mini; the writes are the untested half. Leave controls
+off unless you're ready to check the result with the Verbose log.
 
 ## Telegram alerts
 

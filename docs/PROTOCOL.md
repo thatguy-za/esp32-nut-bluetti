@@ -10,9 +10,13 @@ The register map is from
 on 2026-08-29 and verified line-by-line against what is implemented here: every
 address below, the 6-word swapped model string, SOC bounded 0-100, and register
 104 carrying **minutes** (upstream scales it by 1/60 to display hours). All of
-it is implemented here — `bt_crypto.c`, `bt_session.c`,
-`bt_regs.c` — and **none of it has been confirmed against an Elite 10**. If a
-reading looks wrong, probe mode (below) shows the raw frames.
+it is implemented here — `bt_crypto.c`, `bt_session.c`, `bt_regs.c`.
+
+The handshake, the encrypted Modbus polling and the Elite-10 decode are
+**confirmed working against a BLUETTI Elite 10 Mini** (advertises as `EL10`).
+Other models are ports of `bluetti-bt-lib`'s field definitions and have not
+touched that hardware — if a reading looks wrong, the **Verbose** log level
+(below) dumps every raw frame and register value.
 
 ## Transport
 
@@ -33,8 +37,7 @@ property and falls back to write-without-response otherwise. This firmware reads
 `ff02`'s properties during discovery and does the same. It matters because a unit
 that accepts only one write type on `ff02` drops the other silently — and the
 first thing written is the challenge reply, so getting it wrong stalls the
-handshake before it visibly starts. Probe mode's characteristic dump shows which
-properties `ff02` has (`W` = write, `w` = write-no-response).
+handshake before it visibly starts.
 
 ## Encryption (V2 devices, which includes the Elite series)
 
@@ -155,13 +158,15 @@ What the map does not give, and what was done about it:
 
 - **battery voltage** and **pack temperature** — no register listed, so those
   NUT variables are not published at all rather than guessed
-- **explicit charging flag** — inferred in `bt_regs.c` from mains present and
-  charge below 100%
+- **explicit charging flag** — inferred in `bt_regs.c` from the net battery
+  flow (any input source, including solar/DC) and charge below 100%
 - **mains presence** — inferred from AC input power (146) or line voltage
   (1314) being non-zero; voltage is checked as well because a plugged-in but
   idle unit reads 0 W
-- **design capacity** — the Elite 10 is 128 Wh, a constant
-- **continuous AC rating** — 200 W for this unit; a UI setting, not hardcoded
+- **design capacity** — no register; a per-model constant in `bt_regs.c`
+  (`bt_device_t.wh`; Elite 10 Mini 128 Wh), overridable on the NUT tab. Used
+  only for the `battery.runtime` estimate.
+- **continuous AC rating** — a UI setting, not hardcoded; backs `ups.load`
 
 ## Encryption is not assumed
 
@@ -242,20 +247,23 @@ they are not tied to the EL10 the way the *readings* are. `bt_regs.c` has a
 per-model capability mask (`bt_device_t.controls`): EL10, EL100V2, AC70,
 AC180, EL30V2 carry the full set; AC180P has output + charging mode +
 power lifting; AC2P/AC60/AC60P have output + power lifting; Handsfree 2
-has output only. 2022/2023 are declared upstream for the EL100V2 and
-polled speculatively on the EL10 — a control only appears if its register
-answers, so an absent one is harmless.
+has output only. Registers 2022/2023 (SOC range) are declared upstream
+for the EL100V2 only — on the Elite 10 Mini both read 0 on hardware, so
+the EL10 does not get that capability.
 
 `bluetti-bt-lib` models every one of these as a *readable* field but only
 `SwitchField`/`SelectField` as *writeable*, and its own HA integration
-disables all writes on encrypted units. So no control write here has been
-confirmed against hardware — the `0x06` frame is the obvious guess, not a
-captured one.
+disables all writes on encrypted units. Reads are confirmed on the Elite
+10 Mini; **no control write here has been confirmed against hardware** —
+the `0x06` frame is the obvious guess, not a captured one.
 
-## Probe mode
+## Verbose logging
 
-Enable it when a value looks wrong or the link never reaches `READY`.
-In the Logs tab:
+Set the log level to **Verbose** on the Status tab when a value looks
+wrong or the link never reaches `READY`. It keeps decoding normally and
+adds, to the Logs tail, a hex dump of every handshake stage and every
+Modbus frame plus a `reg <addr> = <value>` line per read. What to look
+for:
 
 - `ff01`/`ff02` present → the transport above is right.
 - Notifications starting `2a 2a` → the encrypted handshake, which
