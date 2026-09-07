@@ -64,6 +64,15 @@ struct bt_session {
     uint8_t         peer_pub[BT_P256_PUBLEN];
     bt_keypair_t   *kp;
 
+    /* Our pubkey reply, cached so a device re-request is answered with the
+     * exact same bytes. The device asks for our key several times before
+     * it confirms the session; regenerating the keypair each time would
+     * leave our ECDH using a private key whose public half the device
+     * never locked onto, and every secure frame would then decrypt to
+     * garbage. */
+    uint8_t         pubkey_reply[RX_MAX];
+    size_t          pubkey_reply_len;
+
     /* Encrypted-frame reassembly: notifications are MTU-sized fragments. */
     uint8_t         rx[RX_MAX];
     size_t          rx_len;
@@ -249,6 +258,17 @@ static void on_peer_pubkey(bt_session_t *s, const uint8_t *data, size_t len)
         session_fail(s, "pubkey length");
         return;
     }
+    /* The device re-sends its key until it is happy with the session. We
+     * must reply with the same public key every time — otherwise the key
+     * it finally accepts and the key our ECDH uses are different. Answer
+     * a repeat from the cache and do nothing else. */
+    if (s->kp && s->pubkey_reply_len &&
+        memcmp(s->peer_pub, data, BT_P256_PUBLEN) == 0) {
+        TRACE_MSG("device re-requested our key; resending the same reply");
+        s->tx(s->pubkey_reply, s->pubkey_reply_len, s->user);
+        return;
+    }
+
     TRACE("device pubkey in", data, BT_P256_PUBLEN);
     TRACE("device pubkey signature in", data + BT_P256_PUBLEN, BT_P256_SIGLEN);
     uint8_t signed_blob[BT_P256_PUBLEN + 16];
@@ -263,8 +283,10 @@ static void on_peer_pubkey(bt_session_t *s, const uint8_t *data, size_t len)
     TRACE_MSG("device pubkey signature verified (K2)");
     memcpy(s->peer_pub, data, BT_P256_PUBLEN);
 
-    bt_keypair_free(s->kp);
-    s->kp = bt_keypair_new();
+    /* One ephemeral keypair per session. */
+    if (!s->kp) {
+        s->kp = bt_keypair_new();
+    }
     if (!s->kp) {
         session_fail(s, "keypair");
         return;
@@ -300,15 +322,20 @@ static void on_peer_pubkey(bt_session_t *s, const uint8_t *data, size_t len)
         return;
     }
     TRACE("our pubkey reply, plaintext frame", frame, n);
-    /* This reply is itself encrypted under the handshake key. */
-    uint8_t wrapped[RX_MAX];
+    /* This reply is itself encrypted under the handshake key. Cache it so
+     * a re-request is answered byte-for-byte. */
     size_t wn = aes_wrap(s->unsecure_key, 16, s->unsecure_iv, frame, n,
-                         wrapped, sizeof(wrapped));
-    if (wn == 0 || s->tx(wrapped, wn, s->user) != 0) {
+                         s->pubkey_reply, sizeof(s->pubkey_reply));
+    if (wn == 0) {
+        session_fail(s, "pubkey reply wrap");
+        return;
+    }
+    s->pubkey_reply_len = wn;
+    if (s->tx(s->pubkey_reply, wn, s->user) != 0) {
         session_fail(s, "pubkey reply write");
         return;
     }
-    TRACE("our pubkey reply, wrapped out", wrapped, wn);
+    TRACE("our pubkey reply, wrapped out", s->pubkey_reply, wn);
     s->state = BT_SESS_PUBKEY;
     ESP_LOGI(TAG, "public key sent");
 }
@@ -627,6 +654,7 @@ void bt_session_reset(bt_session_t *s)
     s->have_unsecure = false;
     s->have_secure = false;
     s->rx_len = 0;
+    s->pubkey_reply_len = 0;
     memset(s->secure_key, 0, sizeof(s->secure_key));
     memset(s->unsecure_key, 0, sizeof(s->unsecure_key));
 }

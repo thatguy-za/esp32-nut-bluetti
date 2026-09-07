@@ -62,9 +62,17 @@ Handshake frame, before a session key exists:
 Crypto used:
 
 - **ECDH on secp256r1 (P-256)** for the session key
-- **AES-128-CBC** for the payload
+- **AES-CBC** for the payload: AES-128 during the handshake (the 16-byte
+  `LOCAL_AES_KEY`), AES-256 afterwards (the 32-byte raw ECDH X coordinate)
 - **ECDSA** signature verification on the device's messages
 - SHA-256 for the digests
+
+The device asks for our public key several times before it confirms the
+session (`PUBKEY_ACCEPTED`). We must answer every request with the **same**
+public key: it settles its half of the ECDH on one of them, and if that is
+not the key our side kept, the shared secret differs and every later frame
+decrypts to noise. So the ephemeral keypair is generated once per session
+and the reply is cached and re-sent verbatim.
 
 Critically, the keys are **fixed constants baked into the app**, not per-device
 secrets — so no Bluetooth HCI capture is needed:
