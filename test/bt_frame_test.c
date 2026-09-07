@@ -168,6 +168,32 @@ int main(void)
     OKF(FRAME_LEN(exc) == 5, "an exception reply frames as 5 bytes");
     OKF(FRAME_LEN(full) == 9, "a read reply still frames by byte count");
 
+    /* Encrypted-path routing, mirroring bt_session_feed's crypto branch.
+     * A notification starting 2a2a is a plaintext key-exchange frame for
+     * the whole pre-secure handshake -- the device sends "challenge
+     * accepted" in the clear *after* have_unsecure is set. It must never
+     * reach the reassembler: framed_len() would read 0x2A2A as a ~10 KB
+     * length prefix and stall until the buffer overflows. */
+    #define IS_KEX(buf, len, have_secure) \
+        (!(have_secure) && (len) >= 2 && (buf)[0] == 0x2A && (buf)[1] == 0x2A)
+    uint8_t kex_hi[2] = { 0x2A, 0x2A };
+    uint8_t enc_hdr[2] = { 0x00, 0x10 };                 /* real length prefix */
+    OKF(IS_KEX(kex_hi, sizeof(kex_hi), false),
+        "2a2a frame routes to key exchange before have_unsecure");
+    OKF(IS_KEX(kex_hi, sizeof(kex_hi), false),
+        "2a2a frame still routes to key exchange after have_unsecure");
+    OKF(!IS_KEX(kex_hi, sizeof(kex_hi), true),
+        "once the secure session is up, nothing raw is treated as kex");
+    OKF(!IS_KEX(enc_hdr, sizeof(enc_hdr), false),
+        "an encrypted frame's length prefix is not mistaken for kex magic");
+    {
+        size_t hdr = 2;                                  /* unsecure header */
+        size_t plain_len = ((size_t)0x2A << 8) | 0x2A;
+        size_t padded = ((plain_len + 15) / 16) * 16;
+        OKF(hdr + padded > 512,
+            "treating 2a2a as a length prefix overruns the 512-byte buffer");
+    }
+
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;
 }

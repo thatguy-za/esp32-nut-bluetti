@@ -8,6 +8,24 @@
 
 static const char *TAG = "bt_session";
 
+/*
+ * Handshake trace (Kconfig: BLUETTI_BLE_TRACE). Off by default. When on,
+ * every handshake stage and every frame in/out is hex-dumped at INFO —
+ * challenge, derived IV/keys, both public keys, the shared secret, the
+ * wrapped replies, and each decoded inner packet. It prints key
+ * material, so it is only for bringing the link up on new hardware.
+ */
+#if CONFIG_BLUETTI_BLE_TRACE
+#define TRACE(label, buf, len) do {                                       \
+        ESP_LOGI(TAG, "trace: %s (%u B)", (label), (unsigned)(len));      \
+        ESP_LOG_BUFFER_HEXDUMP(TAG, (buf), (len), ESP_LOG_INFO);          \
+    } while (0)
+#define TRACE_MSG(...) ESP_LOGI(TAG, "trace: " __VA_ARGS__)
+#else
+#define TRACE(label, buf, len) do { (void)(label); (void)(buf); (void)(len); } while (0)
+#define TRACE_MSG(...) do { } while (0)
+#endif
+
 /* The static AES key the handshake starts from, from the vendor app. */
 static const uint8_t LOCAL_AES_KEY[16] = {
     0x45,0x9F,0xC5,0x35,0x80,0x89,0x41,0xF1,0x70,0x91,0xE0,0x99,0x3E,0xE3,0xE9,0x3D,
@@ -199,12 +217,15 @@ static void on_challenge(bt_session_t *s, const uint8_t *data, size_t len)
         session_fail(s, "challenge length");
         return;
     }
+    TRACE("challenge in", data, len);
     uint8_t rev[4] = { data[3], data[2], data[1], data[0] };
     bt_md5(rev, sizeof(rev), s->unsecure_iv);
     for (int i = 0; i < 16; i++) {
         s->unsecure_key[i] = s->unsecure_iv[i] ^ LOCAL_AES_KEY[i];
     }
     s->have_unsecure = true;
+    TRACE("unsecure IV = MD5(challenge reversed)", s->unsecure_iv, 16);
+    TRACE("unsecure key = IV ^ LOCAL_AES_KEY", s->unsecure_key, 16);
 
     uint8_t body[6] = { 0x02, 0x04 };
     memcpy(body + 2, s->unsecure_iv + 8, 4);
@@ -215,6 +236,7 @@ static void on_challenge(bt_session_t *s, const uint8_t *data, size_t len)
         session_fail(s, "challenge reply write");
         return;
     }
+    TRACE("challenge reply out", frame, n);
     s->state = BT_SESS_CHALLENGE;
     ESP_LOGI(TAG, "challenge answered");
 }
@@ -227,6 +249,8 @@ static void on_peer_pubkey(bt_session_t *s, const uint8_t *data, size_t len)
         session_fail(s, "pubkey length");
         return;
     }
+    TRACE("device pubkey in", data, BT_P256_PUBLEN);
+    TRACE("device pubkey signature in", data + BT_P256_PUBLEN, BT_P256_SIGLEN);
     uint8_t signed_blob[BT_P256_PUBLEN + 16];
     memcpy(signed_blob, data, BT_P256_PUBLEN);
     memcpy(signed_blob + BT_P256_PUBLEN, s->unsecure_iv, 16);
@@ -236,6 +260,7 @@ static void on_peer_pubkey(bt_session_t *s, const uint8_t *data, size_t len)
         session_fail(s, "peer key signature");
         return;
     }
+    TRACE_MSG("device pubkey signature verified (K2)");
     memcpy(s->peer_pub, data, BT_P256_PUBLEN);
 
     bt_keypair_free(s->kp);
@@ -249,6 +274,7 @@ static void on_peer_pubkey(bt_session_t *s, const uint8_t *data, size_t len)
         session_fail(s, "public key export");
         return;
     }
+    TRACE("our pubkey", my_pub, BT_P256_PUBLEN);
 
     /* Sign our key the same way, with L1. */
     uint8_t to_sign[BT_P256_PUBLEN + 16];
@@ -273,6 +299,7 @@ static void on_peer_pubkey(bt_session_t *s, const uint8_t *data, size_t len)
         session_fail(s, "frame build");
         return;
     }
+    TRACE("our pubkey reply, plaintext frame", frame, n);
     /* This reply is itself encrypted under the handshake key. */
     uint8_t wrapped[RX_MAX];
     size_t wn = aes_wrap(s->unsecure_key, 16, s->unsecure_iv, frame, n,
@@ -281,12 +308,14 @@ static void on_peer_pubkey(bt_session_t *s, const uint8_t *data, size_t len)
         session_fail(s, "pubkey reply write");
         return;
     }
+    TRACE("our pubkey reply, wrapped out", wrapped, wn);
     s->state = BT_SESS_PUBKEY;
     ESP_LOGI(TAG, "public key sent");
 }
 
 static void on_pubkey_accepted(bt_session_t *s, const uint8_t *data, size_t len)
 {
+    TRACE("pubkey-accepted in", data, len);
     if (len != 1 || data[0] != 0) {
         session_fail(s, "key rejected");
         return;
@@ -297,6 +326,7 @@ static void on_pubkey_accepted(bt_session_t *s, const uint8_t *data, size_t len)
     }
     s->have_secure = true;
     s->state = BT_SESS_READY;
+    TRACE("secure key = ECDH(our priv, device pub)", s->secure_key, 32);
     ESP_LOGW(TAG, "secure session established");
 }
 
@@ -320,6 +350,7 @@ static void handle_kex(bt_session_t *s, const uint8_t *frame, size_t len)
     const uint8_t *data = body + 2;      /* body[1] is a length/flag byte */
     size_t data_len = body_len - 2;
 
+    TRACE_MSG("kex frame type=%u len=%u", type, (unsigned)data_len);
     switch (type) {
     case MSG_CHALLENGE:          on_challenge(s, data, data_len); break;
     case MSG_CHALLENGE_ACCEPTED: ESP_LOGI(TAG, "challenge accepted"); break;
@@ -410,6 +441,8 @@ int bt_session_read_regs(bt_session_t *s, uint16_t addr, uint16_t count)
     s->pending_count = count;
     s->rx_len = 0;           /* a fresh response is coming */
 
+    TRACE_MSG("modbus read reg %u x%u", addr, count);
+    TRACE("modbus read, plaintext cmd", cmd, sizeof(cmd));
     if (s->plain) {
         return s->tx(cmd, sizeof(cmd), s->user);
     }
@@ -420,6 +453,7 @@ int bt_session_read_regs(bt_session_t *s, uint16_t addr, uint16_t count)
     if (n == 0) {
         return -1;
     }
+    TRACE("modbus read, wrapped out", wrapped, n);
     return s->tx(wrapped, n, s->user);
 }
 
@@ -442,6 +476,7 @@ int bt_session_write_reg(bt_session_t *s, uint16_t addr, uint16_t value)
     s->pending_addr = addr;
     s->rx_len = 0;
 
+    TRACE("modbus write, plaintext cmd", cmd, sizeof(cmd));
     if (s->plain) {
         return s->tx(cmd, sizeof(cmd), s->user);
     }
@@ -451,6 +486,7 @@ int bt_session_write_reg(bt_session_t *s, uint16_t addr, uint16_t value)
     if (n == 0) {
         return -1;
     }
+    TRACE("modbus write, wrapped out", wrapped, n);
     ESP_LOGW(TAG, "control write: reg %u <- %u", addr, value);
     return s->tx(wrapped, n, s->user);
 }
@@ -461,6 +497,7 @@ int bt_session_write_reg(bt_session_t *s, uint16_t addr, uint16_t value)
 
 void bt_session_feed(bt_session_t *s, const uint8_t *data, size_t len)
 {
+    TRACE("notification in", data, len);
     /*
      * Plain mode: no crypto, the notifications are raw Modbus. Buffer
      * fragments until a whole response is in hand — [id][fn][bytecount]
@@ -494,9 +531,20 @@ void bt_session_feed(bt_session_t *s, const uint8_t *data, size_t len)
         return;
     }
 
-    /* Plaintext key-exchange frames arrive whole and unencrypted. */
-    if (len >= 2 && data[0] == KEX_MAGIC0 && data[1] == KEX_MAGIC1 &&
-        !s->have_unsecure) {
+    /*
+     * Plaintext key-exchange frames arrive whole and unencrypted, marked
+     * by the 0x2A2A magic. They keep coming after have_unsecure is set —
+     * the device sends a plaintext "challenge accepted" right after we
+     * answer the challenge — so gate on have_secure, not have_unsecure.
+     * A genuine encrypted frame can't be mistaken for one: its first two
+     * bytes are a length prefix, and 0x2A2A (10794) is far past both the
+     * BLE MTU and this buffer, so anything starting 0x2A2A before the
+     * secure session is up is a key-exchange frame. Feeding it to the
+     * reassembler instead would make framed_len() wait forever for a
+     * ~10 KB frame and eventually overflow.
+     */
+    if (!s->have_secure && len >= 2 &&
+        data[0] == KEX_MAGIC0 && data[1] == KEX_MAGIC1) {
         handle_kex(s, data, len);
         return;
     }
@@ -529,6 +577,7 @@ void bt_session_feed(bt_session_t *s, const uint8_t *data, size_t len)
         memmove(s->rx, s->rx + need, s->rx_len - need);
         s->rx_len -= need;
 
+        TRACE("decrypted inner frame", plain, plain_len);
         if (plain_len >= 2 && plain[0] == KEX_MAGIC0 && plain[1] == KEX_MAGIC1) {
             handle_kex(s, plain, plain_len);
         } else {
