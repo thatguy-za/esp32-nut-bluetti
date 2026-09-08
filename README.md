@@ -73,6 +73,24 @@ MONITOR bluetti@<device-ip> 1 upsmon <password> slave
 Home Assistant, Synology, TrueNAS and anything else that speaks NUT work the
 same way — point them at the bridge's IP.
 
+<img src="screenshots/home-assistant.png" alt="The bridge as a UPS device in Home Assistant, showing charge, load, input and output power, runtime and NUT status" width="620">
+
+*Home Assistant's built-in NUT integration, pointed at the bridge — no custom
+component needed.*
+
+## The web UI
+
+Served from the ESP32 itself. **Status** shows the live power flow — where the
+watts are coming from, where they're going, and what the battery is doing —
+plus the NUT variables your clients see:
+
+<img src="screenshots/status.png" alt="Status tab: on-line banner, 68% battery bar, power flow from mains through the battery to AC and DC loads, and the NUT and network variable panels" width="820">
+
+**Maintenance** handles updates over the air — pick a GitHub release, or upload
+a `.bin` when the bridge has no route out:
+
+<img src="screenshots/maintenance.png" alt="Maintenance tab: update from GitHub, update from a file, and status LED settings" width="820">
+
 ## What you get
 
 - **NUT server** — upsd-compatible, read-only, with an optional login gating
