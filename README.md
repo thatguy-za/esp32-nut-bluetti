@@ -1,467 +1,116 @@
 # esp32-nut-bluetti
 
-ESP32 firmware that connects to a **BLUETTI** portable power station over
-**Bluetooth LE**, reads its battery, input and AC/DC load state, and exposes it
-on the network as a UPS using the **NUT** (Network UPS Tools) TCP protocol.
+Turns a **Bluetti** portable power station into a **NUT** (Network UPS Tools)
+UPS on your network, using an ESP32 as a Bluetooth-to-Wi-Fi bridge.
 
-Point your NAS, server, or Raspberry Pi's `upsmon` at the ESP32's IP on port
-`3493` and it will see the BLUETTI as a normal UPS — including `OB`
-(on-battery) / `OL` (online) status and battery charge, so hosts can shut
-themselves down cleanly on a mains failure.
+Point your NAS, server or Raspberry Pi's `upsmon` at the ESP32 on port `3493`
+and it sees the Bluetti as a normal UPS — on-battery / on-line status, charge,
+runtime — so hosts shut down cleanly when the mains fails.
 
 ```
  ┌───────────┐   BLE    ┌─────────┐   TCP/3493 (NUT)   ┌──────────────┐
- │  BLUETTI  │ ───────► │  ESP32  │ ─────────────────► │ upsmon /     │
+ │  Bluetti  │ ───────► │  ESP32  │ ─────────────────► │ upsmon /     │
  │  station  │ ◄─────── │         │ ◄───────────────── │ upsc clients │
  └───────────┘          └─────────┘                    └──────────────┘
 ```
 
-A fork of [`esp32-nut-ecoflow`](https://github.com/thatguy-za/esp32-nut-ecoflow),
-retargeted to BLUETTI. Everything vendor-independent — NUT server, Wi-Fi setup,
-admin page, OTA, alerts — carries over from that project.
+No cloud, no account, no pairing — the BLE handshake uses fixed keys from the
+vendor app. Everything is configured from a web page on the device.
 
 ## Supported models
 
-| Tier | Models | State |
-| --- | --- | --- |
-| **Verified on hardware** | **BLUETTI Elite 10 Mini** (advertises as `EL10`, 128 Wh) | The BLE handshake, the encrypted Modbus polling, the telemetry decode and the NUT output are all confirmed working against a real unit. |
-| **Expected equivalent** | `EL100V2` | `bluetti-bt-lib` treats it as byte-identical to the Elite 10 — same register list, same scaling. Full telemetry + controls should work; not yet run against one. |
-| **Partial, untested** | `AC70` `AC180` `EL30V2` `AC60` `AC60P` `AC180P` `AC2P` `Handsfree 2` | Connect and report **state of charge**, **AC/DC input & output power**, and the **model name** — enough for a working UPS (`ups.status`, `battery.charge`, `ups.realpower`, `ups.load`, the `OL`/`OB`/`LB` transitions). The Elite-10-only extras (line voltage/current, native runtime) stay off because [`bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib) scales several of them differently per model. Device controls are recognised for these. |
-| **Not supported** | `EP600` `EP760` `EP800` `EP2000` | V2, but grid/PV systems — three-phase and PV-string registers that share none of the portable-unit addresses. |
-| **Not supported** | `AC200L` `AC200M` `AC200PL` `AC300` `AC500` `EB3A` `EP500` `EP500P` | The older **V1** protocol — a different framing this firmware does not speak. |
-
-The bridge reads the model from the unit itself (register 110); it is not
-something you configure. An unrecognised V2 unit falls back to the partial set
-(charge + power).
-
-`EL10` in the model table is the **Elite 10 Mini** (128 Wh) — the unit this was
-built against. If a full-size Elite 10 also advertises as `EL10`, its battery
-capacity will be wrong for the runtime estimate; override it on the NUT tab.
-
-### Bringing up a new model
-
-Everything but the Elite 10 Mini is a port of `bluetti-bt-lib`'s field
-definitions that has never touched that hardware — the register **addresses and
-scaling** are only as good as that library. If you have another unit and a
-reading looks wrong, set the log level to **Verbose** on the Status tab and send
-a poll capture: it hex-dumps every register read with its value, which is what's
-needed to confirm or fix the map for that model.
-
-If a unit turns out not to encrypt, the bridge notices no key exchange starting
-and drops to plain Modbus after ~15 seconds. If a poll wedges with the link
-still up, it drops the connection and reconnects.
-
-### How it talks
-
-Full detail in [`docs/PROTOCOL.md`](docs/PROTOCOL.md). In short: a `ff00`
-service with `ff01` notify / `ff02` write, carrying Modbus RTU. Newer firmware
-opens with an encrypted handshake — ECDH on secp256r1, AES-CBC, ECDSA-signed
-keys — which is implemented here. The signing keys are fixed constants from
-the vendor app rather than per-device secrets, so no pairing or packet capture
-is needed. mbedtls provides all of it.
-
-### What is measured and what is inferred
-
-| NUT variable | Source |
+| | Models |
 | --- | --- |
-| `battery.charge` | register 102, measured |
-| `battery.runtime` | the unit's own estimate (register 104) while discharging; otherwise derived from capacity × charge ÷ load, published on mains too |
-| `battery.capacity` | the model's spec value, or your NUT-tab override |
-| `ups.realpower` | AC + DC output power, measured |
-| `output.realpower` / `output.realpower.dc` | AC / DC output power, measured (also as `outlet.1` / `outlet.2`) |
-| `input.realpower` / `input.realpower.ac` | total / mains input power, measured |
-| `input.voltage`, `input.current`, `output.voltage` | measured, Elite-10 family only |
-| `ups.status` `OL`/`OB` | **inferred** from AC input power and line voltage |
-| `CHRG` | **inferred** from net battery flow (any source, including solar/DC) |
-| `battery.voltage`, `battery.temperature` | **absent** — no register in the map for any model |
+| ✅ **Verified on hardware** | **Elite 10 Mini** (`EL10`) — full telemetry, confirmed against a real unit |
+| 🟡 **Should be identical** | `EL100V2` — same register map upstream, untested |
+| 🟡 **Partial, untested** | `AC70` `AC180` `EL30V2` `AC60` `AC60P` `AC180P` `AC2P` `Handsfree 2` — charge + AC/DC power + controls, enough for a working UPS. Line voltage and native runtime stay off (per-model scaling differs). |
+| ❌ **Not supported** | `EP600` `EP760` `EP800` `EP2000` (grid/PV systems) · `AC200M` `AC300` `AC500` `EB3A` `EP500` and other **V1**-protocol units |
 
-The absent fields are the honest gap: the upstream map does not include pack
-voltage or temperature, so those NUT variables are simply not published rather
-than guessed.
+The model is read from the unit (register 110), not configured. An unrecognised
+V2 unit falls back to charge + power.
 
-## Updating
-
-Once it is on the network, the **Maintenance** tab checks GitHub for releases,
-lists them, and installs the one you pick — no file to download. Older releases
-are listed too, since going back is the right move when a new build misbehaves.
-
-The image is written to the spare OTA slot; if it will not boot, the bootloader
-rolls back to the running one. Uploading a `.bin` by hand still works and is
-the fallback when the bridge has no route to the internet.
-
-> The downloaded image is **not signed**. Trust rests on TLS and on GitHub:
-> anyone who can intercept that connection or control the repository controls
-> what gets installed. Secure boot is what fixes that properly, and this
-> project does not enable it.
+Everything but the Elite 10 Mini is a port of
+[`bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib)'s field
+definitions that has never run on that hardware. **Got another model?** Set the
+log level to **Verbose** and send a poll capture — it dumps every register and
+its value, which is what's needed to confirm the map.
 
 ## Flash it
 
-Download `esp32-nut-bluetti-<version>-factory.bin` from the
-[latest release](https://github.com/thatguy-za/esp32-nut-bluetti/releases), then
-open **[web.esphome.io](https://web.esphome.io)** in Chrome, Edge, or Opera on a
-desktop, plug in an **ESP32-S3 (≥4 MB flash)**, hit *Connect* and choose that
-file. It flashes at offset `0`.
+1. Download `esp32-nut-bluetti-<version>-factory.bin` from the
+   [latest release](https://github.com/thatguy-za/esp32-nut-bluetti/releases).
+2. Open **[web.esphome.io](https://web.esphome.io)** in Chrome, Edge or Opera,
+   plug in an **ESP32-S3 (≥4 MB flash)**, *Connect*, and pick that file.
 
-Only this first flash needs a cable. After that, updates go over the network from
-the [admin page](#admin-page). Offline / Linux / `esptool` instructions are in
-[`dist/FLASHING.md`](dist/FLASHING.md).
+Only the first flash needs a cable — after that, updates come from the admin
+page. Offline / Linux / `esptool` steps: [`dist/FLASHING.md`](dist/FLASHING.md).
 
-You also need a Wi-Fi network the monitoring hosts can reach, and — on most dev
-boards — the BOOT button on GPIO0 for the config wipe.
+## Set it up
 
-**Status LED.** If the board has an addressable WS2812 LED, it shows red while
-the bridge is starting and green once it is connected to the BLUETTI unit over
-Bluetooth. The **Maintenance** tab has an on/off toggle, a **data GPIO** field,
-and a **Test** button that flashes red / green / blue on that pin — so you can
-find which GPIO your board wired the LED to without a rebuild. Common values are
-48, 38 and 21; `-1` turns it off. `STATUS_LED_GPIO` sets the boot default. A
-board with a plain single-colour LED, or none, stays dark.
+1. **Join the setup Wi-Fi.** The device brings up an open AP,
+   `esp-nut-bluetti-XXXX`. It should open the setup page automatically;
+   otherwise browse to `http://192.168.4.1/`. Give it your Wi-Fi, then set an
+   admin username and password.
+2. **Pick your unit.** On the bridge's page, **Bluetti** tab → *Scan for
+   devices* → choose yours.
+3. **Set the NUT bits.** UPS name, low-battery %, continuous AC rating. Save.
 
-## Setting it up
+Full walkthrough: [`docs/CONFIGURING.md`](docs/CONFIGURING.md).
 
-Setup is two stages: get the bridge on a network, then point it at your BLUETTI.
-
-### 1. Network (captive portal)
-
-On first boot (or after a config wipe) the device brings up an **open Wi-Fi
-access point** named `esp-nut-bluetti-XXXX` (`XXXX` = last 2 bytes of the MAC).
-Join it from a phone or laptop — a captive-portal DNS server redirects
-everything to the setup page, so it should pop up automatically; if not, browse
-to `http://192.168.4.1/`.
-
-**Step 1 — network.** Pick one:
-
-- **Join my Wi-Fi** (default) — choose your network from the scanned list and
-  enter the password. On success the page shows the bridge's new LAN IP as a
-  link; reconnect your phone/laptop to your normal Wi-Fi and follow it. The
-  setup AP shuts down.
-- **Run its own AP** — name the network and set a password (8+ chars, or leave
-  blank for open). The bridge reboots hosting that network at
-  `http://192.168.4.1/`. Your NUT clients have to join it too.
-
-**Step 2 — admin login.** Choose the username (default `admin`) and a password
-for the bridge's own page. Any password is accepted, but you have to set one —
-the admin page is what configures the BLUETTI unit, reads the logs and flashes
-firmware.
-
-### 2. BLUETTI + NUT (admin page)
-
-Open the bridge's page and use the **BLUETTI** tab:
-
-- **Scan for devices** and pick your unit — the list shows the Bluetooth name
-  with the MAC in brackets, e.g. `EF-R3xxxx [AA:BB:CC:DD:EE:FF]`; likely BLUETTI
-  units are marked ★. You can also type the address by hand.
-- **BLUETTI account** — the River 3 only grants Bluetooth access to its own
-  account, so the bridge needs your BLUETTI **account user id**. Enter your
-  BLUETTI email + password (used once, over HTTPS, to fetch the id — the
-  password is not stored) or paste the user id directly.
-
-The **NUT** tab sets the UPS name, TCP port and low-battery threshold. Saving
-either reboots the bridge.
-
-All settings live in NVS (flash), so later boots go straight to serving NUT.
-
-### Admin page
-
-In normal operation the device serves a page at `http://<device-ip>/`:
-
-- **Status** — the live power flow (sources → battery → AC/DC load), battery
-  charge, the NUT variables, and a tail of the device log below it (~12 KB ring
-  buffer). The **Level** selector there is Off / Basic / **Verbose**; Verbose
-  keeps decoding but also hex-dumps every BLE frame and register value to the
-  log, for tracking down a wrong reading without a serial cable.
-- **Bluetti** — BLE target and the optional device-controls toggle (see below).
-- **NUT** — UPS name, TCP port, low-battery %.
-- **Wi-Fi** — switch between joining a network and running as an access point;
-  hostname; and DHCP or a static IPv4 address (address, mask, gateway, DNS).
-  Addressing is station-only — the access point always serves `192.168.4.1`.
-- **Alerts** — Telegram push notifications for power events.
-- **Maintenance** —
-  - **Firmware update**: from GitHub (pick a release, no download) or by
-    uploading a `esp32-nut-bluetti-<version>.bin`. Either way it's written to
-    the spare OTA slot and the device reboots, with bootloader rollback if the
-    new build won't come up. Disable with `CONFIG_ENABLE_WEB_OTA=n`.
-  - **Restart** — reboot, keeping settings.
-  - **Admin login** — change the username / password (the current password is
-    required).
-  - **Reset** — forget everything and reboot into the setup AP.
-
-The admin page is protected by the username and password you set during setup.
-Signing in is a normal login form; the browser then carries a session cookie,
-which expires after eight hours idle and is cleared by a reboot. There is **no
-TLS**, so the password crosses the network in clear on the way in and the cookie
-in clear thereafter — this keeps other people on the LAN out of the admin page,
-it does not defend against someone capturing your traffic. Keep the
-bridge on a trusted network.
-
-### Reset
-
-- **BOOT button:** hold GPIO0 to GND while resetting, keep it held ~3 s. The
-  stored config is wiped and the device reboots into setup mode. (Pin and hold
-  time are configurable in `menuconfig`.) This is also the way back in if you
-  forget the admin password.
-- **Web:** the Maintenance tab of the admin page.
-
-If stored Wi-Fi credentials ever stop working, the device falls back to setup
-mode on its own after a failed connect.
-
-### Device controls (web UI only)
-
-> **NUT stays read-only.** These controls live on the admin page and nowhere
-> else — nothing is exposed as a writable NUT variable, so a misconfigured
-> `upsmon` can never toggle the power station.
-
-Off by default. Tick "Allow controlling the unit" on the **Bluetti** tab — it
-applies immediately, no reboot — and the controls the unit reports appear in
-that box.
-
-| Control | Values | Models |
-| --- | --- | --- |
-| AC output, DC output | on / off | all controllable models |
-| Power lifting | on / off | most models |
-| AC ECO mode, DC ECO mode | on / off | EL10, EL100V2, AC70, AC180, EL30V2 |
-| AC / DC ECO timeout | 1–4 hours | " |
-| Charging mode | Standard / Silent / Turbo / Custom | + AC180P |
-| Screen timeout | 30 s / 1 min / 5 min / Never | EL10, EL100V2 |
-| Discharge floor (min SOC), Charge limit (max SOC) | 0–100 % | EL100V2 only |
-
-Recognised controllable models: **EL10, EL100V2, AC70, AC180, EL30V2, AC180P,
-AC2P, AC60, AC60P, Handsfree 2.** The bridge reads which control registers the
-unit actually answers and shows only those, so on a model where a control turns
-out not to exist it simply never appears.
-
-**Why not the Elite 10 only?** The *telemetry* decode is restricted to the EL10
-family because `bluetti-bt-lib` scales a few readings (runtime, line voltage)
-differently per model. The *controls* have no such problem — a switch register
-is 0/1 and the mode registers use shared enums — so any V2 model that declares
-them can use them.
-
-The Elite 10 has **no SOC-range register** — registers 2022/2023 read 0 on the
-unit and `bluetti-bt-lib` has no such field for it. That control is off for the
-EL10; set the charge limit in the BLUETTI app. The EL100V2 does have it.
-
-A change is a Modbus *write single register* wrapped in the same AES layer as
-the reads, then confirmed by the next poll — so a switch takes a few seconds to
-settle. Turning **AC output off while the unit is on battery** asks for
-confirmation first, since it cuts power to whatever the unit is running.
-
-**Control writes have not been verified against hardware.** The write registers
-come from `bluetti-bt-lib`'s field definitions, but its own integration disables
-writes on encrypted units, so nobody has confirmed a write lands. Reads are
-solid on the Elite 10 Mini; the writes are the untested half. Leave controls
-off unless you're ready to check the result with the Verbose log.
-
-## Telegram alerts
-
-The **Alerts** tab sends a Telegram message when something happens to the power:
-
-| Event | Default |
-| --- | --- |
-| Mains lost / restored | on |
-| Battery low (crosses the NUT low-battery threshold) | on |
-| BLUETTI unit unreachable / back | off |
-
-Setup:
-
-1. Message [@BotFather](https://t.me/BotFather), `/newbot`, and copy the token.
-2. Message [@userinfobot](https://t.me/userinfobot) to get your numeric chat ID
-   (group IDs start with `-`).
-3. **Send your new bot a message first** — a bot cannot start a conversation, so
-   without this Telegram rejects the send with "chat not found".
-4. Paste both into the Alerts tab and hit **Send test message** to check before
-   saving.
-
-Repeats of the same event within a minute are suppressed, so a flapping supply
-won't fill the chat. Messages are queued: if Telegram is unreachable the bridge
-keeps serving NUT and drops the message rather than stalling.
-
-## Using it with NUT
+## Use it
 
 ```bash
-upsc -l <device-ip>            # lists the UPS name (default: bluetti)
-upsc bluetti@<device-ip>       # dumps all variables
+upsc -l <device-ip>          # lists the UPS name (default: bluetti)
+upsc bluetti@<device-ip>     # dumps every variable
 ```
 
-`upsmon` config (`upsmon.conf`):
+`upsmon.conf`:
 
 ```
-MONITOR bluetti@<device-ip> 1 monuser somepass slave
+MONITOR bluetti@<device-ip> 1 upsmon <password> slave
 ```
 
-### Variables
+Home Assistant, Synology, TrueNAS and anything else that speaks NUT work the
+same way — point them at the bridge's IP.
 
-| Variable | Meaning |
+## What you get
+
+- **NUT server** — upsd-compatible, read-only, with an optional login gating
+  `LOGIN`/`PRIMARY` the way upsd does.
+- **Web admin** — live power flow, logs, config, all on the device.
+- **Over-the-air updates** — pick a GitHub release from the Maintenance tab, or
+  upload a `.bin`. Spare-slot write with bootloader rollback.
+- **Telegram alerts** — mains lost/restored, battery low, unit unreachable.
+- **Device controls** — AC/DC output, ECO modes, charging mode and more from
+  the web page. Off by default; NUT stays read-only.
+- **Static IP or DHCP**, settable hostname, status LED support.
+
+## Docs
+
+| | |
 | --- | --- |
-| `ups.status` | `OL` / `OB` / `LB` / `CHRG` / `DISCHRG`; `OFF` or `OL WAIT` when telemetry is stale. The one `upsmon` acts on. |
-| `battery.charge` | state of charge, % |
-| `battery.charge.low` | the `LB` threshold (your setting) |
-| `battery.runtime` | seconds left on battery; cleared while on mains |
-| `battery.runtime.low` | the runtime `LB` threshold (your setting) |
-| `battery.voltage` | pack voltage |
-| `battery.temperature` | pack temperature, °C |
-| `battery.capacity` | design capacity, Wh |
-| `ups.load` | % of the configured continuous AC rating |
-| `ups.realpower` / `ups.realpower.nominal` | output W / the configured AC rating |
-| `input.realpower` / `input.realpower.ac` | total input W / mains input W |
-| `output.realpower` / `output.realpower.dc` | AC output W / DC output W |
-| `outlet.1.*` / `outlet.2.*` | AC and DC output banks — `desc`, `status`, `realpower` W |
-| `ups.type` | `online` when BLUETTI's backup mode is on, else `offline` |
-| `ups.alarm` | device fault code, when non-zero |
-| `ups.mfr` / `ups.model` / `ups.serial` | and the `device.*` equivalents |
-| `driver.name` / `driver.version` / `driver.state` | bridge health |
-
-`ups.status` gains `LB` when **either** `battery.charge` drops to
-`battery.charge.low` **or** `battery.runtime` falls to `battery.runtime.low`.
-The percentage alone is a poor guide under load: 20 % of a 245 Wh pack is
-minutes at 300 W but hours at 20 W.
-
-Both thresholds, and the **continuous AC rating** that backs `ups.load` and
-`ups.realpower.nominal`, are set on the admin page's NUT tab — nothing about the
-unit is hardcoded.
-
-### Login
-
-Optional, and follows standard NUT semantics: the username and password gate
-`LOGIN` and `PRIMARY` (what `upsmon` uses to coordinate shutdown). Reading
-values stays anonymous, because `upsc` has no way to send credentials. The
-password is stored as a salted SHA-256.
-
-There is no TLS, and no login at all until you set one, so keep the device on a
-trusted LAN.
-
-### Not implemented
-
-No `SET VAR` or `INSTCMD`, so nothing can be changed on the BLUETTI through NUT
-and there is no shutdown command — which is also why `ups.delay.shutdown` is not
-published: nothing would honour it. The device controls, when enabled, are on
-the admin page only and never touch NUT.
-
-## What's implemented
-
-- **NUT server** — upsd-compatible, read-only; verified against a third-party
-  NUT client (`LIST UPS/VAR`, `GET VAR`, `upsmon` primary handshake, …).
-- **Status LED** — red while starting, green once linked to the unit over BLE;
-  a Maintenance-tab toggle turns it off. Addressable WS2812 only.
-- **Provisioning** — two-step captive portal (network, then admin login), with
-  BLUETTI + NUT set from the admin page afterwards; config in NVS, BOOT-button /
-  web reset.
-- **Admin auth** — a login form and a session cookie on every admin route; the
-  password is stored as a salted SHA-256, never in the clear.
-- **BLUETTI BLE "V2" stack** — ECDH (secp160r1) key agreement, AES-128-CBC
-  session, keydata session-key derivation, both framing layers, `MD5(user_id +
-  serial)` account auth, and a protobuf reader for the `pr705` telemetry
-  message. Ported from [`rabits/ha-ef-ble`](https://github.com/rabits/ha-ef-ble).
-- **Web OTA** — upload firmware from the admin page; spare-slot write with
-  bootloader rollback.
-- **Telegram alerts** — mains lost/restored, battery low, BLUETTI unreachable.
-  Sent from a worker task so HTTPS never blocks the BLE or NUT paths.
-- **Addressing** — DHCP by default, or a static IPv4 address with gateway and
-  DNS; settable hostname, sent as the DHCP client name.
-
-### Verified without hardware ([`test/`](test/), runs in CI)
-
-- **Telemetry decode** — 5 real `DisplayPropertyUpload` packets captured from a
-  River 3 UPS decode through the actual C code to the exact values ha-ef-ble
-  documents (SOC, AC-in/out, load, discharge, temperature, backup mode, runtime).
-- **Crypto** — micro-ecc secp160r1 pubkey + ECDH shared secret, `md5` IV /
-  session-key / auth-token derivation, all byte-for-byte against `python-ecdsa`
-  (which is what the device interoperates with).
-- **NUT server** — full protocol conformance driven over a socket by a test
-  client, plus the `upsmon` primary handshake.
-- **Admin auth** — password hashing/verification and Basic-header parsing:
-  salt uniqueness, wrong / empty / wrong-case passwords rejected, and no
-  length or character restrictions.
-- **IPv4 validation** — the static-addressing validator, including the lenient
-  forms `esp_ip4addr_aton()` would wrongly accept (`192.168.1`, hex octets),
-  which would otherwise strand the device on an unreachable address.
-- **Framing** — CRC-8/16, inner-packet build↔parse, XOR deobfuscation, frame
-  reassembly across split BLE notifications.
-
-## Build from source
-
-ESP32-S3, ≥4 MB flash. Requires
-[ESP-IDF](https://docs.espressif.com/projects/esp-idf/) v5.1 or newer.
-
-```bash
-idf.py set-target esp32s3
-idf.py build flash monitor
-```
-
-Configuration is all runtime (the setup portal). `menuconfig` only sets
-compile-time defaults, the config-wipe GPIO, the trace flag, and
-`CONFIG_ENABLE_WEB_OTA`, under **`BLUETTI NUT Bridge`**. The version comes from
-[`version.txt`](version.txt) — see [`RELEASING.md`](RELEASING.md).
-
-### Debugging the BLE handshake
-
-Enable **`Trace the BLUETTI BLE handshake`** in `menuconfig` (or
-`CONFIG_BLUETTI_BLE_TRACE=y`). It hex-dumps every stage — our/device public keys,
-shared secret, IV, session key, auth token, and every decoded inner packet — so a
-failed handshake shows exactly where it broke. Watch it on the admin page's
-**Logs** tab or `idf.py monitor`. It prints key material, so turn it off
-afterwards.
-
-## Layout
-
-| Path | Role |
-| --- | --- |
-| `main/` | boot flow / BLUETTI→NUT variable mapping |
-| `components/app_config/` | NVS-backed runtime config |
-| `components/wifi_mgr/` | station + SoftAP (open or WPA2), scan, DHCP/static IPv4 |
-| `components/notify/` | Telegram alerts (queue + worker, edge detection) |
-| `components/provisioning/` | Wi-Fi setup portal (`portal.html`), DNS server, admin page (`admin.html`), web log tail (`log_ring.c`) |
-| `components/nut_server/` | upsd-compatible TCP protocol server |
-| `components/micro_ecc/` | vendored micro-ecc (secp160r1 for the BLE handshake) |
-| `components/bluetti_ble/` | NimBLE transport + BLUETTI V2 stack: |
-| &nbsp;&nbsp;`bluetti_ble.c` | scan / connect / GATT / notify / TX queue |
-| &nbsp;&nbsp;`ef_crypto.c` | CRC, MD5, AES-128-CBC, ECDH secp160r1 |
-| &nbsp;&nbsp;`ef_frame.c` | outer `5A5A` + inner `AA` framing, reassembly |
-| &nbsp;&nbsp;`ef_session.c` | handshake state machine + telemetry dispatch |
-| &nbsp;&nbsp;`ef_proto.c` | `pr705` `DisplayPropertyUpload` field reader |
-| &nbsp;&nbsp;`ef_cloud.c` | BLUETTI account login → user id |
-| &nbsp;&nbsp;`ef_keydata.bin` | BLUETTI key table (session-key derivation) |
+| [`docs/CONFIGURING.md`](docs/CONFIGURING.md) | Setup walkthrough, admin page, device controls, alerts, full NUT variable list, source layout, building |
+| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | The Bluetti BLE protocol — handshake, framing, register map |
+| [`dist/FLASHING.md`](dist/FLASHING.md) | Flashing without the web installer |
 
 ## Security
 
-- **Admin page** — a login form with the credentials chosen during setup, then
-  an opaque session cookie (`HttpOnly`, `SameSite=Strict`, 8-hour idle timeout,
-  cleared on reboot). The password is stored only as a salted SHA-256, and both
-  it and the session token are compared in constant time. There is no TLS, so
-  the password and the cookie are in clear on the wire: this keeps
-  other people on your LAN out, it is not protection against traffic capture.
-- **NUT server** — read-only and **unauthenticated**: `LOGIN` is accepted from
-  anyone that can reach port 3493. That is deliberate (NUT clients expect it),
-  so treat the port as public on your LAN.
-- Don't expose either port to the internet. During first-run setup the Wi-Fi AP
-  is open; it shuts down as soon as the device joins your network.
-- Forgot the password, or set an unreachable static IP? Hold the BOOT button
-  through a reset to wipe the config and return to the setup AP.
-- The Telegram bot token is stored in NVS and is readable by anyone who can
-  reach the admin page; the token only grants access to that bot.
+There is **no TLS** on either port. The admin password and its session cookie
+cross the network in clear, and NUT reads are anonymous by design. This keeps
+casual users on your LAN out of the admin page; it is not protection against
+someone capturing traffic. **Keep the bridge on a trusted network and don't
+expose it to the internet.**
 
-## Protocol notes
-
-- NUT protocol: <https://networkupstools.org/docs/developer-guide.chunked/ar01s09.html>
-- BLUETTI BLE ("V2" / `encrypt_type 7`): ECDH on secp160r1 → AES-128-CBC session,
-  a keydata-table + MD5 session-key derivation, then `MD5(user_id + serial)`
-  account auth. Framing is `5A5A` EncPacket (AES body, CRC16) wrapping an `AA`
-  Packet V2/V3 (CRC8/CRC16, XOR-obfuscated payload). Telemetry is the protobuf
-  `DisplayPropertyUpload` message (`pr705` for River 3).
+Passwords are stored only as salted SHA-256 and compared in constant time.
+Forgot it, or set an unreachable static IP? Hold BOOT through a reset to wipe
+the config and return to the setup AP.
 
 ## Credits
 
-The BLUETTI BLE protocol implementation is a C port of the reverse-engineering
-work in:
-
-- [`rabits/ha-ef-ble`](https://github.com/rabits/ha-ef-ble) — the Home Assistant
-  integration this borrows the handshake, framing, key table, and protobuf
-  field layout from.
-- [`rabits/ef-ble-reverse`](https://github.com/rabits/ef-ble-reverse),
-  [`nielsole/bluetti-bt-reverse-engineering`](https://github.com/nielsole/bluetti-bt-reverse-engineering)
-  — earlier protocol notes.
-
-Bundled third-party code: [micro-ecc](https://github.com/kmackay/micro-ecc)
-(Kenneth MacKay, BSD-2-Clause) under `components/micro_ecc/`.
+The Bluetti BLE implementation is a C port of
+[`Patrick762/bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib) —
+the library behind the Home Assistant integration — which builds on
+[`warhammerkid/bluetti_mqtt`](https://github.com/warhammerkid/bluetti_mqtt).
 
 ## License
 

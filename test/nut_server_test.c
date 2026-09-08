@@ -51,7 +51,7 @@ static bool verify(const char *user, const char *pass, void *ctx)
 int main(void)
 {
     nut_server_config_t cfg = {
-        .ups_name = "bluetti", .ups_desc = "BLUETTI River 3 UPS (245Wh)",
+        .ups_name = "bluetti", .ups_desc = "Bluetti Elite 10 Mini (128Wh)",
         .fw_version = "9.9.9",
         .tcp_port = 3493, .max_clients = 4,
     };
@@ -60,7 +60,7 @@ int main(void)
     nut_server_set_var_int("battery.charge", 75);
     nut_server_set_var_int("battery.charge.low", 20);
     nut_server_set_var_float("battery.temperature", 33.0f, 1);
-    nut_server_set_var("ups.model", "River 3 UPS (245Wh)");
+    nut_server_set_var("ups.model", "Elite 10 Mini (128Wh)");
     nut_server_set_status("OL");
     usleep(150000);
 
@@ -74,13 +74,13 @@ int main(void)
     OKF(strcmp(cmd(fd, "NETVER", b, sizeof b), "1.3\n") == 0, "NETVER -> %s", b);
 
     cmd(fd, "LIST UPS", b, sizeof b);
-    OKF(strstr(b, "UPS bluetti \"BLUETTI River 3 UPS (245Wh)\"") &&
+    OKF(strstr(b, "UPS bluetti \"Bluetti Elite 10 Mini (128Wh)\"") &&
         strstr(b, "BEGIN LIST UPS") && strstr(b, "END LIST UPS"), "LIST UPS -> %s", b);
 
     cmd(fd, "LIST VAR bluetti", b, sizeof b);
     OKF(strstr(b, "VAR bluetti battery.charge \"75\"") &&
         strstr(b, "VAR bluetti ups.status \"OL\"") &&
-        strstr(b, "VAR bluetti ups.model \"River 3 UPS (245Wh)\"") &&
+        strstr(b, "VAR bluetti ups.model \"Elite 10 Mini (128Wh)\"") &&
         strstr(b, "VAR bluetti battery.temperature \"33.0\"") &&
         strstr(b, "VAR bluetti driver.version \"esp32-nut-bluetti 9.9.9\"") &&
         strstr(b, "END LIST VAR bluetti"), "LIST VAR has expected vars");
@@ -92,7 +92,7 @@ int main(void)
     OKF(strcmp(cmd(fd, "GET VAR wrongups ups.status", b, sizeof b),
                "ERR UNKNOWN-UPS\n") == 0, "GET wrong ups -> %s", b);
     OKF(strstr(cmd(fd, "GET UPSDESC bluetti", b, sizeof b),
-               "UPSDESC bluetti \"BLUETTI River 3 UPS (245Wh)\"") != NULL, "GET UPSDESC");
+               "UPSDESC bluetti \"Bluetti Elite 10 Mini (128Wh)\"") != NULL, "GET UPSDESC");
     OKF(strcmp(cmd(fd, "GET NUMLOGINS bluetti", b, sizeof b),
                "NUMLOGINS bluetti 0\n") == 0, "GET NUMLOGINS -> %s", b);
 

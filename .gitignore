@@ -17,10 +17,7 @@ compile_commands.json
 dist/*.bin
 
 # Host test binaries
-/test/ef_logic_test
-/test/ef_river3_test
 /test/nut_server_test
-/test/xcheck
 /test/*.dSYM/
 /test/auth_test
 /test/ipv4_test

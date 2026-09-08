@@ -28,8 +28,7 @@ touched that hardware — if a reading looks wrong, the **Verbose** log level
 | CRC | CRC-16/Modbus, appended **little-endian** |
 | Read | function `0x03`, then `!HH` (big-endian start address, quantity) |
 
-Note these are **not** the Nordic UART UUIDs used by EcoFlow — they're
-`ff01`/`ff02` in the 16-bit space.
+Both are 16-bit-space UUIDs, not the Nordic UART pair some other vendors use.
 
 `bluetti-bt-lib` writes to `ff02` with `bleak`'s default (`response=None`), which
 picks **write-with-response** whenever the characteristic advertises the `WRITE`
@@ -91,9 +90,8 @@ Once the exchange completes, ordinary Modbus frames are simply wrapped in the
 AES layer.
 
 ESP-IDF already ships everything required — mbedtls provides secp256r1 ECDH,
-AES-CBC, SHA-256 and ECDSA verification. (The EcoFlow build vendored micro-ecc
-only because it needed secp160r1, which mbedtls omits. That's not a problem
-here.)
+AES-CBC, SHA-256 and ECDSA verification, so there is no third-party crypto to
+vendor.
 
 ## Register map
 

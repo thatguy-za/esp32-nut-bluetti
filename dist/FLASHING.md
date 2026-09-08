@@ -37,10 +37,10 @@ The device has no Wi-Fi credentials yet, so it starts an open AP
    AP** (name it and set a password).
 2. Save. For station mode the page then shows the bridge's new LAN IP as a link
    — reconnect to your normal Wi-Fi and open it.
-3. On that page, use the **BLUETTI** tab to pick your River 3 and enter your
-   BLUETTI account, then the **NUT** tab if you want to change the defaults.
+3. On that page, use the **Bluetti** tab to scan for and pick your unit, then
+   the **NUT** tab if you want to change the defaults.
 
-See the project README for details.
+See [`docs/CONFIGURING.md`](../docs/CONFIGURING.md) for the full walkthrough.
 
 ## Updating later
 
