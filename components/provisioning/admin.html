@@ -73,9 +73,14 @@
                   border: 1px solid currentColor; border-radius: 20px; padding: .15rem .6rem;
                   white-space: nowrap; }
   .battrow { display: flex; align-items: center; gap: .8rem; margin: 0 0 1.1rem; }
+  /* The 2px gap around the fill is the bar's padding, not an inset on the
+     fill: an absolutely positioned box given both `left` and `width` has
+     its `right` ignored, so the gap only appeared on the left and a 100%
+     fill ran under the right-hand border. As padding it applies to both
+     sides, and the fill's percentage width resolves inside it. */
   .battbar { flex: 1; height: 1.5rem; border: 1.5px solid #8886; border-radius: .35rem;
-             position: relative; overflow: hidden; }
-  .battfill { position: absolute; inset: 2px; width: 0; border-radius: .25rem;
+             padding: 2px; overflow: hidden; }
+  .battfill { height: 100%; width: 0; border-radius: .25rem;
               background: #2563eb; transition: width .4s; }
   .battfill.low { background: #c00; }
   .battpct { min-width: 3.6rem; text-align: right; font-size: 1.5rem; font-weight: 600;
