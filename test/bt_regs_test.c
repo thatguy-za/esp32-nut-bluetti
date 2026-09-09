@@ -253,6 +253,26 @@ int main(void)
     OKF(one(EL10, &st, 9999, 1234) == 0 && !st.valid,
         "an unknown address is ignored, state stays invalid");
 
+    /*
+     * Why the sweep gate exists. There is no mains-present register: it is
+     * inferred from AC input watts *or* volts. A full unit sitting on the
+     * mains draws ~0 W, and the volts come later in the plan — so a state
+     * built from the first few fields looks exactly like "on battery"
+     * while the unit is plugged in. Anything deriving a power state from a
+     * partial sweep will get it wrong; these pin that, so the gate is not
+     * quietly removed as redundant.
+     */
+    st = fresh();
+    one(EL10, &st, REG_BATTERY_SOC, 100);
+    OKF(st.valid && !st.ac_input_present,
+        "SOC alone: valid, but reads as no-mains — nothing has been read yet");
+    one(EL10, &st, REG_AC_INPUT_POWER, 0);
+    OKF(!st.ac_input_present,
+        "a full unit on mains draws 0 W, so watts alone still say no-mains");
+    one(EL10, &st, REG_AC_INPUT_VOLTAGE, 2301);
+    OKF(st.ac_input_present,
+        "only the input voltage settles it: 230.1 V -> mains present");
+
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;
 }

@@ -241,6 +241,13 @@ minutes at 300 W but hours at 20 W.
 | `OL` / `OB` | **inferred** from AC input power and line voltage |
 | `CHRG` | **inferred** from net battery flow (any source, including solar) |
 
+There is no mains-present register, so `OL` / `OB` is inferred — and a full
+unit sitting on the mains draws roughly 0 W, which is why line voltage is part
+of the test. Registers are polled one per tick, so for the first few seconds of
+a link some are still unread; the bridge reports `OL WAIT` until every field of
+the plan has been read once, rather than reading "AC input not seen yet" as a
+mains failure. Expect a few seconds of *Waiting for Bluetti* after a reconnect.
+
 ### NUT login
 
 Optional, and standard NUT semantics: the username and password gate `LOGIN`

@@ -199,6 +199,21 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
         nut_server_set_var("ups.model", st->model);
     }
 
+    /*
+     * Every measurement above is true the moment it lands. The power state
+     * is not: it is *inferred* from several fields at once, and the fields
+     * arrive one per tick. There is no mains-present register — it comes
+     * from AC input watts or volts — and a full unit sitting on the mains
+     * draws ~0 W, so until the sweep has read the voltage too, "no AC
+     * input" means "not read yet". Publishing that as OB would tell every
+     * upsmon on the network that the mains had failed, a few seconds after
+     * each reconnect. Say "waiting" until we can actually answer.
+     */
+    if (!st->sweep_done) {
+        nut_server_set_status("OL WAIT");
+        return;
+    }
+
     char status[24];
     if (st->ac_input_present) {
         strlcpy(status, "OL", sizeof(status));

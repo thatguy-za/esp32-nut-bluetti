@@ -92,6 +92,12 @@ static struct {
     bt_reg_read_t        plan[BT_REG_PLAN_MAX];
     size_t               plan_n;
     size_t               plan_i;         /* next field to read */
+    /* Fields issued since the plan was last built, saturating at plan_n:
+     * once it gets there every field has been asked for once and the
+     * derived state can be trusted. Reset with plan_i — a rebuilt plan
+     * (the model identified, controls toggled) has new fields in it that
+     * have never been read. See bluetti_state_t.sweep_done. */
+    size_t               sweep_reads;
 
     /* One Modbus request at a time: the reference never has two in flight,
      * and a second read while the first is still coming back confuses the
@@ -361,9 +367,15 @@ static void session_regs(uint16_t addr, const uint8_t *data, size_t len,
         b.plan_n = bt_regs_plan(b.device, b.cfg.controls,
                                 b.plan, BT_REG_PLAN_MAX);
         b.plan_i = 0;
+        b.sweep_reads = 0;   /* new fields in the plan; sweep starts over */
         bt_regs_apply(b.device, addr, data, len, &b.state);
     }
     b.state.soc_low_pct = b.cfg.low_battery_pct;
+    /* Set only once every field of the plan has been asked for, so a
+     * consumer can tell "the mains is out" from "the AC input registers
+     * haven't come round yet". A rebuilt plan clears sweep_reads, so
+     * identifying the model correctly drops this back to false. */
+    b.state.sweep_done = b.plan_n > 0 && b.sweep_reads >= b.plan_n;
     copy = b.state;
     xSemaphoreGive(b.lock);
 
@@ -447,6 +459,9 @@ static void poll_timer_cb(void *arg)
     }
     f = b.plan[b.plan_i];
     b.plan_i = (b.plan_i + 1) % b.plan_n;
+    if (b.sweep_reads < b.plan_n) {
+        b.sweep_reads++;
+    }
     xSemaphoreGive(b.lock);
 
     if (bt_session_read_regs(b.session, f.addr, f.words) != 0) {
@@ -485,6 +500,7 @@ static int on_sub(uint16_t conn, const struct ble_gatt_error *err,
      * one of which (register 110) names the model and triggers the rebuild. */
     b.plan_n = bt_regs_plan(&BT_DEVICE_GENERIC, false, b.plan, BT_REG_PLAN_MAX);
     b.plan_i = 0;
+    b.sweep_reads = 0;
     b.poll_fails = 0;
     b.req_in_flight = false;
 
@@ -659,7 +675,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             b.notify_n = 0;
             b.write_handle = b.notify_handle = b.notify_cccd = 0;
             b.write_with_rsp = false;
-            b.plan_n = b.plan_i = 0;
+            b.plan_n = b.plan_i = b.sweep_reads = 0;
             b.req_in_flight = false;
             b.poll_fails = 0;
             xSemaphoreTake(b.lock, portMAX_DELAY);
@@ -930,6 +946,7 @@ void bluetti_ble_set_controls(bool on)
     if (b.device) {
         b.plan_n = bt_regs_plan(b.device, on, b.plan, BT_REG_PLAN_MAX);
         b.plan_i = 0;
+        b.sweep_reads = 0;
     }
     xSemaphoreGive(b.lock);
     ESP_LOGI(TAG, "device controls %s", on ? "on" : "off");
@@ -960,7 +977,9 @@ int bluetti_ble_controls_json(char *buf, size_t len)
         avail ? "true" : "false",
         b.cfg.controls ? "true" : "false",
         b.device ? b.device->name : "",
-        (st.valid && !st.ac_input_present) ? "true" : "false");
+        /* Same trap as the NUT status: before the sweep completes, "no AC
+         * input" only means the registers haven't come round yet. */
+        (st.valid && st.sweep_done && !st.ac_input_present) ? "true" : "false");
 
     bool first = true;
     for (size_t i = 0; i < BT_CONTROL_COUNT && n > 0 && n < (int)len; i++) {
@@ -1033,7 +1052,7 @@ int bluetti_ble_start(const bluetti_ble_config_t *config,
     b.state.soc_low_pct = config->low_battery_pct;
     state_reset();
     b.device = NULL;
-    b.plan_n = b.plan_i = 0;
+    b.plan_n = b.plan_i = b.sweep_reads = 0;
     xSemaphoreGive(b.lock);
 
     /* An address is the only way to name a unit, so a bad one is fatal

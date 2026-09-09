@@ -28,7 +28,17 @@ extern "C" {
 #define BLUETTI_UNKNOWN_I (-1)
 
 typedef struct {
-    bool     valid;             /* at least one full decode has happened */
+    bool     valid;             /* at least one register has decoded     */
+    /*
+     * Every field of the current polling plan has been read at least once
+     * since this link came up. `valid` only means "something arrived", and
+     * the fields land one per tick — so until this is set, a field still
+     * at its unknown value means "not read yet", not "zero". It matters
+     * for anything *inferred* from several fields at once: ac_input_present
+     * is false both when the mains is out and when the AC input registers
+     * simply haven't come round yet. Don't derive a power state without it.
+     */
+    bool     sweep_done;
     int64_t  updated_us;        /* esp_timer_get_time() of last update   */
 
     int      soc_pct;           /* battery state of charge, 0..100       */
