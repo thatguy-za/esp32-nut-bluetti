@@ -356,9 +356,8 @@ static void session_regs(uint16_t addr, const uint8_t *data, size_t len,
     if (!b.device && b.state.model[0]) {
         b.device = bt_device_lookup(b.state.model);
         if (b.device) {
-            ESP_LOGI(TAG, "identified as %s (%s telemetry, controls 0x%03x)",
-                     b.device->name, b.device->full ? "full" : "basic",
-                     b.device->controls);
+            ESP_LOGI(TAG, "identified as %s (fields 0x%02x, controls 0x%03x)",
+                     b.device->name, b.device->fields, b.device->controls);
         } else {
             ESP_LOGW(TAG, "unrecognised model '%s' — charge and power only",
                      b.state.model);

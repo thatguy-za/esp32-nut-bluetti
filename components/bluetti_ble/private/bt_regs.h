@@ -7,13 +7,14 @@
  * integration) — see docs/PROTOCOL.md. Registers are 16-bit words,
  * big-endian on the wire.
  *
- * Only the Elite 10 (and the byte-identical EL100V2) are decoded in full.
  * bluetti-bt-lib reads each field with its own Modbus transaction and its
- * own per-model scaling; other V2 models differ in both which fields
- * exist and how a few are scaled (runtime and AC-input voltage in
- * particular). Rather than reproduce every model's quirks unverified, an
- * unrecognised unit gets the four fields that are identical across every
- * V2 model — charge and the AC/DC power readings — and nothing else.
+ * own per-model parameters. Models differ in *which* optional fields exist
+ * and in how a few are scaled, but the two are independent — so each is a
+ * per-field bit in bt_device_t.fields (see BT_F_* below), taken one field
+ * at a time from the upstream device definitions rather than from a single
+ * "is this an Elite 10" flag. An unrecognised unit gets only what
+ * BaseDeviceV2 guarantees: charge, the four power registers, the model
+ * string and the serial.
  */
 
 #include <stddef.h>
@@ -59,8 +60,8 @@ extern "C" {
  * implements them — a bool is 0/1, the enums are shared classes — so this
  * is a per-model *presence* mask, taken from bluetti-bt-lib's SwitchField
  * / SelectField / UIntField definitions, not a decode difference. (That is
- * why controls are not limited to the Elite 10 the way full telemetry is:
- * only the *readings* need per-model scaling.)
+ * why the controls mask is independent of the telemetry mask: only
+ * the *readings* need per-model scaling.)
  */
 enum {
     BT_C_AC_OUT      = 1u << 0,
@@ -77,13 +78,34 @@ enum {
 };
 
 /*
- * A recognised model. `full` marks the Elite-10 family (full telemetry
- * decode); everything else falls back to charge + power. `controls` is
- * the mask above — independent of `full`.
+ * Which optional telemetry registers a model has, and how to read them.
+ * Presence and scaling are separate questions and this keeps them
+ * separate: register 1314 exists on nearly every V2 unit, but the AC60
+ * reports whole volts where the Elite 10 reports tenths. Straight from
+ * bluetti-bt-lib's per-device field lists — DecimalField(addr, scale)
+ * parses as raw / 10^scale, UIntField(addr, mult) as raw * mult.
+ *
+ * Mains presence only ever tests "> 0", so BT_F_AC_IN_V alone is enough
+ * for OL/OB; the scaling bit matters only for publishing input.voltage.
+ */
+enum {
+    BT_F_SERIAL      = 1u << 0,  /* 116 — BaseDeviceV2, so every V2 unit  */
+    BT_F_RT_MIN      = 1u << 1,  /* 104, raw = minutes                    */
+    BT_F_RT_6MIN     = 1u << 2,  /* 104, raw = tenths of an hour          */
+    BT_F_AC_IN_V     = 1u << 3,  /* 1314 present                          */
+    BT_F_AC_IN_V_RAW = 1u << 4,  /* ...in whole volts; default is tenths  */
+    BT_F_AC_IN_A     = 1u << 5,  /* 1315, tenths of an amp                */
+    BT_F_AC_OUT_V    = 1u << 6,  /* 1511, tenths of a volt                */
+};
+
+/*
+ * A recognised model. `fields` is the mask above — which optional
+ * readings it has. `controls` is the writeable mask; the two are
+ * independent, since controls need no per-model scaling.
  */
 typedef struct {
     const char *name;      /* advertised name; digits follow */
-    bool        full;
+    uint16_t    fields;
     uint16_t    controls;
     uint16_t    wh;        /* nominal battery capacity, Wh; 0 = unknown.
                               Used to estimate runtime when the unit has no

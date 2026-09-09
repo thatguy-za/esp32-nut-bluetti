@@ -101,17 +101,36 @@ model. From [Patrick762/bluetti-bt-lib#89](https://github.com/Patrick762/bluetti
 common fields — and cross-checked against the other V2 device definitions,
 which use the same addresses.
 
-**Only the Elite 10 (and the byte-identical EL100V2) are decoded in full.**
-Other V2 models put the same *fields* at these addresses but scale a few
-differently — `bluetti-bt-lib` gives each model its own `DecimalField`
-parameters. Register 104 (runtime) is in minutes on the EL10 (`scale 0,
-×1/60`), tenths of an hour on the AC70 and Handsfree 1 (`scale 1`), and
-something else again on the EL30V2 (`scale 4, ×167`). Register 1314 (AC input
-voltage) is `÷10` on the EL10 but a plain integer on the AC60. Rather than
-reproduce every model's quirks unverified, `bt_regs.c` decodes the Elite 10
-scaling for an Elite 10, and for anything else publishes only the fields that
-are identical across every V2 model — SOC (102) and the four power registers
-(140/142/144/146), all plain `uint`.
+**Optional fields are decoded per field, not per model.** Every V2 unit shares
+SOC (102), the four power registers (140/142/144/146), the model string (110)
+and the serial (116) — those come from `BaseDeviceV2`. Beyond that, models
+differ in *which* optional fields they have and in *how a few are scaled*, and
+those two questions are independent: `bt_device_t.fields` carries a bit per
+field, read one at a time out of `bluetti-bt-lib`'s device definitions.
+
+Upstream parses `DecimalField(addr, scale, mult)` as `raw / 10^scale × mult`
+and `UIntField(addr, mult)` as `raw × mult`, which gives:
+
+| Field | Reg | Models | Scaling |
+| --- | --- | --- | --- |
+| Runtime | 104 | EL10, EL100V2 | `scale 0, ×1/60` h — raw is minutes |
+| | | EL30V2 | `scale 4, ×167` h — raw × 1.002 min, i.e. minutes to within 0.2% |
+| | | AC70, Handsfree 2 | `scale 1` h — raw is tenths of an hour |
+| | | AC180, AC180P, AC2P, AC60, AC60P | absent |
+| AC input voltage | 1314 | everything except AC2P | tenths of a volt… |
+| | | AC60, AC60P | …except here, whole volts |
+| AC input current | 1315 | EL10, EL100V2, AC70, AC180, Handsfree 2 | tenths of an amp |
+| AC output voltage | 1511 | as 1315 | tenths of a volt |
+
+An earlier version of this file said 1314 was an Elite-10 field. It is not: the
+EL30V2 declares it with *identical* parameters to the EL10, and only the
+runtime scaling differs between them. Gating both on one "is this an Elite 10"
+flag meant a plugged-in EL30V2 would have reported `OB` indefinitely, because
+mains presence falls back to line voltage when a full unit draws 0 W.
+
+Note that presence only ever tests `> 0`, so the scaling does not matter to
+`OL`/`OB` — a raw-volts AC60 answers that question exactly as well as an Elite.
+Scaling matters only to the published `input.voltage`.
 
 The model comes from register 110, not from configuration.
 

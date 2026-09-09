@@ -6,7 +6,11 @@
 
 static const char *TAG = "bt_regs";
 
-const bt_device_t BT_DEVICE_GENERIC = { "unknown", false, 0, 0 };
+/* An unrecognised V2 unit: only what BaseDeviceV2 guarantees. Register
+ * 1314 is deliberately not polled here — most V2 models have it, but a
+ * model that does not would leave every sweep waiting out the request
+ * timeout. A named model gets it from the table below. */
+const bt_device_t BT_DEVICE_GENERIC = { "unknown", BT_F_SERIAL, 0, 0 };
 
 /* The output-switch pair every controllable model shares. */
 #define C_OUT   (BT_C_AC_OUT | BT_C_DC_OUT)
@@ -17,10 +21,17 @@ const bt_device_t BT_DEVICE_GENERIC = { "unknown", false, 0, 0 };
                  BT_C_CHARGE_MODE | BT_C_POWER_LIFT)
 
 /*
- * Models recognised for control. `full` (full telemetry decode) is only
- * the Elite-10 family; the control mask is wider because the control
- * registers do not need per-model scaling. From bluetti-bt-lib's
- * SwitchField / SelectField / UIntField definitions.
+ * Recognised models. Both masks come field-by-field from bluetti-bt-lib's
+ * device definitions; neither is a guess, though only the EL10 has been
+ * run against real hardware.
+ *
+ * `fields` says which optional readings exist and how they scale — see
+ * BT_F_* in bt_regs.h. Worth reading the two runtime bits together: 104
+ * is raw minutes on the Elite family (`scale 0, x1/60` of an hour) and
+ * within 0.2% of the same on the EL30V2 (`scale 4, x167` -> raw x 1.002
+ * minutes), but tenths of an hour on the AC70 and Handsfree 2
+ * (`scale 1`). Register 1314 is tenths of a volt everywhere except the
+ * AC60/AC60P, which report whole volts.
  *
  * SOC min/max (2022/2023): declared for the EL100V2 upstream. The EL10
  * has no such field in bluetti-bt-lib and returns 0 for both registers on
@@ -34,17 +45,22 @@ const bt_device_t BT_DEVICE_GENERIC = { "unknown", false, 0, 0 };
  * larger unit also advertises as "EL10", override the capacity on the
  * NUT tab.
  */
+/* Everything an Elite 10 reports. */
+#define F_ELITE (BT_F_SERIAL | BT_F_RT_MIN | BT_F_AC_IN_V | \
+                 BT_F_AC_IN_A | BT_F_AC_OUT_V)
+
 static const bt_device_t DEVICES[] = {
-    { "EL100V2",     true,  C_FULL | BT_C_DISPLAY | BT_C_SOC_MIN | BT_C_SOC_MAX, 1024 },
-    { "EL10",        true,  C_FULL | BT_C_DISPLAY,                               128  },
-    { "AC70",        false, C_FULL,                                              768  },
-    { "AC180",       false, C_FULL,                                              1152 },
-    { "EL30V2",      false, C_FULL,                                              288  },
-    { "AC180P",      false, C_OUT | BT_C_CHARGE_MODE | BT_C_POWER_LIFT,          1440 },
-    { "AC2P",        false, C_OUT | BT_C_POWER_LIFT,                             0    },
-    { "AC60",        false, C_OUT | BT_C_POWER_LIFT,                             403  },
-    { "AC60P",       false, C_OUT | BT_C_POWER_LIFT,                             0    },
-    { "Handsfree 2", false, C_OUT,                                              960  },
+    /*  name           telemetry fields                          controls                                     Wh   */
+    { "EL100V2",     F_ELITE,                                  C_FULL | BT_C_DISPLAY | BT_C_SOC_MIN | BT_C_SOC_MAX, 1024 },
+    { "EL10",        F_ELITE,                                  C_FULL | BT_C_DISPLAY,                               128  },
+    { "AC70",        (F_ELITE & ~BT_F_RT_MIN) | BT_F_RT_6MIN,  C_FULL,                                              768  },
+    { "AC180",       F_ELITE & ~BT_F_RT_MIN,                   C_FULL,                                              1152 },
+    { "EL30V2",      BT_F_SERIAL | BT_F_RT_MIN | BT_F_AC_IN_V, C_FULL,                                              288  },
+    { "AC180P",      BT_F_SERIAL | BT_F_AC_IN_V,               C_OUT | BT_C_CHARGE_MODE | BT_C_POWER_LIFT,          1440 },
+    { "AC2P",        BT_F_SERIAL,                              C_OUT | BT_C_POWER_LIFT,                             0    },
+    { "AC60",        BT_F_SERIAL | BT_F_AC_IN_V | BT_F_AC_IN_V_RAW, C_OUT | BT_C_POWER_LIFT,                        403  },
+    { "AC60P",       BT_F_SERIAL | BT_F_AC_IN_V | BT_F_AC_IN_V_RAW, C_OUT | BT_C_POWER_LIFT,                        0    },
+    { "Handsfree 2", (F_ELITE & ~BT_F_RT_MIN) | BT_F_RT_6MIN,  C_OUT,                                              960  },
 };
 
 const bt_device_t *bt_device_lookup(const char *name)
@@ -83,23 +99,23 @@ size_t bt_regs_plan(const bt_device_t *dev, bool with_controls,
         { REG_DC_OUTPUT_POWER, 1 },
         { REG_DEVICE_TYPE,     6 },
     };
-    /* Elite-10 telemetry extras (full decode only). */
-    static const bt_reg_read_t EL10_EXTRA[] = {
-        { REG_TIME_REMAINING,    1 },
-        { REG_AC_INPUT_VOLTAGE,  1 },
-        { REG_AC_INPUT_CURRENT,  1 },
-        { REG_AC_OUTPUT_VOLTAGE, 1 },
-        { REG_DEVICE_SN,         4 },
+    /* Optional readings, each queued only when the model has it. */
+    static const struct { uint16_t bit; bt_reg_read_t read; } OPTIONAL[] = {
+        { BT_F_RT_MIN | BT_F_RT_6MIN, { REG_TIME_REMAINING,    1 } },
+        { BT_F_AC_IN_V,               { REG_AC_INPUT_VOLTAGE,  1 } },
+        { BT_F_AC_IN_A,               { REG_AC_INPUT_CURRENT,  1 } },
+        { BT_F_AC_OUT_V,              { REG_AC_OUTPUT_VOLTAGE, 1 } },
+        { BT_F_SERIAL,                { REG_DEVICE_SN,         4 } },
     };
 
     size_t n = 0;
     for (size_t i = 0; i < sizeof(COMMON) / sizeof(COMMON[0]) && n < max; i++) {
         out[n++] = COMMON[i];
     }
-    if (dev && dev->full) {
-        for (size_t i = 0;
-             i < sizeof(EL10_EXTRA) / sizeof(EL10_EXTRA[0]) && n < max; i++) {
-            out[n++] = EL10_EXTRA[i];
+    for (size_t i = 0;
+         dev && i < sizeof(OPTIONAL) / sizeof(OPTIONAL[0]) && n < max; i++) {
+        if (dev->fields & OPTIONAL[i].bit) {
+            out[n++] = OPTIONAL[i].read;
         }
     }
     /* The battery charge range (discharge floor / charge ceiling) is
@@ -334,13 +350,17 @@ int bt_regs_apply(const bt_device_t *dev, uint16_t start_addr,
         matched++;
     }
 
-    if (dev->full) {
+    if (dev->fields & (BT_F_RT_MIN | BT_F_RT_6MIN)) {
         if ((v = reg(start_addr, data, len, REG_TIME_REMAINING)) >= 0) {
-            /* Raw is minutes on the EL10 family. 0 covers both "full" and
-             * "no estimate" — treat as unknown, not "no runtime left". */
-            st->minutes_remaining = v > 0 ? v : BLUETTI_UNKNOWN_I;
+            /* Minutes on the Elite family, tenths of an hour on the AC70
+             * and Handsfree 2. 0 covers both "full" and "no estimate" —
+             * treat as unknown, not "no runtime left". */
+            int mins = (dev->fields & BT_F_RT_6MIN) ? v * 6 : v;
+            st->minutes_remaining = mins > 0 ? mins : BLUETTI_UNKNOWN_I;
             matched++;
         }
+    }
+    if (dev->fields & BT_F_SERIAL) {
         if ((v = reg(start_addr, data, len, REG_DEVICE_SN)) >= 0) {
             /* Four words, least-significant first. */
             uint64_t sn = 0;
@@ -356,14 +376,24 @@ int bt_regs_apply(const bt_device_t *dev, uint16_t start_addr,
                 matched++;
             }
         }
+    }
+    if (dev->fields & BT_F_AC_IN_V) {
         if ((v = reg(start_addr, data, len, REG_AC_INPUT_VOLTAGE)) >= 0) {
-            st->ac_in_volts = (float)v / 10.0f;
+            /* Tenths of a volt, except on the AC60/AC60P. Only the
+             * published input.voltage cares — mains presence is a "> 0"
+             * test, which is true either way. */
+            st->ac_in_volts = (dev->fields & BT_F_AC_IN_V_RAW)
+                                  ? (float)v : (float)v / 10.0f;
             matched++;
         }
+    }
+    if (dev->fields & BT_F_AC_IN_A) {
         if ((v = reg(start_addr, data, len, REG_AC_INPUT_CURRENT)) >= 0) {
             st->ac_in_amps = (float)v / 10.0f;
             matched++;
         }
+    }
+    if (dev->fields & BT_F_AC_OUT_V) {
         if ((v = reg(start_addr, data, len, REG_AC_OUTPUT_VOLTAGE)) >= 0) {
             st->ac_out_volts = (float)v / 10.0f;
             matched++;

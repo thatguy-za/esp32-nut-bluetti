@@ -61,12 +61,63 @@ int main(void)
     const bt_device_t *GEN    = &BT_DEVICE_GENERIC;
 
     /* ---- model identification ---- */
-    OKF(EL10 && EL10->full, "EL10 -> recognised, full telemetry");
-    OKF(EL100 && EL100->full, "EL100V2 -> recognised, full telemetry");
+    OKF(EL10 && (EL10->fields & BT_F_AC_IN_A), "EL10 -> recognised, full telemetry");
+    OKF(EL100 && EL100->fields == EL10->fields,
+        "EL100V2 decodes exactly the fields the EL10 does");
     OKF(EL10 != EL100, "EL10 and EL100V2 are distinct entries");
-    OKF(AC70 && !AC70->full, "AC70 -> recognised, basic telemetry");
-    OKF(AC60 && !AC60->full && AC60P && AC60P != AC60,
+    OKF(AC70 && !(AC70->fields & BT_F_RT_MIN), "AC70 -> recognised, no raw-minute runtime");
+    OKF(AC60 && AC60P && AC60P != AC60,
         "AC60 and AC60P are told apart by the digit-tail rule");
+
+    /* ---- per-field telemetry masks, against bluetti-bt-lib ----
+     * Presence and scaling are separate: an EL30V2 has register 1314 with
+     * the Elite 10's own tenths-of-a-volt scaling, and only its *runtime*
+     * scaling differs. Lumping those together under one "is it an Elite"
+     * flag is what made a plugged-in EL30V2 report OB forever. */
+    const bt_device_t *EL30 = bt_device_lookup("EL30V2001");
+    const bt_device_t *HF2  = bt_device_lookup("Handsfree 2");
+    OKF(EL30 != NULL, "EL30V2 -> recognised");
+    OKF(EL30 && (EL30->fields & BT_F_AC_IN_V),
+        "EL30V2 reads AC input voltage (1314) — same register as the EL10");
+    OKF(EL30 && !(EL30->fields & BT_F_AC_IN_V_RAW) &&
+        EL10 && !(EL10->fields & BT_F_AC_IN_V_RAW),
+        "...with the same tenths-of-a-volt scaling");
+    OKF(AC60 && (AC60->fields & BT_F_AC_IN_V) &&
+        (AC60->fields & BT_F_AC_IN_V_RAW),
+        "the AC60 has 1314 too, but reports whole volts");
+    OKF(EL30 && (EL30->fields & BT_F_RT_MIN) &&
+        !(EL30->fields & BT_F_AC_IN_A) && !(EL30->fields & BT_F_AC_OUT_V),
+        "EL30V2 has the runtime but not 1315 / 1511");
+    OKF(HF2 && (HF2->fields & BT_F_RT_6MIN) && !(HF2->fields & BT_F_RT_MIN),
+        "Handsfree 2 reports runtime in tenths of an hour");
+    OKF(BT_DEVICE_GENERIC.fields == BT_F_SERIAL,
+        "an unknown model polls only what BaseDeviceV2 guarantees");
+
+    /* Scaling actually applied. 2301 -> 230.1 V on an Elite, 2301 V on an
+     * AC60; both are > 0, which is all mains presence needs. */
+    {
+        bluetti_state_t e = fresh(), a = fresh();
+        one(EL30, &e, REG_AC_INPUT_VOLTAGE, 2301);
+        one(AC60, &a, REG_AC_INPUT_VOLTAGE, 230);
+        OKF(e.ac_in_volts > 230.0f && e.ac_in_volts < 230.2f,
+            "EL30V2: raw 2301 -> %.1f V", e.ac_in_volts);
+        OKF(a.ac_in_volts > 229.9f && a.ac_in_volts < 230.1f,
+            "AC60: raw 230 -> %.1f V", a.ac_in_volts);
+        OKF(e.ac_input_present && a.ac_input_present,
+            "either scaling answers the only question OL/OB asks");
+    }
+
+    /* The regression this release exists for: an EL30V2 full on the mains,
+     * drawing no power, must still read as on-line once 1314 lands. */
+    {
+        bluetti_state_t f = fresh();
+        one(EL30, &f, REG_BATTERY_SOC, 100);
+        one(EL30, &f, REG_AC_INPUT_POWER, 0);
+        OKF(!f.ac_input_present, "EL30V2 at 100%%, 0 W in: still looks off-mains");
+        one(EL30, &f, REG_AC_INPUT_VOLTAGE, 2301);
+        OKF(f.ac_input_present,
+            "...until 1314 arrives, which it now does — no permanent OB");
+    }
     OKF(bt_device_lookup("AC200M7") == NULL, "a V1 model -> unrecognised");
     OKF(bt_device_lookup("EL10ABC") == NULL, "non-digit tail -> unrecognised");
     OKF(bt_device_lookup("") == NULL && bt_device_lookup(NULL) == NULL,
@@ -183,14 +234,22 @@ int main(void)
     OKF(st.ac_input_present && st.battery_watts > -10.5f && st.battery_watts < -9.5f,
         "on line, battery flow = 50 - 60 = -10 (charging)");
 
-    /* ---- decode: runtime, EL10 only ---- */
+    /* ---- decode: runtime, per-model units ---- */
     st = fresh();
     one(EL10, &st, REG_TIME_REMAINING, 240);
-    OKF(st.minutes_remaining == 240, "EL10 decodes runtime");
+    OKF(st.minutes_remaining == 240, "EL10 decodes runtime as raw minutes");
     st = fresh();
-    one(AC70, &st, REG_TIME_REMAINING, 240);
+    one(AC70, &st, REG_TIME_REMAINING, 24);
+    OKF(st.minutes_remaining == 144,
+        "AC70 reads tenths of an hour: 24 -> 144 min");
+    st = fresh();
+    one(GEN, &st, REG_TIME_REMAINING, 240);
     OKF(st.minutes_remaining == BLUETTI_UNKNOWN_I,
-        "AC70 (basic telemetry) does not decode runtime");
+        "an unknown model has no runtime field, so decodes none");
+    st = fresh();
+    one(EL10, &st, REG_TIME_REMAINING, 0);
+    OKF(st.minutes_remaining == BLUETTI_UNKNOWN_I,
+        "a zero runtime is 'no estimate', not 'no time left'");
 
     /* ---- decode: controls, gated by the model mask ---- */
     st = fresh();
