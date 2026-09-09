@@ -26,6 +26,24 @@ esp_err_t wifi_mgr_ap_start(const char *ssid, const char *pass);
 /* Drop the SoftAP, return to STA-only. */
 esp_err_t wifi_mgr_ap_stop(void);
 
+/*
+ * Fallback AP: while in station mode, raise a SoftAP if the station link
+ * has been down for `after_ms`, and drop it again once the station is
+ * back. It exists so a headless bridge whose network has gone (router
+ * dead, SSID renamed, password changed) can still be reached — join the
+ * AP and the admin page is on 192.168.4.1.
+ *
+ * Off unless enabled. A NULL/empty ssid means the board's default name;
+ * a NULL/empty pass means an open network. Safe to call before or after
+ * the station is up, and again later to change the settings.
+ */
+void wifi_mgr_set_fallback_ap(bool enabled, const char *ssid,
+                              const char *pass, uint32_t after_ms);
+
+/* True while the SoftAP currently up was raised by the fallback (as
+ * opposed to configured AP mode). */
+bool wifi_mgr_fallback_ap_active(void);
+
 /* Default SoftAP SSID for this board: "esp-nut-bluetti-XXXX" (MAC tail). */
 void wifi_mgr_default_ap_ssid(char *buf, size_t len);
 
@@ -61,6 +79,8 @@ esp_err_t wifi_mgr_sta_connect(const char *ssid, const char *pass,
 void wifi_mgr_sta_gw(char *buf, size_t len);
 void wifi_mgr_sta_dns(char *buf, size_t len);
 
+/* True only while the station holds a DHCP/static lease right now: set on
+ * GOT_IP, cleared on disconnect. */
 bool wifi_mgr_sta_connected(void);
 
 /* Dotted-quad of the current STA IP, or "0.0.0.0". */

@@ -23,14 +23,15 @@ static const char *TAG = "app_config";
  *   4: added the status-LED pin.
  *   5: added the device-controls toggle.
  *   6: added the battery capacity (Wh) and the log level.
+ *   7: added the fallback AP.
  *
  * From v3 on, fields are only ever appended, and a stored blob of an
- * older-but-recognised version (3, 4 or 5) is kept: the bytes that were
+ * older-but-recognised version (3 to 6) is kept: the bytes that were
  * written still mean what they meant, and the newer trailing fields come
  * up at their defaults. A newer, much older, or unreadable blob is still
  * discarded.
  */
-#define CFG_VERSION 6u
+#define CFG_VERSION 7u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -90,6 +91,7 @@ void app_config_defaults(app_config_t *cfg)
     cfg->battery_wh = 0;
     cfg->log_level = APP_LOG_OFF;   /* quiet out of the box */
     cfg->ble_probe = false;   /* kept in sync with (log_level >= 2) */
+    cfg->fb_ap_enabled = false;     /* don't broadcast unless asked */
 
     /* A blank SSID from Kconfig means "must provision". */
     if (strcmp(cfg->wifi_ssid, "myssid") == 0) {

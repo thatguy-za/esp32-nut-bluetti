@@ -21,7 +21,20 @@ static const char *TAG = "notify";
 /* Ignore a repeat of the same event inside this window (mains flapping). */
 #define REPEAT_GUARD_US (60 * 1000 * 1000LL)
 
-typedef struct { char text[MSG_MAX]; } msg_t;
+/* Delivery retries. The event worth alerting on — the mains failing — is
+ * exactly the one that can take the router with it, so a send that fails
+ * because there is no network has to be held and retried, not dropped.
+ * 5s, 15, 45, then every 5 min: about an hour of trying in all, which
+ * outlasts a router reboot without spinning forever on a bad token. */
+#define SEND_ATTEMPTS   15
+#define BACKOFF_CAP_MS  (5 * 60 * 1000)
+/* Past this, a delivered message says how late it is. */
+#define LATE_AFTER_US   (90 * 1000 * 1000LL)
+
+typedef struct {
+    char    text[MSG_MAX];
+    int64_t queued_us;      /* esp_timer_get_time() when it was raised */
+} msg_t;
 
 /* What we last told the user, so we only send on real transitions. */
 typedef enum { PWR_UNKNOWN, PWR_LINE, PWR_BATTERY, PWR_OFFLINE } power_state_t;
@@ -128,27 +141,69 @@ static int telegram_post(const notify_config_t *cfg, const char *text,
 /* Worker                                                              */
 /* ------------------------------------------------------------------ */
 
+/* 5s, 15s, 45s, then the cap. */
+static uint32_t backoff_ms(int attempt)
+{
+    uint32_t ms = 5000;
+    for (int i = 1; i < attempt && ms < BACKOFF_CAP_MS; i++) {
+        ms *= 3;
+    }
+    return ms > BACKOFF_CAP_MS ? BACKOFF_CAP_MS : ms;
+}
+
 static void worker(void *arg)
 {
     msg_t m;
+    bool  held = false;      /* m is a message still owed a delivery */
+    int   attempt = 0;
+
     for (;;) {
-        if (xQueueReceive(N.q, &m, portMAX_DELAY) != pdTRUE) {
-            continue;
+        if (!held) {
+            if (xQueueReceive(N.q, &m, portMAX_DELAY) != pdTRUE) {
+                continue;
+            }
+            held = true;
+            attempt = 0;
         }
+
         notify_config_t cfg;
         xSemaphoreTake(N.cfg_lock, portMAX_DELAY);
         cfg = N.cfg;
         xSemaphoreGive(N.cfg_lock);
 
-        if (!cfg.enabled) {
+        if (!cfg.enabled) {          /* turned off while queued */
+            held = false;
             continue;
         }
-        char err[96] = "";
-        if (telegram_post(&cfg, m.text, err, sizeof(err)) != 0) {
-            ESP_LOGW(TAG, "notification not delivered: %s", err);
+
+        /* Say so when a message arrives long after the event, so a "Mains
+         * lost" that waited out the outage isn't read as happening now. */
+        char text[MSG_MAX + 32];
+        int64_t late_us = esp_timer_get_time() - m.queued_us;
+        if (late_us > LATE_AFTER_US) {
+            snprintf(text, sizeof(text), "%s (%lld min ago)",
+                     m.text, (long long)(late_us / 60000000LL));
         } else {
-            ESP_LOGI(TAG, "notified: %s", m.text);
+            snprintf(text, sizeof(text), "%s", m.text);
         }
+
+        char err[96] = "";
+        if (telegram_post(&cfg, text, err, sizeof(err)) == 0) {
+            ESP_LOGI(TAG, "notified: %s", text);
+            held = false;
+            continue;
+        }
+
+        if (++attempt >= SEND_ATTEMPTS) {
+            ESP_LOGW(TAG, "giving up after %d attempts, dropping: %s (%s)",
+                     attempt, m.text, err);
+            held = false;
+            continue;
+        }
+        uint32_t wait = backoff_ms(attempt);
+        ESP_LOGW(TAG, "not delivered (%s); retry %d in %us",
+                 err, attempt, (unsigned)(wait / 1000));
+        vTaskDelay(pdMS_TO_TICKS(wait));
     }
 }
 
@@ -164,7 +219,7 @@ bool notify_send(const char *text)
         return false;
     }
 
-    msg_t m;
+    msg_t m = { .queued_us = esp_timer_get_time() };
     snprintf(m.text, sizeof(m.text), "%s%s%s",
              N.label[0] ? N.label : "", N.label[0] ? ": " : "", text);
     /* Never block a caller: drop rather than stall the BLE/NUT path. */

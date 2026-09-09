@@ -443,6 +443,16 @@ static void client_task(void *arg)
     struct timeval tv = { .tv_sec = 120, .tv_usec = 0 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
+    /* A client that vanishes with the network — Wi-Fi dropped, NAS
+     * unplugged — never sends a FIN, so without this its task sits on one
+     * of the few client slots until the read timeout. Probe after a minute
+     * idle and give up after three misses. */
+    int on = 1, idle = 60, intvl = 10, cnt = 3;
+    setsockopt(fd, SOL_SOCKET,  SO_KEEPALIVE,  &on,    sizeof(on));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,  sizeof(idle));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,   &cnt,   sizeof(cnt));
+
     for (;;) {
         int n = recv(fd, buf + fill, sizeof(buf) - 1 - fill, 0);
         if (n <= 0) {

@@ -87,7 +87,19 @@ typedef struct {
      * GATT tree and every notification instead of decoding). ble_probe is
      * kept equal to (log_level >= 2). */
     uint8_t  log_level;
+
+    /* Fallback AP. In station mode, if the network stays unreachable for
+     * APP_FALLBACK_AP_AFTER_S the bridge raises its own AP so it can still
+     * be reached; it drops again when the network returns. Off by default:
+     * an always-on device should not start broadcasting unasked. */
+    bool     fb_ap_enabled;
+    char     fb_ap_ssid[33];   /* blank = the board's default name */
+    char     fb_ap_pass[65];   /* blank = open network             */
 } app_config_t;
+
+/* How long the station has to be down before the fallback AP comes up.
+ * Long enough to sit out a router reboot, short enough to be useful. */
+#define APP_FALLBACK_AP_AFTER_S 60
 
 /* Log-level values for app_config_t.log_level. */
 #define APP_LOG_OFF     0

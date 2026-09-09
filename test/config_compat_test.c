@@ -20,7 +20,7 @@
 #include "app_config.h"
 
 /* Must track the #define in app_config.c. */
-#define CFG_VERSION 6u
+#define CFG_VERSION 7u
 
 static int fails;
 #define OKF(c, ...) do { bool _ok = (c); printf(_ok ? "ok:   " : "FAIL: "); \
@@ -38,9 +38,9 @@ typedef struct {
 
 int main(void)
 {
-    /* Append-only: led_gpio (v4), controls_enabled (v5) and log_level (v6)
-     * sit at the end, in order, each right after the previous field bar
-     * alignment. */
+    /* Append-only: led_gpio (v4), controls_enabled (v5), log_level (v6) and
+     * the fallback AP (v7) sit at the end, in order, each right after the
+     * previous field bar alignment. */
     OKF(V3_END > offsetof(app_config_t, led_enabled) &&
         V3_END - offsetof(app_config_t, led_enabled) <= 2,
         "led_gpio was appended right after led_enabled (the v3 boundary)");
@@ -50,9 +50,15 @@ int main(void)
     OKF(offsetof(app_config_t, log_level) > offsetof(app_config_t, controls_enabled) &&
         offsetof(app_config_t, log_level) <= offsetof(app_config_t, controls_enabled) + 4,
         "log_level was appended right after controls_enabled");
-    OKF(offsetof(app_config_t, log_level) + sizeof(uint8_t) == sizeof(app_config_t) ||
-        offsetof(app_config_t, log_level) + sizeof(uint8_t) + 3 >= sizeof(app_config_t),
-        "log_level is the last field");
+    OKF(offsetof(app_config_t, fb_ap_enabled) > offsetof(app_config_t, log_level) &&
+        offsetof(app_config_t, fb_ap_enabled) <= offsetof(app_config_t, log_level) + 4,
+        "fb_ap_enabled was appended right after log_level");
+    OKF(offsetof(app_config_t, fb_ap_ssid) > offsetof(app_config_t, fb_ap_enabled) &&
+        offsetof(app_config_t, fb_ap_pass) > offsetof(app_config_t, fb_ap_ssid),
+        "the fallback AP's SSID and password follow it, in order");
+    OKF(offsetof(app_config_t, fb_ap_pass) + sizeof(((app_config_t *)0)->fb_ap_pass)
+            + 3 >= sizeof(app_config_t),
+        "fb_ap_pass is the last field");
 
     const size_t full_len = sizeof(blob_t);
     const size_t min_len  = offsetof(blob_t, cfg) + V3_END;
@@ -100,6 +106,29 @@ int main(void)
     OKF(ACCEPT(full_len, CFG_VERSION), "a full current blob is accepted");
     OKF(ACCEPT(min_len, 3u),         "a full v3 blob is accepted");
     OKF(ACCEPT(min_len, 4u),         "a full v4 blob is accepted");
+
+    /* A v6 device upgrading to v7: its blob ends where the fallback AP
+     * begins, so the new fields must come up off/blank rather than
+     * inheriting whatever was in memory. */
+    const size_t v6_len = offsetof(blob_t, cfg) +
+                          offsetof(app_config_t, fb_ap_enabled);
+    OKF(ACCEPT(v6_len, 6u), "a v6-length blob is accepted by v7");
+
+    blob_t v6 = { .version = 6u, .cfg = defaults };   /* defaults pre-seeded */
+    v6.cfg.fb_ap_enabled = false;
+    v6.cfg.fb_ap_ssid[0] = '\0';
+    blob_t stored6;
+    memset(&stored6, 0xEE, sizeof stored6);
+    memset(&stored6.cfg, 0, sizeof stored6.cfg);
+    stored6.version = 6u;
+    strcpy(stored6.cfg.wifi_ssid, "home-net");
+    memcpy(&v6, &stored6, v6_len);                    /* the short read */
+    OKF(strcmp(v6.cfg.wifi_ssid, "home-net") == 0,
+        "a v6 blob's ssid survives the upgrade");
+    OKF(v6.cfg.fb_ap_enabled == false,
+        "the fallback AP comes up off on a device upgrading from v6");
+    OKF(v6.cfg.fb_ap_ssid[0] == '\0',
+        "the fallback AP SSID comes up blank on a device upgrading from v6");
 
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;

@@ -122,6 +122,13 @@
   No Bluetti unit selected yet — open the <b>Bluetti</b> tab to pick one.
 </div>
 
+<div id="fbWarn" class="warn" hidden>
+  <b>Fallback AP is up.</b> The bridge can't reach <span id="fbWarnNet">its
+  network</span>, so it's hosting its own and you're on it. NUT clients on the
+  usual network can't see it until the link is back — it's still trying, and
+  will drop this AP by itself when it succeeds.
+</div>
+
 <!-- ---------------- Status ---------------- -->
 <section id="status" class="active">
   <div class="box">
@@ -339,6 +346,25 @@
         <input id="staticDns" name="static_dns" autocomplete="off"
                inputmode="decimal" placeholder="192.168.1.1">
       </div>
+    </div>
+
+    <div class="box" id="wifiFbBox">
+      <h2>Fallback access point</h2>
+      <label class="chk"><input type="checkbox" id="fbAp" name="fb_ap" value="1"
+        style="width:auto"> Host a network when this one is unreachable</label>
+      <div id="fbApFields">
+        <label for="fbApSsid">Network name (SSID)</label>
+        <input id="fbApSsid" name="fb_ap_ssid" autocomplete="off" maxlength="32">
+        <label for="fbApPass">Password</label>
+        <input id="fbApPass" name="fb_ap_pass" type="password" autocomplete="off"
+               maxlength="63" placeholder="unchanged">
+        <label class="chk" style="margin-top:.5rem"><input type="checkbox" id="fbApOpen"
+          name="fb_ap_open" value="1" style="width:auto"> Open network (no password)</label>
+      </div>
+      <p class="hint">If the ESP32 can't reach your WiFi network for 60 seconds,
+        it brings up its own AP so you can still get to this page on
+        <code>192.168.4.1</code>. It keeps trying the real network and will stop
+        the AP as soon as it's back on the primary network.</p>
     </div>
 
     <div class="box" id="wifiApBox">
@@ -635,6 +661,8 @@ async function refreshStatus() {
     $('#statModel').textContent = j.model ? '· Bluetti ' + j.model : '';
     renderStatus(j);
     $('#setupWarn').hidden = !!j.configured;
+    $('#fbWarn').hidden = !j.fb_ap_up;
+    if (j.fb_ap_up && j.network) $('#fbWarnNet').textContent = `"${j.network}"`;
     /* Name the tab after the device, so several bridges are told apart in
        a row of tabs. Falls back to the static title before the first poll
        lands, or if the hostname is somehow empty. */
@@ -718,6 +746,9 @@ $('#copyLog').onclick = () => {
 
 /* ---- shared config load ---- */
 let cfgLoaded = false, cfgScanned = false, wifiScanned = false, cfg = {};
+/* Whether a fallback-AP password is already stored, so a blank field can
+   mean "keep it" rather than "no password". */
+let hasFbApPass = false;
 async function loadConfig() {
   if (cfgLoaded) return;
   try {
@@ -763,6 +794,14 @@ async function loadConfig() {
     $('#staticGw').value = cfg.static_gw || '';
     $('#staticDns').value = cfg.static_dns || '';
     syncStatic();
+
+    $('#fbAp').checked = !!cfg.fb_ap_enabled;
+    $('#fbApSsid').value = cfg.fb_ap_ssid || cfg.default_ap_ssid || '';
+    hasFbApPass = !!cfg.has_fb_ap_pass;
+    $('#fbApPass').placeholder = hasFbApPass ? 'unchanged' : '8+ characters';
+    $('#fbApOpen').checked = cfg.fb_ap_enabled && !hasFbApPass;
+    $('#fbApPass').disabled = $('#fbApOpen').checked;
+    syncFallbackAp();
 
     $('#tgEnabled').checked = !!cfg.tg_enabled;
     $('#tgChat').value = cfg.tg_chat || '';
@@ -1144,6 +1183,8 @@ function syncWifiMode() {
   const ap = document.querySelector('input[name=wifi_mode]:checked').value === 'ap';
   $('#wifiApBox').style.display = ap ? '' : 'none';
   $('#wifiStaBox').style.display = ap ? 'none' : '';
+  /* Nothing to fall back to when the AP *is* the network. */
+  $('#wifiFbBox').style.display = ap ? 'none' : '';
   /* The SoftAP always serves 192.168.4.1 from its own DHCP server, so
    * there is nothing to choose; the hostname still applies. */
   $('#wifiIpBox').style.display = ap ? 'none' : '';
@@ -1155,6 +1196,12 @@ document.querySelectorAll('input[name=wifi_mode]').forEach(r => r.onchange = syn
 syncWifiMode();   /* don't show both boxes before /api/config lands */
 $('#wifiOpen').onchange = () => { $('#wifiPass').disabled = $('#wifiOpen').checked; };
 $('#apOpen').onchange = () => { $('#apPass').disabled = $('#apOpen').checked; };
+$('#fbApOpen').onchange = () => { $('#fbApPass').disabled = $('#fbApOpen').checked; };
+function syncFallbackAp() {
+  $('#fbApFields').style.display = $('#fbAp').checked ? '' : 'none';
+}
+$('#fbAp').onchange = syncFallbackAp;
+syncFallbackAp();
 
 async function scanWifiNets() {
   const b = $('#wifiScan');
@@ -1186,8 +1233,8 @@ wireForm('#wifiForm', '#wifiSave', '#wifiMsg', fd => {
   const ap = fd.get('wifi_mode') === 'ap';
   if (ap) {
     fd.delete('wifi_ssid'); fd.delete('wifi_pass'); fd.delete('wifi_open');
-    ['use_static_ip', 'static_ip', 'static_mask', 'static_gw', 'static_dns']
-      .forEach(k => fd.delete(k));
+    ['use_static_ip', 'static_ip', 'static_mask', 'static_gw', 'static_dns',
+     'fb_ap', 'fb_ap_ssid', 'fb_ap_pass', 'fb_ap_open'].forEach(k => fd.delete(k));
   } else {
     fd.delete('ap_ssid'); fd.delete('ap_pass'); fd.delete('ap_open');
   }
@@ -1195,6 +1242,19 @@ wireForm('#wifiForm', '#wifiSave', '#wifiMsg', fd => {
   if (ap && p && p.length < 8) {
     $('#wifiMsg').textContent = 'AP password must be at least 8 characters.';
     return false;
+  }
+  if (!ap && fd.get('fb_ap') === '1') {
+    const fp = fd.get('fb_ap_pass');
+    if (fp && fp.length < 8) {
+      $('#wifiMsg').textContent =
+        'Fallback AP password must be at least 8 characters.';
+      return false;
+    }
+    if (!fp && !fd.get('fb_ap_open') && !hasFbApPass) {
+      $('#wifiMsg').textContent =
+        'Set a fallback AP password, or tick "Open network".';
+      return false;
+    }
   }
   if (!ap && !fd.get('wifi_ssid')) {
     $('#wifiMsg').textContent = 'Pick a network (scan first).';

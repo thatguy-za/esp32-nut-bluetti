@@ -99,6 +99,10 @@ a `.bin` when the bridge has no route out:
 - **Over-the-air updates** — pick a GitHub release from the Maintenance tab, or
   upload a `.bin`. Spare-slot write with bootloader rollback.
 - **Telegram alerts** — mains lost/restored, battery low, unit unreachable.
+  Held and retried if the network is down when they're raised.
+- **Survives the network going away** — retries forever instead of dropping into
+  setup, and can raise a fallback AP so a bridge whose Wi-Fi has gone is still
+  reachable.
 - **Device controls** — AC/DC output, ECO modes, charging mode and more from
   the web page. Off by default; NUT stays read-only.
 - **Static IP or DHCP**, settable hostname, status LED support.

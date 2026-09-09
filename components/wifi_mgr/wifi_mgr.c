@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/event_groups.h"
 
 #include "esp_wifi.h"
@@ -24,6 +25,9 @@ static const char *TAG = "wifi_mgr";
 #define BACKOFF_MIN_MS 1000
 #define BACKOFF_MAX_MS 30000
 
+/* How often the fallback supervisor looks at the link. */
+#define FALLBACK_TICK_MS 2000
+
 static EventGroupHandle_t s_events;
 static esp_netif_t       *s_sta_netif;
 static esp_netif_t       *s_ap_netif;
@@ -34,6 +38,16 @@ static int                s_retries;
 static uint32_t           s_backoff_ms = BACKOFF_MIN_MS;
 static esp_timer_handle_t s_retry_timer;
 static char               s_ip[16] = "0.0.0.0";
+
+/* Fallback AP (see wifi_mgr_set_fallback_ap). Written by the caller,
+ * read by the supervisor task; both are coarse enough that the worst a
+ * torn read can do is use the previous SSID for one cycle. */
+static bool               s_fb_enabled;
+static char               s_fb_ssid[33];
+static char               s_fb_pass[65];
+static uint32_t           s_fb_after_ms;
+static bool               s_fb_ap_up;      /* the AP up now is ours */
+static bool               s_fb_task_started;
 
 /* Retry forever, with backoff. Giving up permanently would strand a
  * headless device after any transient outage — a rebooted router, or the
@@ -73,6 +87,9 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         }
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         strcpy(s_ip, "0.0.0.0");
+        /* The lease is gone with the link: anything asking "are we on the
+         * network?" must see false from here until the next GOT_IP. */
+        xEventGroupClearBits(s_events, BIT_CONNECTED);
         if (!s_want_connect) {
             return;
         }
@@ -200,6 +217,98 @@ esp_err_t wifi_mgr_ap_stop(void)
 bool wifi_mgr_ap_active(void)
 {
     return s_ap_up;
+}
+
+/* ------------------------------------------------------------------ */
+/* Fallback AP                                                         */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Polled rather than driven off the disconnect event, because that event
+ * repeats on every failed retry: an event-armed timer would be pushed
+ * back each time and never fire. A 2 s tick costs nothing and the state
+ * it reads — "does the station hold a lease" — is the whole question.
+ */
+static void fallback_task(void *arg)
+{
+    (void)arg;
+    uint32_t down_ms = 0;
+
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(FALLBACK_TICK_MS));
+
+        /* Configured AP mode owns the radio; stay out of its way. */
+        if (!s_fb_enabled || (s_ap_up && !s_fb_ap_up)) {
+            down_ms = 0;
+            continue;
+        }
+
+        if (wifi_mgr_sta_connected()) {
+            down_ms = 0;
+            if (s_fb_ap_up) {
+                ESP_LOGI(TAG, "station back on '%s' — dropping the fallback AP",
+                         s_ip);
+                s_fb_ap_up = false;
+                wifi_mgr_ap_stop();   /* reconnects the station itself */
+            }
+            continue;
+        }
+
+        if (s_fb_ap_up) {
+            continue;                 /* already up, still waiting */
+        }
+        down_ms += FALLBACK_TICK_MS;
+        if (down_ms < s_fb_after_ms) {
+            continue;
+        }
+        ESP_LOGW(TAG, "station down for %us — raising the fallback AP '%s'",
+                 (unsigned)(down_ms / 1000), s_fb_ssid);
+        /* APSTA: the station keeps retrying underneath, so the bridge
+         * rejoins on its own once the network is back. */
+        if (wifi_mgr_ap_start(s_fb_ssid, s_fb_pass) == ESP_OK) {
+            s_fb_ap_up = true;
+        } else {
+            ESP_LOGE(TAG, "fallback AP failed to start; retrying later");
+            down_ms = 0;
+        }
+    }
+}
+
+void wifi_mgr_set_fallback_ap(bool enabled, const char *ssid,
+                              const char *pass, uint32_t after_ms)
+{
+    if (!ssid || !ssid[0]) {
+        wifi_mgr_default_ap_ssid(s_fb_ssid, sizeof(s_fb_ssid));
+    } else {
+        strlcpy(s_fb_ssid, ssid, sizeof(s_fb_ssid));
+    }
+    strlcpy(s_fb_pass, pass ? pass : "", sizeof(s_fb_pass));
+    s_fb_after_ms = after_ms ? after_ms : 60000;
+    s_fb_enabled  = enabled;
+
+    if (!enabled) {
+        if (s_fb_ap_up) {
+            s_fb_ap_up = false;
+            wifi_mgr_ap_stop();
+        }
+        return;
+    }
+    if (!s_fb_task_started) {
+        if (xTaskCreate(fallback_task, "wifi_fb", 3072, NULL, 3, NULL) != pdPASS) {
+            ESP_LOGE(TAG, "cannot start the fallback-AP supervisor");
+            s_fb_enabled = false;
+            return;
+        }
+        s_fb_task_started = true;
+    }
+    ESP_LOGI(TAG, "fallback AP '%s' (%s) armed after %us offline",
+             s_fb_ssid, s_fb_pass[0] ? "WPA2" : "open",
+             (unsigned)(s_fb_after_ms / 1000));
+}
+
+bool wifi_mgr_fallback_ap_active(void)
+{
+    return s_fb_ap_up;
 }
 
 void wifi_mgr_ap_ip(char *buf, size_t len)

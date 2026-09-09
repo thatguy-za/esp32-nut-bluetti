@@ -55,7 +55,12 @@ static struct {
 
     bluetti_scan_cb_t    scan_cb;
     void                *scan_cb_user;
-    uint8_t              seen[24][6];
+    /* Addresses already reported this scan, and whether the report
+     * carried a name yet — see handle_scan_disc(). */
+    struct {
+        uint8_t addr[6];
+        bool    named;
+    }                    seen[24];
     int                  seen_n;
 
     ble_addr_t           target_addr;
@@ -194,17 +199,26 @@ static bool name_looks_bluetti(const char *name, size_t len)
     return false;
 }
 
-static bool seen_before(const uint8_t val[6])
+/* Index of an address in the seen table, or -1. */
+static int seen_index(const uint8_t val[6])
 {
     for (int i = 0; i < b.seen_n; i++) {
-        if (memcmp(b.seen[i], val, 6) == 0) {
-            return true;
+        if (memcmp(b.seen[i].addr, val, 6) == 0) {
+            return i;
         }
     }
-    if (b.seen_n < (int)(sizeof(b.seen) / sizeof(b.seen[0]))) {
-        memcpy(b.seen[b.seen_n++], val, 6);
+    return -1;
+}
+
+/* Add an address to the seen table; -1 when it is full. */
+static int seen_add(const uint8_t val[6], bool named)
+{
+    if (b.seen_n >= (int)(sizeof(b.seen) / sizeof(b.seen[0]))) {
+        return -1;
     }
-    return false;
+    memcpy(b.seen[b.seen_n].addr, val, 6);
+    b.seen[b.seen_n].named = named;
+    return b.seen_n++;
 }
 
 /* Render a UUID for logging; NimBLE's own formatter needs a buffer. */
@@ -561,14 +575,31 @@ static int on_disc_svc(uint16_t conn, const struct ble_gatt_error *err,
 
 static void handle_scan_disc(struct ble_gap_event *event)
 {
-    if (seen_before(event->disc.addr.val)) {
-        return;
-    }
     struct ble_hs_adv_fields f;
     if (ble_hs_adv_parse_fields(&f, event->disc.data,
                                 event->disc.length_data) != 0) {
         return;
     }
+
+    /*
+     * A device's name usually is not in the connectable advertisement at
+     * all — 31 bytes do not go far — but in the scan response, which the
+     * controller delivers as a *second* event for the same address. So
+     * report an address the first time it is seen, and then once more if
+     * a later packet finally carries the name; the consumer merges the
+     * two by address. Without this the list is all MACs and no names.
+     */
+    const bool has_name = f.name_len > 0;
+    int idx = seen_index(event->disc.addr.val);
+    if (idx >= 0) {
+        if (!has_name || b.seen[idx].named) {
+            return;                      /* nothing new to say */
+        }
+        b.seen[idx].named = true;
+    } else if (seen_add(event->disc.addr.val, has_name) < 0) {
+        return;                          /* table full */
+    }
+
     bluetti_scan_entry_t e = { .rssi = event->disc.rssi };
     addr_to_str(event->disc.addr.val, e.addr);
     if (f.name_len) {

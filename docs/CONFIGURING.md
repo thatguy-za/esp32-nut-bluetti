@@ -48,7 +48,7 @@ Served at `http://<device-ip>/` once the bridge is on your network.
 | **Status** | Live power flow (sources → battery → AC/DC load), charge, the NUT variables, network details, and a tail of the device log (~12 KB ring buffer). |
 | **Bluetti** | BLE target and the device-controls toggle. |
 | **NUT** | UPS name, TCP port, low-battery %, AC rating, battery capacity, and the optional NUT login. |
-| **Network** | Join a network or run an access point; hostname; DHCP or static IPv4. Addressing is station-only — the AP always serves `192.168.4.1`. |
+| **Network** | Join a network or run an access point; hostname; DHCP or static IPv4; the fallback AP. Addressing is station-only — an AP always serves `192.168.4.1`. |
 | **Alerts** | Telegram push notifications. |
 | **Maintenance** | Firmware update, restart, admin login, factory reset, status-LED settings. |
 
@@ -91,8 +91,52 @@ board with a plain single-colour LED, or none, stays dark.
   configurable in `menuconfig`.
 - **Web** — the Maintenance tab.
 
-If stored Wi-Fi credentials stop working, the device falls back to setup mode
-on its own after a failed connect.
+Setup mode is only entered on request — a wipe, or a device that has never been
+provisioned. A bridge that simply can't reach its network keeps trying instead;
+see below.
+
+## When the network goes away
+
+A UPS bridge is worth least at exactly the moment it's needed most, so the
+behaviour here is deliberate.
+
+**It keeps trying, forever.** A dropped station link is retried with backoff up
+to 30 s between attempts, for as long as it takes. Nothing gives up, and losing
+Wi-Fi never sends the device back to setup mode — after a power cut the bridge
+boots in seconds while the router takes a minute or two, and a device that
+surrendered at that point would sit in a setup portal serving nothing while a
+perfectly good network came up around it. It boots, starts everything, and
+joins when the network is there.
+
+**The Bluetti link is unaffected.** Bluetooth is a separate radio and a separate
+task: polling continues, telemetry stays current, and the NUT variables are
+right the instant a client can reach them again. The NUT listener isn't torn
+down either, so `upsc` works again with no restart.
+
+### Fallback AP
+
+**Network** tab, off by default. If the bridge can't reach your Wi-Fi for 60
+seconds it brings up its own access point, so a device with nowhere to be
+reached is still reachable — join that network and the admin page is on
+`http://192.168.4.1/`.
+
+Set the SSID (blank = the board's default name) and a password of 8+ characters,
+or tick **Open network**. While it's up, the Status page says so, and the
+station keeps retrying underneath: when your network returns the bridge rejoins
+it and drops the AP on its own. Nothing to undo.
+
+It is a way back in, not a way to run: NUT clients on your normal network cannot
+see the bridge while it is hosting the fallback. If you want the bridge to
+*live* on its own network, use **Run its own AP** instead.
+
+### Alerts raised while offline
+
+The event most worth alerting on — the mains failing — is the one likeliest to
+take your router with it. A Telegram message that can't be sent is therefore
+held and retried (5 s, 15 s, 45 s, then every 5 minutes for about an hour)
+rather than dropped. Anything that lands more than 90 seconds late arrives with
+`(N min ago)` appended, so a "Mains lost" that waited out the blackout doesn't
+read as happening now.
 
 ## Device controls
 

@@ -391,10 +391,24 @@ void app_main(void)
         };
         wifi_mgr_set_ipv4(&ipv4);
         ESP_LOGI(TAG, "connecting to '%s'", cfg->wifi_ssid);
+        /*
+         * A failure here is NOT a reason to drop into setup. The usual
+         * cause is that the router simply isn't up yet: after a power cut
+         * the bridge boots in seconds and the router takes a minute or
+         * two, and a device that gave up at 30 s would sit in the setup
+         * portal serving nothing while a perfectly good network came up
+         * around it. Carry on booting instead — wifi_mgr retries forever
+         * underneath, the NUT listener binds regardless, and everything
+         * starts working the moment the network is back.
+         */
         if (wifi_mgr_sta_connect(cfg->wifi_ssid, cfg->wifi_pass, 30000) != ESP_OK) {
-            ESP_LOGW(TAG, "stored Wi-Fi failed; falling back to setup");
-            need_setup = true;
+            ESP_LOGW(TAG, "'%s' not reachable yet — starting anyway, "
+                          "will keep retrying in the background",
+                     cfg->wifi_ssid);
         }
+        wifi_mgr_set_fallback_ap(cfg->fb_ap_enabled, cfg->fb_ap_ssid,
+                                 cfg->fb_ap_pass,
+                                 APP_FALLBACK_AP_AFTER_S * 1000);
     }
 
     if (need_setup) {
@@ -416,7 +430,8 @@ void app_main(void)
     } else {
         wifi_mgr_sta_ip(ip, sizeof(ip));
     }
-    ESP_LOGI(TAG, "online at %s (%s) — NUT ':%u' UPS '%s', BLE target '%s'",
+    ESP_LOGI(TAG, "%s %s (%s) — NUT ':%u' UPS '%s', BLE target '%s'",
+             strcmp(ip, "0.0.0.0") == 0 ? "waiting for the network —" : "online at",
              ip, ap_mode ? "access point" : "station",
              cfg->nut_port, cfg->ups_name,
              cfg->ble_addr);

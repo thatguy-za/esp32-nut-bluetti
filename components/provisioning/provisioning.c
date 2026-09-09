@@ -362,6 +362,20 @@ static esp_err_t h_hostname(httpd_req_t *r)
 static void ble_scan_cb(const bluetti_scan_entry_t *e, void *user)
 {
     xSemaphoreTake(P.ble_lock, portMAX_DELAY);
+    /* One row per address. A device is reported again when its scan
+     * response finally supplies the name, so merge onto the existing
+     * entry rather than listing it twice. */
+    for (int i = 0; i < P.ble_n; i++) {
+        if (strcmp(P.ble[i].addr, e->addr) == 0) {
+            P.ble[i].rssi = e->rssi;
+            if (e->name[0]) {
+                strlcpy(P.ble[i].name, e->name, sizeof(P.ble[i].name));
+                P.ble[i].looks_like_bluetti = e->looks_like_bluetti;
+            }
+            xSemaphoreGive(P.ble_lock);
+            return;
+        }
+    }
     if (P.ble_n < (int)(sizeof(P.ble) / sizeof(P.ble[0]))) {
         P.ble[P.ble_n++] = *e;
     }
@@ -839,7 +853,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              "\"output_watts\":%d,\"ac_out_watts\":%d,\"dc_out_watts\":%d,"
              "\"input_watts\":%d,\"ac_in_watts\":%d,\"dc_in_watts\":%d,"
              "\"battery_watts\":%d,\"soc_min\":%d,\"soc_max\":%d,"
-             "\"led\":%s,\"led_gpio\":%d,\"configured\":%s}",
+             "\"led\":%s,\"led_gpio\":%d,\"fb_ap_up\":%s,\"configured\":%s}",
              ap ? "ap" : "station",
              ap ? P.cfg->ap_ssid : P.cfg->wifi_ssid, ip,
              ap ? "ap" : (P.cfg->use_static_ip ? "static" : "dhcp"), gw, dns,
@@ -861,6 +875,7 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              have && st.soc_max >= 0 ? st.soc_max : -1,
              led_status_enabled() ? "true" : "false",
              led_status_gpio(),
+             wifi_mgr_fallback_ap_active() ? "true" : "false",
              P.cfg->ble_addr[0] ? "true" : "false");
     return send_json(r, out);
 }
@@ -911,7 +926,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
     REQUIRE_AUTH(r);
     char def_ap[33];
     wifi_mgr_default_ap_ssid(def_ap, sizeof(def_ap));
-    char out[1060];  /* ssid + ap_ssid + users + addressing + telegram */
+    char out[1200];  /* ssid + ap_ssid + users + addressing + telegram */
     snprintf(out, sizeof(out),
              "{\"ble_addr\":\"%s\",\"log_level\":%d,\"controls_enabled\":%s,"
              "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
@@ -922,6 +937,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              "\"auth_user\":\"%s\",\"auth_set\":%s,"
              "\"hostname\":\"%s\",\"use_static_ip\":%s,\"static_ip\":\"%s\","
              "\"static_mask\":\"%s\",\"static_gw\":\"%s\",\"static_dns\":\"%s\","
+             "\"fb_ap_enabled\":%s,\"fb_ap_ssid\":\"%s\",\"has_fb_ap_pass\":%s,"
              "\"tg_enabled\":%s,\"tg_chat\":\"%s\",\"has_tg_token\":%s,"
              "\"tg_on_power\":%s,\"tg_on_low_batt\":%s,\"tg_on_link\":%s}",
              P.cfg->ble_addr,
@@ -938,6 +954,9 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              P.cfg->hostname, P.cfg->use_static_ip ? "true" : "false",
              P.cfg->static_ip, P.cfg->static_mask, P.cfg->static_gw,
              P.cfg->static_dns,
+             P.cfg->fb_ap_enabled ? "true" : "false",
+             P.cfg->fb_ap_ssid[0] ? P.cfg->fb_ap_ssid : def_ap,
+             P.cfg->fb_ap_pass[0] ? "true" : "false",
              P.cfg->tg_enabled ? "true" : "false", P.cfg->tg_chat,
              P.cfg->tg_token[0] ? "true" : "false",
              P.cfg->tg_on_power ? "true" : "false",
@@ -1139,7 +1158,35 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
                 form_get(body, "static_dns", P.pending.static_dns,
                          sizeof(P.pending.static_dns));
             }
+
+            P.pending.fb_ap_enabled =
+                form_get(body, "fb_ap", v, sizeof(v)) && v[0] == '1';
+            if (P.pending.fb_ap_enabled) {
+                form_get(body, "fb_ap_ssid", P.pending.fb_ap_ssid,
+                         sizeof(P.pending.fb_ap_ssid));
+                /* Blank password field = keep the stored one. */
+                if (form_get(body, "fb_ap_pass", v, sizeof(v)) && v[0]) {
+                    strlcpy(P.pending.fb_ap_pass, v,
+                            sizeof(P.pending.fb_ap_pass));
+                }
+                if (form_get(body, "fb_ap_open", v, sizeof(v)) && v[0] == '1') {
+                    P.pending.fb_ap_pass[0] = '\0';
+                }
+            }
             free(body);
+
+            if (P.pending.fb_ap_enabled) {
+                size_t flen = strlen(P.pending.fb_ap_pass);
+                if (flen > 0 && flen < 8) {
+                    return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                                               "fallback AP password must be "
+                                               "8+ characters");
+                }
+                if (P.pending.fb_ap_ssid[0] == '\0') {
+                    wifi_mgr_default_ap_ssid(P.pending.fb_ap_ssid,
+                                             sizeof(P.pending.fb_ap_ssid));
+                }
+            }
 
             if (P.pending.wifi_ssid[0] == '\0') {
                 return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
