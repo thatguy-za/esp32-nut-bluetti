@@ -20,7 +20,7 @@
 #include "app_config.h"
 
 /* Must track the #define in app_config.c. */
-#define CFG_VERSION 9u
+#define CFG_VERSION 10u
 
 static int fails;
 #define OKF(c, ...) do { bool _ok = (c); printf(_ok ? "ok:   " : "FAIL: "); \
@@ -139,7 +139,7 @@ int main(void)
      * the short read left behind. Armed-by-accident is the one outcome
      * this feature must never produce. */
     const size_t v7_len = offsetof(blob_t, cfg) + offsetof(app_config_t, pve);
-    OKF(ACCEPT(v7_len, 7u), "a v7-length blob is accepted by v9");
+    OKF(ACCEPT(v7_len, 7u), "a v7-length blob is accepted by v10");
     blob_t v7 = { .version = 7u, .cfg = defaults };
     v7.cfg.pve.enabled = false;
     v7.cfg.pve.armed = false;
@@ -161,6 +161,16 @@ int main(void)
     OKF(offsetof(pve_host_t, on_battery_min) > offsetof(pve_host_t, fingerprint),
         "v9 host triggers sit after the fingerprint (v8 had none)");
     OKF(ACCEPT(full_len, 8u), "a v8 blob is accepted (then its Proxmox block is reset)");
+
+    /* v9 -> v10: each host's free-text guest list became per-guest rule
+     * slots (id + its own triggers) — a completely different field, not
+     * an appended one, so a v9 block's bytes read as v10 are meaningless
+     * too. Same reset, same reason. */
+    OKF(offsetof(pve_host_t, guests) < offsetof(pve_host_t, guest_wait_s),
+        "v10 guest rule slots sit where the old free-text list did");
+    OKF(sizeof(((pve_host_t *)0)->guests) == PVE_MAX_GUESTS * sizeof(pve_guest_t),
+        "the guests field is now an array of rule slots, not a char buffer");
+    OKF(ACCEPT(full_len, 9u), "a v9 blob is accepted (then its Proxmox block is reset)");
 
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;

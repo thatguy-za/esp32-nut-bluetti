@@ -28,14 +28,17 @@ static const char *TAG = "app_config";
  *   8: added the Proxmox shutdown config.
  *   9: Proxmox triggers moved into each host. The block's layout changed,
  *      so a v8 block is reset to defaults (off, dry run) on load.
+ *  10: each host's free-text guest list became per-guest rule slots
+ *      (id + its own triggers). Layout changed again; v8 and v9 blocks are
+ *      both reset to defaults on load.
  *
  * From v3 on, fields are only ever appended, and a stored blob of an
- * older-but-recognised version (3 to 8) is kept: the bytes that were
+ * older-but-recognised version (3 to 7) is kept: the bytes that were
  * written still mean what they meant, and the newer trailing fields come
  * up at their defaults. A newer, much older, or unreadable blob is still
  * discarded.
  */
-#define CFG_VERSION 9u
+#define CFG_VERSION 10u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -177,11 +180,13 @@ esp_err_t app_config_load(app_config_t *cfg)
     *cfg = blob->cfg;
     uint32_t stored_version = blob->version;
     free(blob);
-    if (stored_version == 8u) {
+    if (stored_version == 8u || stored_version == 9u) {
         /* v8's Proxmox block had global triggers and a different host
-         * layout; its bytes do not mean what v9's do. Off and dry-run is
+         * layout; v9 replaced a free-text guest list with per-guest rule
+         * slots. Neither's bytes mean what v10's do. Off and dry-run is
          * the only safe reading of a block we cannot interpret. */
-        ESP_LOGW(TAG, "config v8: Proxmox settings reset (layout changed in v9)");
+        ESP_LOGW(TAG, "config v%u: Proxmox settings reset (host layout changed in v10)",
+                 (unsigned)stored_version);
         app_config_pve_defaults(&cfg->pve);
     }
     if (stored_version < 6u) {

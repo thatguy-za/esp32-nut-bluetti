@@ -48,7 +48,20 @@
 extern "C" {
 #endif
 
-#define PVE_MAX_HOSTS 4
+#define PVE_MAX_HOSTS  4
+#define PVE_MAX_GUESTS 8   /* configured guest rules per host */
+
+/* One VM or container with its own trigger, independent of the host's:
+ * a disposable VM can go at ten minutes while the hypervisor itself waits
+ * thirty. A guest with both triggers off still participates — it is swept
+ * up (stopped, then waited on) whenever the *host's* trigger fires, the
+ * same "stop these guests before the node" behaviour this replaces. */
+typedef struct {
+    int      id;              /* VM/CT id from Proxmox; 0 = empty slot     */
+    uint16_t on_battery_min;  /* on battery this long; 0 = off             */
+    uint8_t  charge_pct;      /* charge at or below this, on battery; 0=off */
+    bool     enabled;         /* this slot holds a configured rule         */
+} pve_guest_t;
 
 /* One Proxmox host, with its own triggers: each host runs its own
  * countdown against the same outage and fires independently, so a NAS can
@@ -59,8 +72,9 @@ typedef struct {
     char     node[32];       /* node name, as `pvecm nodes` / the UI shows */
     char     token_id[64];   /* ups@pve!shutdown                           */
     char     secret[40];     /* the token secret (a UUID)                  */
-    char     guests[64];     /* VM/CT ids to stop first, "101,102"; blank = none */
-    uint16_t guest_wait_s;   /* after the last guest, before the node      */
+    pve_guest_t guests[PVE_MAX_GUESTS];
+    uint16_t guest_wait_s;   /* after guests fired alongside the node,
+                                before the node itself                     */
     bool     shutdown_node;  /* false = guests only, the node stays up     */
     char     fingerprint[65];/* SHA-256 of the server cert, 64 hex, no
                                 colons; blank = not pinned, nothing is sent */
@@ -70,7 +84,8 @@ typedef struct {
 } pve_host_t;
 
 /* Stored inside app_config_t. Its layout changed at CFG_VERSION 9, when
- * the triggers moved into the hosts; the loader resets an older block. */
+ * the triggers moved into the hosts, and again at 10, when the free-text
+ * guest list became per-guest rules; the loader resets an older block. */
 typedef struct {
     bool     enabled;        /* the feature at all                         */
     bool     armed;          /* false = dry-run: log + notify, touch nothing */
@@ -97,19 +112,35 @@ typedef struct {
     int64_t mains_since_us;       /* ...since this edge                    */
     bool    fired[PVE_MAX_HOSTS]; /* per host: latched until mains is back */
     char    reason[PVE_MAX_HOSTS][64];  /* why each fired                  */
+    bool    guest_fired[PVE_MAX_HOSTS][PVE_MAX_GUESTS];
+    char    guest_reason[PVE_MAX_HOSTS][PVE_MAX_GUESTS][96];
 } pve_engine_t;
 
-/* Fold one observation into the engine. Returns a bitmask of the hosts
- * whose trigger is met on this observation — each host appears in it
- * exactly once per outage, and never while its latch is set. The caller
- * decides armed vs dry-run. */
-unsigned pve_eval(const pve_config_t *cfg, pve_engine_t *st,
-                  const pve_obs_t *obs, int64_t now_us);
+/* One pve_eval() result: which hosts fired (their own trigger — the node
+ * itself is due) and which guest slots fired (that guest is due, whether
+ * from its own trigger or because it was swept up when its host fired). A
+ * guest appears in `guests[i]` exactly once per outage, same as a host in
+ * `hosts`, and never while its own latch is set. */
+typedef struct {
+    unsigned hosts;
+    unsigned guests[PVE_MAX_HOSTS];
+} pve_fire_t;
+
+/* Fold one observation into the engine. The caller decides armed vs
+ * dry-run. */
+pve_fire_t pve_eval(const pve_config_t *cfg, pve_engine_t *st,
+                    const pve_obs_t *obs, int64_t now_us);
 
 /* Seconds until host `i`'s on-battery trigger fires, or -1 when no
  * countdown is running, that trigger is off, or the host is latched. */
 int pve_countdown_s(const pve_config_t *cfg, const pve_engine_t *st, int i,
                     int64_t now_us);
+
+/* Same, for guest slot `g` of host `i`'s own on-battery trigger. Does not
+ * report the node's countdown, even though that would also take this guest
+ * down — that one is pve_countdown_s(). */
+int pve_guest_countdown_s(const pve_config_t *cfg, const pve_engine_t *st,
+                          int i, int g, int64_t now_us);
 
 
 /* ---- runtime ------------------------------------------------------ */
@@ -128,7 +159,17 @@ void pve_shutdown_reconfigure(const pve_config_t *cfg);
  * decoded update, and from the staleness path with known = false. */
 void pve_shutdown_observe(bool known, bool on_mains, int soc_pct);
 
-/* Snapshot for the status page: the engine, and one line per host. */
+/* Snapshot for the status page: one line per configured guest rule... */
+typedef struct {
+    int  id;
+    bool enabled;
+    bool fired;
+    int  countdown_s;            /* -1 = none running                      */
+    char last[64];
+    bool last_ok;
+} pve_guest_status_t;
+
+/* ...and one per host, the engine, and its guests. */
 typedef struct {
     char node[32];
     bool enabled;
@@ -138,6 +179,7 @@ typedef struct {
     char last[64];               /* "" until something happens; then the
                                     last test or shutdown result          */
     bool last_ok;
+    pve_guest_status_t guests[PVE_MAX_GUESTS];
 } pve_host_status_t;
 
 typedef struct {

@@ -52,9 +52,11 @@ static struct {
     void             *cb_user;
     SemaphoreHandle_t lock;
     bool              started;
-    bool              running;     /* the worker task is alive           */
-    unsigned          pending;     /* hosts triggered, not yet handled   */
+    bool              running;               /* the worker task is alive  */
+    unsigned          pending_hosts;         /* host bit: node needs shutdown */
+    unsigned          pending_guests[PVE_MAX_HOSTS]; /* guest bit: that guest does */
     struct { char text[64]; bool ok; } host_last[PVE_MAX_HOSTS];
+    struct { char text[64]; bool ok; } guest_last[PVE_MAX_HOSTS][PVE_MAX_GUESTS];
 } P;
 
 static void note_host(int i, bool ok, const char *text)
@@ -63,6 +65,15 @@ static void note_host(int i, bool ok, const char *text)
     xSemaphoreTake(P.lock, portMAX_DELAY);
     P.host_last[i].ok = ok;
     strlcpy(P.host_last[i].text, text, sizeof(P.host_last[i].text));
+    xSemaphoreGive(P.lock);
+}
+
+static void note_guest(int i, int g, bool ok, const char *text)
+{
+    if (i < 0 || i >= PVE_MAX_HOSTS || g < 0 || g >= PVE_MAX_GUESTS) return;
+    xSemaphoreTake(P.lock, portMAX_DELAY);
+    P.guest_last[i][g].ok = ok;
+    strlcpy(P.guest_last[i][g].text, text, sizeof(P.guest_last[i][g].text));
     xSemaphoreGive(P.lock);
 }
 
@@ -307,16 +318,6 @@ static void describe(int st, const char *err, char *out, size_t sz)
     else                 snprintf(out, sz, "HTTP %d", st);
 }
 
-/* Walk "101, 102,105" one id at a time. */
-static const char *next_guest(const char *p, int *id)
-{
-    while (*p && !isdigit((unsigned char)*p)) p++;
-    if (!*p) return NULL;
-    *id = atoi(p);
-    while (isdigit((unsigned char)*p)) p++;
-    return p;
-}
-
 static void emit(const char *text)
 {
     ESP_LOGW(TAG, "%s", text);
@@ -383,8 +384,13 @@ static bool shutdown_node(const pve_host_t *h, char *why, size_t wsz)
     return false;
 }
 
-/* Handle one host that has just triggered. */
-static void run_host(int i, const pve_config_t *cfg, const char *reason)
+/* Handle one host's pending work: any guests whose own trigger (or the
+ * node's, sweeping them up) fired, then — if the node itself is due — the
+ * node. `guest_reason` holds one entry per bit that could be set in
+ * `guest_mask`; entries for bits not set are never read. */
+static void run_host(int i, const pve_config_t *cfg, bool node_pending,
+                     unsigned guest_mask, const char *node_reason,
+                     const char guest_reason[PVE_MAX_GUESTS][96])
 {
     const pve_host_t *h = &cfg->hosts[i];
     char text[240];
@@ -392,41 +398,69 @@ static void run_host(int i, const pve_config_t *cfg, const char *reason)
         return;
     }
     if (!cfg->armed) {
-        snprintf(text, sizeof(text), "DRY RUN \xE2\x80\x94 would shut down %s%s%s (%s)",
-                 h->node, h->guests[0] ? " after guests " : "",
-                 h->guests[0] ? h->guests : "", reason);
-        emit(text);
-        note_host(i, true, "dry run: would shut down");
+        for (int g = 0; g < PVE_MAX_GUESTS; g++) {
+            if (!(guest_mask & (1u << g))) continue;
+            snprintf(text, sizeof(text), "DRY RUN \xE2\x80\x94 would shut down guest %d on %s (%s)",
+                     h->guests[g].id, h->node, guest_reason[g]);
+            emit(text);
+            note_guest(i, g, true, "dry run: would shut down");
+        }
+        if (node_pending) {
+            snprintf(text, sizeof(text), "DRY RUN \xE2\x80\x94 would shut down %s (%s)",
+                     h->node, node_reason);
+            emit(text);
+            note_host(i, true, "dry run: would shut down");
+        }
         return;
     }
     if (!h->fingerprint[0]) {
-        snprintf(text, sizeof(text), "\xE2\x9D\x8C Proxmox %s NOT shut down: "
-                 "certificate not trusted yet (use Test connection on the Proxmox tab)", h->node);
-        emit(text);
-        note_host(i, false, "not trusted \xE2\x80\x94 skipped");
+        if (node_pending) {
+            snprintf(text, sizeof(text), "\xE2\x9D\x8C Proxmox %s NOT shut down: "
+                     "certificate not trusted yet (use Test connection on the Proxmox tab)", h->node);
+            emit(text);
+            note_host(i, false, "not trusted \xE2\x80\x94 skipped");
+        }
+        for (int g = 0; g < PVE_MAX_GUESTS; g++) {
+            if (guest_mask & (1u << g)) {
+                note_guest(i, g, false, "not trusted \xE2\x80\x94 skipped");
+            }
+        }
         return;
     }
 
-    char why[96] = "";
-    bool good = true;
-    int id;
-    for (const char *p = h->guests; (p = next_guest(p, &id)) != NULL; ) {
-        if (!shutdown_guest(h, id, why, sizeof(why))) {
-            good = false;
-            ESP_LOGE(TAG, "%s: %s", h->node, why);
+    bool any_guest_shut = false;
+    for (int g = 0; g < PVE_MAX_GUESTS; g++) {
+        if (!(guest_mask & (1u << g))) continue;
+        int id = h->guests[g].id;
+        char why[96] = "";
+        if (shutdown_guest(h, id, why, sizeof(why))) {
+            snprintf(text, sizeof(text), "\xF0\x9F\x94\xBB Shutting down guest %d on %s (%s)",
+                     id, h->node, guest_reason[g]);
+            note_guest(i, g, true, "shutdown sent");
+            any_guest_shut = true;
         } else {
-            ESP_LOGW(TAG, "%s: guest %d shutting down", h->node, id);
+            snprintf(text, sizeof(text), "\xE2\x9D\x8C Guest %d on %s shutdown FAILED \xE2\x80\x94 %s",
+                     id, h->node, why);
+            note_guest(i, g, false, why);
+            ESP_LOGE(TAG, "%s: %s", h->node, why);
         }
+        emit(text);
     }
-    if (h->guests[0] && h->guest_wait_s) {
+
+    if (!node_pending) {
+        return;
+    }
+    /* Only guests just stopped *in this pass* are worth a wait for — one
+     * that fired minutes ago on its own trigger has had all the time it
+     * needs already. */
+    if (any_guest_shut && h->guest_wait_s) {
         vTaskDelay(pdMS_TO_TICKS((uint32_t)h->guest_wait_s * 1000));
     }
-    if (h->shutdown_node) {
-        good = shutdown_node(h, why, sizeof(why)) && good;
-    }
+    char why[96] = "";
+    bool good = !h->shutdown_node || shutdown_node(h, why, sizeof(why));
     if (good) {
         snprintf(text, sizeof(text), "\xF0\x9F\x94\xBB Shutting down Proxmox %s (%s)",
-                 h->node, reason);
+                 h->node, node_reason);
         note_host(i, true, "shutdown sent");
     } else {
         snprintf(text, sizeof(text), "\xE2\x9D\x8C Proxmox %s shutdown FAILED \xE2\x80\x94 %s",
@@ -436,21 +470,28 @@ static void run_host(int i, const pve_config_t *cfg, const char *reason)
     emit(text);
 }
 
-/* Drains P.pending until it is empty, then exits. A host that triggers
- * while another is being handled is picked up on the next pass; a second
- * task is never started while this one lives. */
+/* Drains P.pending_hosts / P.pending_guests until both are empty, then
+ * exits. Work that arrives while another host is being handled is picked
+ * up on the next pass; a second task is never started while this one
+ * lives. */
 static void worker_task(void *arg)
 {
     for (;;) {
         pve_config_t cfg;
         char reason[sizeof(P.eng.reason[0])];
+        char greason[PVE_MAX_GUESTS][sizeof(P.eng.guest_reason[0][0])];
         int i = -1;
+        bool node_pending = false;
+        unsigned guest_mask = 0;
 
         xSemaphoreTake(P.lock, portMAX_DELAY);
         for (int k = 0; k < PVE_MAX_HOSTS; k++) {
-            if (P.pending & (1u << k)) {
+            if ((P.pending_hosts & (1u << k)) || P.pending_guests[k]) {
                 i = k;
-                P.pending &= ~(1u << k);
+                node_pending = (P.pending_hosts & (1u << k)) != 0;
+                guest_mask = P.pending_guests[k];
+                P.pending_hosts &= ~(1u << k);
+                P.pending_guests[k] = 0;
                 break;
             }
         }
@@ -461,9 +502,12 @@ static void worker_task(void *arg)
         }
         cfg = P.cfg;
         strlcpy(reason, P.eng.reason[i], sizeof(reason));
+        for (int g = 0; g < PVE_MAX_GUESTS; g++) {
+            strlcpy(greason[g], P.eng.guest_reason[i][g], sizeof(greason[g]));
+        }
         xSemaphoreGive(P.lock);
 
-        run_host(i, &cfg, reason);
+        run_host(i, &cfg, node_pending, guest_mask, reason, greason);
     }
     vTaskDelete(NULL);
 }
@@ -520,14 +564,26 @@ void pve_shutdown_observe(bool known, bool on_mains, int soc_pct)
     };
 
     xSemaphoreTake(P.lock, portMAX_DELAY);
-    unsigned fire = pve_eval(&P.cfg, &P.eng, &obs, esp_timer_get_time());
+    pve_fire_t fire = pve_eval(&P.cfg, &P.eng, &obs, esp_timer_get_time());
+    bool any = fire.hosts != 0;
+    for (int i = 0; i < PVE_MAX_HOSTS && !any; i++) {
+        any = fire.guests[i] != 0;
+    }
     bool start = false;
-    if (fire) {
-        P.pending |= fire;
+    if (any) {
+        P.pending_hosts |= fire.hosts;
         for (int i = 0; i < PVE_MAX_HOSTS; i++) {
-            if (fire & (1u << i)) {
+            P.pending_guests[i] |= fire.guests[i];
+            if (fire.hosts & (1u << i)) {
                 ESP_LOGW(TAG, "%s: trigger \xE2\x80\x94 %s (%s)", P.cfg.hosts[i].node,
                          P.eng.reason[i], P.cfg.armed ? "ARMED" : "dry run");
+            }
+            for (int g = 0; g < PVE_MAX_GUESTS; g++) {
+                if (fire.guests[i] & (1u << g)) {
+                    ESP_LOGW(TAG, "%s: guest %d trigger \xE2\x80\x94 %s (%s)",
+                             P.cfg.hosts[i].node, P.cfg.hosts[i].guests[g].id,
+                             P.eng.guest_reason[i][g], P.cfg.armed ? "ARMED" : "dry run");
+                }
             }
         }
         if (!P.running) {
@@ -555,6 +611,9 @@ void pve_shutdown_status(pve_status_t *out)
     out->on_battery_s = -1;
     for (int i = 0; i < PVE_MAX_HOSTS; i++) {
         out->hosts[i].countdown_s = -1;
+        for (int g = 0; g < PVE_MAX_GUESTS; g++) {
+            out->hosts[i].guests[g].countdown_s = -1;
+        }
     }
     if (!P.started) {
         return;
@@ -576,6 +635,16 @@ void pve_shutdown_status(pve_status_t *out)
         o->countdown_s = pve_countdown_s(&P.cfg, &P.eng, i, now);
         strlcpy(o->last, P.host_last[i].text, sizeof(o->last));
         o->last_ok = P.host_last[i].ok;
+        for (int g = 0; g < PVE_MAX_GUESTS; g++) {
+            const pve_guest_t *gg = &h->guests[g];
+            pve_guest_status_t *go = &o->guests[g];
+            go->id = gg->id;
+            go->enabled = gg->enabled && gg->id != 0;
+            go->fired = P.eng.guest_fired[i][g];
+            go->countdown_s = pve_guest_countdown_s(&P.cfg, &P.eng, i, g, now);
+            strlcpy(go->last, P.guest_last[i][g].text, sizeof(go->last));
+            go->last_ok = P.guest_last[i][g].ok;
+        }
     }
     xSemaphoreGive(P.lock);
 }
@@ -661,10 +730,11 @@ int pve_shutdown_test(pve_host_t *h, char *msg, size_t msg_sz,
                    has_priv(d, "/", "Sys.PowerMgmt") ||
                    has_priv(d, "/nodes", "Sys.PowerMgmt") ||
                    has_priv(d, nodepath, "Sys.PowerMgmt");
-    int guests_missing = 0, guests = 0, id;
-    for (const char *p = h->guests; (p = next_guest(p, &id)) != NULL; ) {
+    int guests_missing = 0, guests = 0;
+    for (int g = 0; g < PVE_MAX_GUESTS; g++) {
+        if (!h->guests[g].enabled || h->guests[g].id == 0) continue;
         char vp[24];
-        snprintf(vp, sizeof(vp), "/vms/%d", id);
+        snprintf(vp, sizeof(vp), "/vms/%d", h->guests[g].id);
         guests++;
         if (!has_priv(d, "/", "VM.PowerMgmt") && !has_priv(d, "/vms", "VM.PowerMgmt") &&
             !has_priv(d, vp, "VM.PowerMgmt")) {

@@ -247,12 +247,16 @@ self-contained:
 | | |
 | --- | --- |
 | **Connection** | API URL (`https://<node-ip>:8006`, **one per node** even in a cluster — a node that has already shut down can't proxy for the ones still to come), node name, token ID and API key (Proxmox's own two-field token — no certificate to type in, see below). The key is write-only: the page never shows it again. |
-| **Shut down when** | *On battery for N minutes* (default 30), timed on the bridge's own clock from the moment the mains drops; *or charge at or below N %* (default 10). Either one fires this host. 0 turns a trigger off; at least one must be set. |
-| **What to shut down** | **Load guests** lists the node's VMs and containers; tick the ones to stop first. Then a wait, then the node itself — untick that for guests only. |
+| **Shut down when** | *On battery for N minutes* (default 30), timed on the bridge's own clock from the moment the mains drops; *or charge at or below N %* (default 10). Either one fires this host — the node itself, and any guest below with no trigger of its own. |
+| **Guests** | **Load guests** lists the node's VMs and containers as cards; switch one on to give it its own on-battery/charge trigger, independent of the host's. Up to 8 per host. Leave a card off and it still goes down, just carried along whenever the host's own trigger fires rather than on a clock of its own. |
 
-Hosts fire **independently**: each has its own countdown off the same outage
-and its own fire-once latch, so a NAS can go at ten minutes and the hypervisor
-at thirty.
+Hosts — and guests with their own trigger — fire **independently**: each has
+its own countdown off the same shared outage and its own fire-once latch, so
+a disposable VM can go at ten minutes while the hypervisor itself waits until
+thirty. A guest with neither trigger set is still covered: it's stopped, then
+waited on, the moment the *host's* trigger fires — the "stop these guests
+before the node" behaviour this replaces, just per guest instead of typed as
+a list.
 
 ### The certificate
 

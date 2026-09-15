@@ -131,24 +131,37 @@
             margin: .4rem 0; font-size: .92rem; }
   .inline input[type=number] { width: 4.6rem; }
   .inline .or { opacity: .5; padding: 0 .2rem; }
-  .guests { border: 1px solid #8884; border-radius: .5rem; margin: .4rem 0 .2rem;
-            max-height: 14rem; overflow: auto; }
-  /* Rows are <label>s so the whole row toggles; undo the form-label styling. */
-  form .guest { display: flex; align-items: center; gap: .6rem; padding: .4rem .7rem;
-                border-bottom: 1px solid #8883; font-size: .9rem; margin: 0; opacity: 1;
-                cursor: pointer; }
-  .guest:last-child { border-bottom: 0; }
-  .guest input { width: auto; }
-  .guest .gname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .guest .gid { opacity: .55; font-variant-numeric: tabular-nums; }
   .badge { font-size: .68rem; font-weight: 600; border-radius: .3rem; padding: .05rem .4rem;
            background: #8882; letter-spacing: .03em; }
-  .guest .gstat { font-size: .78rem; opacity: .6; min-width: 4.2rem; text-align: right; }
-  .guest .gstat.up { color: #16a34a; opacity: .9; }
-  .pveEmpty { padding: .7rem; font-size: .85rem; opacity: .6; text-align: center; }
+  .pveEmpty { padding: .7rem; font-size: .85rem; opacity: .6; text-align: center;
+              border: 1px dashed #8886; border-radius: .5rem; }
   .linkbtn { background: none; border: 0; color: #2563eb; font: inherit; cursor: pointer;
              padding: 0; text-decoration: underline; }
   .minibtn { padding: .2rem .6rem; font-size: .8rem; }
+
+  /* ---- per-guest shutdown rule cards ---- */
+  #pveHostBoxes .glist { display: flex; flex-direction: column; gap: .5rem; margin: .5rem 0 0; }
+  .gcard { border: 1px solid #8884; border-radius: .5rem; background: #8881;
+           padding: .55rem .7rem .6rem; transition: background .15s, border-color .15s; }
+  .gcard.on { background: #2563eb0d; border-color: #2563eb55; }
+  .ghead { display: flex; align-items: center; gap: .55rem; }
+  .ghead .gname { font-weight: 600; font-size: .92rem; min-width: 0; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }
+  .ghead .gid { opacity: .55; font-size: .8rem; font-variant-numeric: tabular-nums; }
+  .ghead .gstat { font-size: .78rem; opacity: .6; white-space: nowrap; }
+  .ghead .gstat.up { color: #16a34a; opacity: .9; }
+  .ghead .spacer { flex: 1; }
+  .gswitch { position: relative; width: 2.1rem; height: 1.2rem; flex: none; }
+  .gswitch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+  .gtrack { position: absolute; inset: 0; background: #8886; border-radius: 1rem; transition: background .15s; }
+  .gtrack::after { content: ''; position: absolute; top: 2px; left: 2px; width: 1rem; height: 1rem;
+                   background: #fff; border-radius: 50%; transition: left .15s; box-shadow: 0 1px 2px #0003; }
+  .gswitch input:checked + .gtrack { background: #2563eb; }
+  .gswitch input:checked + .gtrack::after { left: 1.1rem; }
+  .grule { display: none; margin-top: .5rem; padding-top: .5rem; border-top: 1px solid #8883; }
+  .gcard.on .grule { display: block; }
+  .grule .inline { margin: 0; font-size: .88rem; }
+  .grule .hint { margin: .35rem 0 0; }
 </style>
 </head>
 <body>
@@ -884,7 +897,6 @@ async function loadConfig() {
       $(`#h${i}_token`).value = h.token_id || '';
       $(`#h${i}_secret`).placeholder = h.has_secret ? 'unchanged' : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
       $(`#h${i}_fp`).value = h.fingerprint || '';
-      $(`#h${i}_guests`).value = h.guests || '';
       $(`#h${i}_wait`).value = h.guest_wait_s ?? 30;
       $(`#h${i}_min`).value = h.on_battery_min ?? 30;
       $(`#h${i}_pct`).value = h.charge_pct ?? 10;
@@ -893,7 +905,13 @@ async function loadConfig() {
       $(`#h${i}_fp_clear`).value = '';
       pveTitle(i);
       pveSyncChip(i);
-      if (!pveSlot[i].guests) pveRenderGuests(i);
+      pveSlot[i].rules = new Map();
+      (h.guests || []).forEach(g => {
+        if (g.enabled) pveSlot[i].rules.set(g.id, { min: g.on_battery_min || 0, pct: g.charge_pct || 0 });
+      });
+      pveSlot[i].liveGuests = null;
+      pveSyncGuestFields(i);
+      pveRenderGuestCards(i);
     });
     pveShowSlots();
     syncPveTriggers();
@@ -1316,9 +1334,13 @@ function renderPve(p) {
 
 /* ---- Proxmox tab ---- */
 const PVE_SLOTS = 4;
-/* Per-slot: what's stored (so a blank field means "keep"), the loaded
-   guest list, and whether the slot was opened with "+ Add host". */
-const pveSlot = Array.from({ length: PVE_SLOTS }, () => ({ stored: {}, guests: null, added: false }));
+const PVE_GUEST_SLOTS = 8;   /* must track PVE_MAX_GUESTS in pve_shutdown.h */
+/* Per-slot: what's stored (so a blank field means "keep"), the live guest
+   list from the last Load (null = never loaded), the configured rules
+   (guest id -> {min, pct}; presence means "on"), and whether the slot was
+   opened with "+ Add host". */
+const pveSlot = Array.from({ length: PVE_SLOTS },
+  () => ({ stored: {}, liveGuests: null, rules: new Map(), added: false }));
 
 function pveHostBox(i) {
   return `<div class="box pveHost" data-i="${i}" hidden>
@@ -1327,9 +1349,11 @@ function pveHostBox(i) {
       ${i ? `<button type="button" class="act minibtn pveRemove" data-i="${i}">Remove</button>` : ''}
     </h2>
     <input type="hidden" name="h${i}_clear" value="">
-    <input type="hidden" name="h${i}_guests" id="h${i}_guests">
     <input type="hidden" name="h${i}_fp" id="h${i}_fp" value="">
     <input type="hidden" name="h${i}_fp_clear" id="h${i}_fp_clear" value="">
+    ${Array.from({ length: PVE_GUEST_SLOTS }, (_, g) => ['id', 'on', 'min', 'pct']
+      .map(k => `<input type="hidden" name="h${i}_g${g}_${k}" id="h${i}_g${g}_${k}" value="">`)
+      .join('')).join('')}
     <label class="chk"><input type="checkbox" name="h${i}_on" value="1"
       style="width:auto"> Enabled</label>
 
@@ -1366,18 +1390,20 @@ function pveHostBox(i) {
     <p class="hint" style="margin:0">Timed on this bridge's clock from the moment the mains
       drops. 0 turns that trigger off.</p>
 
-    <div class="sect">What to shut down</div>
-    <div id="h${i}_glist" class="guests" hidden></div>
-    <input id="h${i}_gtext" autocomplete="off" spellcheck="false"
-           placeholder="Guest IDs to stop first, e.g. 101, 102 — or load the list">
-    <div class="row" style="margin:.4rem 0">
+    <div class="sect">Guests <span class="sub" style="font-weight:400;opacity:.6">up to ${PVE_GUEST_SLOTS} with their own rule</span></div>
+    <div class="row" style="margin:.3rem 0">
       <button type="button" class="act minibtn pveLoad" data-i="${i}">Load guests</button>
       <span class="hint" id="h${i}_gmsg"></span>
     </div>
-    <div class="inline">then wait
+    <div id="h${i}_glist" class="glist"></div>
+    <p class="hint" id="h${i}_gfoot" style="margin:.5rem 0 0"></p>
+
+    <div class="inline" style="margin-top:.8rem">then wait
       <input id="h${i}_wait" name="h${i}_wait" type="number" min="0" max="600"> seconds, then
       <label class="chk"><input type="checkbox" name="h${i}_node_off" value="1"
         style="width:auto"> shut down the node itself</label></div>
+    <p class="hint" style="margin:0">Applies when this trigger stops a guest that has no
+      rule of its own — one with its own timer that already fired earlier needs no wait.</p>
   </div>`;
 }
 $('#pveHostBoxes').innerHTML =
@@ -1424,7 +1450,12 @@ function pveHostForm(i) {
     if (v) fd.set(`h${i}_${k}`, v);
   }
   if ($(`#h${i}_fp_clear`).value) fd.set(`h${i}_fp_clear`, $(`#h${i}_fp_clear`).value);
-  fd.set(`h${i}_guests`, $(`#h${i}_guests`).value);
+  for (let g = 0; g < PVE_GUEST_SLOTS; g++) {
+    for (const k of ['id', 'on', 'min', 'pct']) {
+      const v = $(`#h${i}_g${g}_${k}`).value;
+      if (v) fd.set(`h${i}_g${g}_${k}`, v);
+    }
+  }
   if (document.querySelector(`[name=h${i}_node_off]`).checked) fd.set(`h${i}_node_off`, '1');
   return fd;
 }
@@ -1435,53 +1466,94 @@ async function pvePost(path, fd) {
   return r.json();
 }
 
-/* -- guests: the hidden field is the truth; list and text box both drive it -- */
-function pveSelectedIds(i) {
-  return $(`#h${i}_guests`).value.split(',').map(x => x.trim()).filter(Boolean);
-}
-function pveRenderGuests(i) {
-  const list = $(`#h${i}_glist`), text = $(`#h${i}_gtext`), g = pveSlot[i].guests;
-  if (!g) { list.hidden = true; text.hidden = false; text.value = pveSelectedIds(i).join(', '); return; }
-  const chosen = new Set(pveSelectedIds(i));
-  list.innerHTML = '';
-  if (!g.length) {
-    list.innerHTML = '<div class="pveEmpty">No VMs or containers on this node.</div>';
+/* -- guests: pveSlot[i].rules (id -> {min, pct}) is the truth; the hidden
+   h${i}_g${slot}_* fields are just its serialization for the form, rebuilt
+   on every change. Cards show the live list (names, type, running state)
+   merged with any configured id the live list didn't include. */
+function pveSyncGuestFields(i) {
+  const ids = [...pveSlot[i].rules.keys()];
+  for (let g = 0; g < PVE_GUEST_SLOTS; g++) {
+    const id = ids[g], r = id !== undefined ? pveSlot[i].rules.get(id) : null;
+    $(`#h${i}_g${g}_id`).value  = id !== undefined ? id : '';
+    $(`#h${i}_g${g}_on`).value  = id !== undefined ? '1' : '';
+    $(`#h${i}_g${g}_min`).value = r ? r.min : '';
+    $(`#h${i}_g${g}_pct`).value = r ? r.pct : '';
   }
-  g.forEach(x => {
-    const row = document.createElement('label');
-    row.className = 'guest';
-    const cb = document.createElement('input');
-    cb.type = 'checkbox'; cb.checked = chosen.has(String(x.id));
-    cb.onchange = () => {
-      const ids = new Set(pveSelectedIds(i));
-      cb.checked ? ids.add(String(x.id)) : ids.delete(String(x.id));
-      $(`#h${i}_guests`).value = [...ids].join(',');
-    };
-    const name = document.createElement('span'); name.className = 'gname'; name.textContent = x.name || `#${x.id}`;
-    const id = document.createElement('span'); id.className = 'gid'; id.textContent = `#${x.id}`;
-    const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = x.type === 'lxc' ? 'CT' : 'VM';
-    const st = document.createElement('span'); st.className = 'gstat' + (x.status === 'running' ? ' up' : ''); st.textContent = x.status || '';
-    row.append(cb, name, id, badge, st);
-    list.appendChild(row);
+}
+function pveGuestCard(i, g) {
+  const rule = pveSlot[i].rules.get(g.id), on = !!rule;
+  const min = rule ? rule.min : 0, pct = rule ? rule.pct : 0;
+  return `<div class="gcard${on ? ' on' : ''}">
+    <div class="ghead">
+      ${g.type ? `<span class="badge">${g.type === 'lxc' ? 'CT' : 'VM'}</span>` : ''}
+      <span class="gname">${g.name || ('guest ' + g.id)}</span>
+      <span class="gid">#${g.id}</span>
+      <span class="gstat${g.status === 'running' ? ' up' : ''}">${g.status || (g.name ? '' : 'not loaded')}</span>
+      <span class="spacer"></span>
+      <label class="gswitch">
+        <input type="checkbox" ${on ? 'checked' : ''} data-id="${g.id}">
+        <span class="gtrack"></span>
+      </label>
+    </div>
+    <div class="grule">
+      <div class="inline">on battery for
+        <input type="number" min="0" max="1440" value="${min}" data-id="${g.id}" data-k="min"> minutes
+        <span class="or">or</span> charge at or below
+        <input type="number" min="0" max="100" value="${pct}" data-id="${g.id}" data-k="pct"> %
+      </div>
+      <p class="hint">Leave both at 0 to skip this guest's own timer — it still goes
+        down with the node, just without going early.</p>
+    </div>
+  </div>`;
+}
+function pveRenderGuestCards(i) {
+  const box = $(`#h${i}_glist`), live = pveSlot[i].liveGuests;
+  const items = live ? live.slice() : [];
+  const liveIds = new Set(items.map(x => String(x.id)));
+  /* A configured id the live list didn't return (never loaded yet, or the
+     guest is gone from the node) still gets a card, so a rule is never
+     silently dropped from view. */
+  for (const id of pveSlot[i].rules.keys()) {
+    if (!liveIds.has(String(id))) items.push({ id, name: null, type: null, status: null });
+  }
+  box.innerHTML = !items.length
+    ? `<div class="pveEmpty">${live ? 'No VMs or containers on this node.'
+                                    : 'Load guests to give one its own shutdown rule.'}</div>`
+    : items.map(g => pveGuestCard(i, g)).join('');
+  box.querySelectorAll('.gswitch input').forEach(cb => cb.onchange = () => {
+    const id = +cb.dataset.id;
+    if (cb.checked) {
+      if (pveSlot[i].rules.size >= PVE_GUEST_SLOTS) {
+        cb.checked = false;
+        $(`#h${i}_gmsg`).textContent = `Up to ${PVE_GUEST_SLOTS} guest rules per host.`;
+        return;
+      }
+      pveSlot[i].rules.set(id, { min: 0, pct: 0 });
+    } else {
+      pveSlot[i].rules.delete(id);
+    }
+    pveSyncGuestFields(i);
+    pveRenderGuestCards(i);
   });
-  /* Anything chosen that isn't on the node any more stays selected but visible. */
-  chosen.forEach(id => {
-    if (g.some(x => String(x.id) === id)) return;
-    const row = document.createElement('label'); row.className = 'guest';
-    row.innerHTML = `<input type="checkbox" checked> <span class="gname">not on this node now</span><span class="gid">#${id}</span>`;
-    row.querySelector('input').onchange = () => { $(`#h${i}_guests`).value = pveSelectedIds(i).filter(x => x !== id).join(','); pveRenderGuests(i); };
-    list.appendChild(row);
+  box.querySelectorAll('.grule input[type=number]').forEach(inp => inp.oninput = () => {
+    const r = pveSlot[i].rules.get(+inp.dataset.id);
+    if (!r) return;
+    r[inp.dataset.k] = Math.max(0, +inp.value || 0);
+    pveSyncGuestFields(i);
   });
-  list.hidden = false; text.hidden = true;
+  const n = pveSlot[i].rules.size;
+  $(`#h${i}_gfoot`).textContent = n
+    ? `${n} of ${PVE_GUEST_SLOTS} guest rule${n === 1 ? '' : 's'} used — the rest go down with the node.`
+    : '';
 }
 async function pveLoadGuests(i, quiet) {
   const msg = $(`#h${i}_gmsg`), b = document.querySelector(`.pveLoad[data-i="${i}"]`);
   if (!$(`#h${i}_fp`).value) { if (!quiet) msg.textContent = 'Test the connection first.'; return; }
   b.disabled = true; msg.textContent = 'Loading…';
   try {
-    pveSlot[i].guests = await pvePost('/api/pve-guests', pveHostForm(i));
-    pveRenderGuests(i);
-    msg.textContent = pveSlot[i].guests.length ? 'Tick the ones to stop before the node.' : '';
+    pveSlot[i].liveGuests = await pvePost('/api/pve-guests', pveHostForm(i));
+    pveRenderGuestCards(i);
+    msg.textContent = '';
     b.textContent = 'Reload';
   } catch (e) {
     msg.textContent = 'Could not load: ' + e.message;
@@ -1492,9 +1564,6 @@ async function pveLoadGuests(i, quiet) {
 /* -- wiring -- */
 for (let i = 0; i < PVE_SLOTS; i++) {
   $(`#h${i}_node`).oninput = () => pveTitle(i);
-  $(`#h${i}_gtext`).oninput = () => {
-    $(`#h${i}_guests`).value = $(`#h${i}_gtext`).value.split(/[\s,]+/).filter(x => /^\d+$/.test(x)).join(',');
-  };
 }
 document.querySelectorAll('.pveLoad').forEach(b => b.onclick = () => pveLoadGuests(+b.dataset.i, false));
 
@@ -1508,13 +1577,14 @@ $('#pveAddHost').onclick = () => {
 };
 document.querySelectorAll('.pveRemove').forEach(b => b.onclick = () => {
   const i = +b.dataset.i;
-  for (const k of ['url', 'node', 'token', 'secret', 'fp', 'guests', 'gtext']) $(`#h${i}_${k}`).value = '';
+  for (const k of ['url', 'node', 'token', 'secret', 'fp']) $(`#h${i}_${k}`).value = '';
   $(`#h${i}_fp_clear`).value = '';
   document.querySelector(`[name=h${i}_on]`).checked = false;
   document.querySelector(`[name=h${i}_clear]`).value = '1';   /* wipe the slot on save */
-  pveSlot[i] = { stored: {}, guests: null, added: false };
+  pveSlot[i] = { stored: {}, liveGuests: null, rules: new Map(), added: false };
+  pveSyncGuestFields(i);
   $(`#h${i}_msg`).textContent = ''; $(`#h${i}_gmsg`).textContent = '';
-  pveTitle(i); pveSyncChip(i); pveRenderGuests(i);
+  pveTitle(i); pveSyncChip(i); pveRenderGuestCards(i);
   pveShowSlots();
 });
 

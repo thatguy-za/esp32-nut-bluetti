@@ -941,11 +941,11 @@ static esp_err_t h_admin_status(httpd_req_t *r)
     int rt_s = nut_server_get_var("battery.runtime", runtime, sizeof(runtime))
                    ? atoi(runtime) : -1;
 
-    char *out = malloc(2600);
+    char *out = malloc(5500);
     if (!out) {
         return httpd_resp_send_500(r);
     }
-    int n = snprintf(out, 2600,
+    int n = snprintf(out, 5500,
              "{\"wifi_mode\":\"%s\",\"network\":\"%s\",\"ip\":\"%s\","
              "\"addressing\":\"%s\",\"gateway\":\"%s\",\"dns\":\"%s\","
              "\"hostname\":\"%s\","
@@ -988,24 +988,39 @@ static esp_err_t h_admin_status(httpd_req_t *r)
      * in over the closing brace so the block above stays one snprintf. */
     pve_status_t ps;
     pve_shutdown_status(&ps);
-    if (n > 0 && n < 2600 && out[n - 1] == '}') {
+    if (n > 0 && n < 5500 && out[n - 1] == '}') {
         n--;
     }
-    n += snprintf(out + n, 2600 - n,
+    n += snprintf(out + n, 5500 - n,
                   ",\"pve\":{\"enabled\":%s,\"armed\":%s,\"on_battery_s\":%d,\"hosts\":[",
                   ps.enabled ? "true" : "false", ps.armed ? "true" : "false",
                   ps.on_battery_s);
-    for (int i = 0; i < PVE_MAX_HOSTS && n < 2600; i++) {
+    for (int i = 0; i < PVE_MAX_HOSTS && n < 5500; i++) {
         const pve_host_status_t *h = &ps.hosts[i];
-        n += snprintf(out + n, 2600 - n,
+        n += snprintf(out + n, 5500 - n,
                       "%s{\"node\":\"%s\",\"enabled\":%s,\"pinned\":%s,"
-                      "\"fired\":%s,\"countdown_s\":%d,\"last\":\"%s\",\"ok\":%s}",
+                      "\"fired\":%s,\"countdown_s\":%d,\"last\":\"%s\",\"ok\":%s,"
+                      "\"guests\":[",
                       i ? "," : "", h->node, h->enabled ? "true" : "false",
                       h->pinned ? "true" : "false", h->fired ? "true" : "false",
                       h->countdown_s, h->last, h->last_ok ? "true" : "false");
+        bool gfirst = true;
+        for (int g = 0; g < PVE_MAX_GUESTS && n < 5500; g++) {
+            const pve_guest_status_t *go = &h->guests[g];
+            if (!go->enabled) continue;
+            n += snprintf(out + n, 5500 - n,
+                          "%s{\"id\":%d,\"fired\":%s,\"countdown_s\":%d,\"last\":\"%s\",\"ok\":%s}",
+                          gfirst ? "" : ",", go->id,
+                          go->fired ? "true" : "false", go->countdown_s, go->last,
+                          go->last_ok ? "true" : "false");
+            gfirst = false;
+        }
+        if (n < 5500) {
+            n += snprintf(out + n, 5500 - n, "]}");
+        }
     }
-    if (n < 2600) {
-        snprintf(out + n, 2600 - n, "]}}");
+    if (n < 5500) {
+        snprintf(out + n, 5500 - n, "]}}");
     }
     esp_err_t e = send_json(r, out);
     free(out);
@@ -1058,11 +1073,11 @@ static esp_err_t h_admin_config(httpd_req_t *r)
     REQUIRE_AUTH(r);
     char def_ap[33];
     wifi_mgr_default_ap_ssid(def_ap, sizeof(def_ap));
-    char *out = malloc(3000);  /* + four Proxmox hosts */
+    char *out = malloc(6500);  /* + four Proxmox hosts, each with up to 8 guest rules */
     if (!out) {
         return httpd_resp_send_500(r);
     }
-    int n = snprintf(out, 3000,
+    int n = snprintf(out, 6500,
              "{\"ble_addr\":\"%s\",\"log_level\":%d,\"controls_enabled\":%s,"
              "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
              "\"nut_user\":\"%s\",\"nut_auth_set\":%s,"
@@ -1100,14 +1115,14 @@ static esp_err_t h_admin_config(httpd_req_t *r)
 
     /* Proxmox. Secrets are write-only: only "is one stored" goes out. */
     const pve_config_t *pv = &P.cfg->pve;
-    if (n > 0 && n < 3000 && out[n - 1] == '}') {
+    if (n > 0 && n < 6500 && out[n - 1] == '}') {
         n--;
     }
-    n += snprintf(out + n, 3000 - n,
+    n += snprintf(out + n, 6500 - n,
                   ",\"pve\":{\"enabled\":%s,\"armed\":%s,\"mains_back_min\":%u,\"hosts\":[",
                   pv->enabled ? "true" : "false", pv->armed ? "true" : "false",
                   (unsigned)pv->mains_back_min);
-    for (int i = 0; i < PVE_MAX_HOSTS && n < 3000; i++) {
+    for (int i = 0; i < PVE_MAX_HOSTS && n < 6500; i++) {
         const pve_host_t *h = &pv->hosts[i];
         char fp[96] = "";
         if (h->fingerprint[0]) {
@@ -1120,18 +1135,32 @@ static esp_err_t h_admin_config(httpd_req_t *r)
             }
             fp[o] = '\0';
         }
-        n += snprintf(out + n, 3000 - n,
+        n += snprintf(out + n, 6500 - n,
                       "%s{\"enabled\":%s,\"url\":\"%s\",\"node\":\"%s\","
-                      "\"token_id\":\"%s\",\"has_secret\":%s,\"guests\":\"%s\","
+                      "\"token_id\":\"%s\",\"has_secret\":%s,"
                       "\"guest_wait_s\":%u,\"shutdown_node\":%s,\"fingerprint\":\"%s\","
-                      "\"on_battery_min\":%u,\"charge_pct\":%u}",
+                      "\"on_battery_min\":%u,\"charge_pct\":%u,\"guests\":[",
                       i ? "," : "", h->enabled ? "true" : "false", h->url, h->node,
-                      h->token_id, h->secret[0] ? "true" : "false", h->guests,
+                      h->token_id, h->secret[0] ? "true" : "false",
                       (unsigned)h->guest_wait_s, h->shutdown_node ? "true" : "false",
                       fp, (unsigned)h->on_battery_min, (unsigned)h->charge_pct);
+        bool gfirst = true;
+        for (int g = 0; g < PVE_MAX_GUESTS && n < 6500; g++) {
+            const pve_guest_t *gg = &h->guests[g];
+            if (gg->id == 0) continue;
+            n += snprintf(out + n, 6500 - n,
+                          "%s{\"id\":%d,\"enabled\":%s,\"on_battery_min\":%u,\"charge_pct\":%u}",
+                          gfirst ? "" : ",", gg->id,
+                          gg->enabled ? "true" : "false", (unsigned)gg->on_battery_min,
+                          (unsigned)gg->charge_pct);
+            gfirst = false;
+        }
+        if (n < 6500) {
+            n += snprintf(out + n, 6500 - n, "]}");
+        }
     }
-    if (n < 3000) {
-        snprintf(out + n, 3000 - n, "]}}");
+    if (n < 6500) {
+        snprintf(out + n, 6500 - n, "]}}");
     }
     esp_err_t e = send_json(r, out);
     free(out);
@@ -1200,8 +1229,27 @@ static esp_err_t h_admin_credentials(httpd_req_t *r)
     return send_json(r, "{\"ok\":true}");
 }
 
+/* One guest rule slot, prefixed "hN_gG_". An id of 0 (blank or unset) is an
+ * empty slot regardless of what else was posted for it. */
+static void pve_guest_from_form(const char *body, int i, int g, pve_guest_t *gg)
+{
+    char k[24], v[16];
+#define GK(name) (snprintf(k, sizeof(k), "h%d_g%d_%s", i, g, name), k)
+    gg->id = form_get(body, GK("id"), v, sizeof(v)) ? atoi(v) : 0;
+    gg->enabled = form_get(body, GK("on"), v, sizeof(v)) && v[0] == '1';
+    gg->on_battery_min = (form_get(body, GK("min"), v, sizeof(v)) &&
+                         atoi(v) >= 0 && atoi(v) <= 1440) ? (uint16_t)atoi(v) : 0;
+    gg->charge_pct = (form_get(body, GK("pct"), v, sizeof(v)) &&
+                     atoi(v) >= 0 && atoi(v) <= 100) ? (uint8_t)atoi(v) : 0;
+#undef GK
+    if (gg->id <= 0) {
+        memset(gg, 0, sizeof(*gg));
+    }
+}
+
 /* Read a host's fields from a form body, prefixed "hN_". Blank secret and
- * fingerprint keep the stored ones (the UI never sees the secret). */
+ * fingerprint keep the stored ones (the UI never sees the secret); guest
+ * rules are cheap to resend in full, so every slot is always posted. */
 static bool pve_host_from_form(const char *body, int i, pve_host_t *h,
                                const pve_host_t *stored, char *err, size_t esz)
 {
@@ -1219,7 +1267,9 @@ static bool pve_host_from_form(const char *body, int i, pve_host_t *h,
     form_get(body, HK("url"), h->url, sizeof(h->url));
     form_get(body, HK("node"), h->node, sizeof(h->node));
     form_get(body, HK("token"), h->token_id, sizeof(h->token_id));
-    form_get(body, HK("guests"), h->guests, sizeof(h->guests));
+    for (int g = 0; g < PVE_MAX_GUESTS; g++) {
+        pve_guest_from_form(body, i, g, &h->guests[g]);
+    }
     h->shutdown_node = form_get(body, HK("node_off"), v, sizeof(v)) && v[0] == '1';
     if (form_get(body, HK("wait"), v, sizeof(v)) && atoi(v) >= 0) {
         h->guest_wait_s = (uint16_t)atoi(v);
