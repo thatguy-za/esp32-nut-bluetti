@@ -841,6 +841,10 @@ esp_err_t provisioning_run(app_config_t *cfg)
 static esp_err_t h_admin_root(httpd_req_t *r)
 {
     httpd_resp_set_type(r, "text/html");
+    /* The page is baked into the firmware, so it changes exactly when the
+     * firmware does — and a browser holding on to the old one after an OTA
+     * talks to an API that has moved on. Never let it be cached. */
+    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
     if (!auth_ok(r)) {
         return httpd_resp_send(r, login_html_start,
                                login_html_end - login_html_start - 1);

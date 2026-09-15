@@ -34,3 +34,8 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # --- OTA: roll back automatically if a freshly-flashed build won't come up ---
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# --- main task ---
+# app_main loads the config, brings up Wi-Fi and may run the setup portal.
+# The IDF default (3584) was already close; keep clear of it.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144

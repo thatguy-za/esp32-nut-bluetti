@@ -1,6 +1,7 @@
 #include "app_config.h"
 
 #include <string.h>
+#include <stdlib.h>
 #include <stddef.h>
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -129,10 +130,23 @@ esp_err_t app_config_load(app_config_t *cfg)
     }
 
     /* Pre-seed the struct with defaults so that a short read from an
-     * older, smaller layout leaves the newer trailing fields alone. */
-    cfg_blob_t blob = { .version = CFG_VERSION, .cfg = *cfg };
-    size_t len = sizeof(blob);
-    err = nvs_get_blob(h, CFG_KEY, &blob, &len);
+     * older, smaller layout leaves the newer trailing fields alone.
+     *
+     * On the heap, not the stack: this runs on the main task, whose stack
+     * is a few KB, and the blob is over 2 KB since the Proxmox block. v1.3.0
+     * put it on the stack and overflowed on boot — before the image could
+     * mark itself valid, so the bootloader quietly rolled every device back
+     * to v1.2.0. */
+    cfg_blob_t *blob = malloc(sizeof(*blob));
+    if (!blob) {
+        nvs_close(h);
+        ESP_LOGE(TAG, "no memory to load config; using defaults");
+        return ESP_OK;
+    }
+    blob->version = CFG_VERSION;
+    blob->cfg = *cfg;
+    size_t len = sizeof(*blob);
+    err = nvs_get_blob(h, CFG_KEY, blob, &len);
     nvs_close(h);
 
     /* Accept any v3+ blob: every version since only appends fields, so a
@@ -141,20 +155,23 @@ esp_err_t app_config_load(app_config_t *cfg)
      * a v3-or-later blob is discarded and the device re-provisions. */
     const size_t min_len =
         offsetof(cfg_blob_t, cfg) + offsetof(app_config_t, led_gpio);
-    if (err != ESP_OK || len > sizeof(blob) || len < min_len ||
-        blob.version < 3u || blob.version > CFG_VERSION) {
+    if (err != ESP_OK || len > sizeof(*blob) || len < min_len ||
+        blob->version < 3u || blob->version > CFG_VERSION) {
         ESP_LOGW(TAG, "stored config unusable (err=%s len=%u ver=%u), defaults",
                  esp_err_to_name(err), (unsigned)len,
-                 err == ESP_OK ? (unsigned)blob.version : 0u);
+                 err == ESP_OK ? (unsigned)blob->version : 0u);
+        free(blob);
         return ESP_OK;
     }
 
-    if (blob.version < CFG_VERSION) {
+    if (blob->version < CFG_VERSION) {
         ESP_LOGW(TAG, "config v%u < v%u: kept, new fields at defaults",
-                 (unsigned)blob.version, (unsigned)CFG_VERSION);
+                 (unsigned)blob->version, (unsigned)CFG_VERSION);
     }
-    *cfg = blob.cfg;
-    if (blob.version < 6u) {
+    *cfg = blob->cfg;
+    uint32_t stored_version = blob->version;
+    free(blob);
+    if (stored_version < 6u) {
         /* Pre-v6 had only the ble_probe bool; map it onto the new level.
          * A device that wasn't in probe mode comes up quiet (the default). */
         cfg->log_level = cfg->ble_probe ? APP_LOG_VERBOSE : APP_LOG_OFF;
@@ -173,8 +190,15 @@ esp_err_t app_config_save(const app_config_t *cfg)
     if (err != ESP_OK) {
         return err;
     }
-    cfg_blob_t blob = { .version = CFG_VERSION, .cfg = *cfg };
-    err = nvs_set_blob(h, CFG_KEY, &blob, sizeof(blob));
+    cfg_blob_t *blob = malloc(sizeof(*blob));   /* same reason as in load */
+    if (!blob) {
+        nvs_close(h);
+        return ESP_ERR_NO_MEM;
+    }
+    blob->version = CFG_VERSION;
+    blob->cfg = *cfg;
+    err = nvs_set_blob(h, CFG_KEY, blob, sizeof(*blob));
+    free(blob);
     if (err == ESP_OK) {
         err = nvs_commit(h);
     }

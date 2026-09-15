@@ -622,7 +622,7 @@ tabs.forEach(b => b.onclick = () => {
   document.querySelectorAll('section').forEach(s =>
     s.classList.toggle('active', s.id === b.dataset.tab));
   if (b.dataset.tab === 'status') pollLogs();
-  if (['bluetti', 'nut', 'wifi', 'notify', 'maint'].includes(b.dataset.tab)) loadConfig();
+  if (['bluetti', 'nut', 'pve', 'wifi', 'notify', 'maint'].includes(b.dataset.tab)) loadConfig();
   ctrlActive = b.dataset.tab === 'bluetti';
   if (ctrlActive) refreshControls();
 });
