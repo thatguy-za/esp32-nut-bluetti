@@ -272,8 +272,10 @@ the page never shows or asks for one.
    reissued it, or something is intercepting the connection), the host is
    refused and skipped with a clear message rather than silently trusted
    again.
-3. Reissued Proxmox's certificate yourself? Click **Forget trusted
-   certificate**, then **Test connection** to trust the new one.
+3. Reissued Proxmox's certificate yourself? Test will say the host answered
+   differently than before and offer a **reset and try again** button right
+   there — that link only appears when it's actually needed, not as a
+   standing control.
 
 Until a host's certificate has been trusted, nothing is sent to it — not even
 the token.
