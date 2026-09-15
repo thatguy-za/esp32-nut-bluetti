@@ -2,6 +2,10 @@
  * The decision half of pve_shutdown: pure functions over a small state
  * struct, no I/O, no RTOS — so the host suite can drive an outage through
  * it minute by minute. See pve_shutdown.h for the rules being encoded.
+ *
+ * One outage, several hosts: the on-battery edge is shared, but each host
+ * has its own thresholds and its own fire-once latch, so a host at ten
+ * minutes and one at thirty are two countdowns off the same clock.
  */
 #include "pve_shutdown.h"
 
@@ -11,35 +15,14 @@
 #define US_PER_S   1000000LL
 #define US_PER_MIN (60 * US_PER_S)
 
-void pve_obs_from_status(const char *status, int soc_pct, pve_obs_t *out)
-{
-    memset(out, 0, sizeof(*out));
-    out->soc_pct = soc_pct;
-    out->power = PVE_PWR_UNKNOWN;
-    if (!status) {
-        return;
-    }
-    /* Same reading as notify.c: WAIT is "link up, nothing decoded yet" and
-     * OFF is "no link" — neither is a power-state observation. */
-    if (strstr(status, "WAIT") || strncmp(status, "OFF", 3) == 0) {
-        return;
-    }
-    if (strstr(status, "OB")) {
-        out->power = PVE_PWR_BATTERY;
-    } else if (strstr(status, "OL")) {
-        out->power = PVE_PWR_LINE;
-    }
-    out->low_battery = out->power == PVE_PWR_BATTERY && strstr(status, "LB");
-}
-
-bool pve_eval(const pve_config_t *cfg, pve_engine_t *st,
-              const pve_obs_t *obs, int64_t now_us)
+unsigned pve_eval(const pve_config_t *cfg, pve_engine_t *st,
+                  const pve_obs_t *obs, int64_t now_us)
 {
     if (!cfg->enabled) {
         /* Off: forget everything, so enabling it mid-outage starts clean. */
         st->on_battery = false;
         st->on_mains = false;
-        return false;
+        return 0;
     }
 
     switch (obs->power) {
@@ -67,49 +50,53 @@ bool pve_eval(const pve_config_t *cfg, pve_engine_t *st,
         break;
     }
 
-    if (st->fired) {
-        if (cfg->mains_back_min > 0 && st->on_mains &&
-            now_us - st->mains_since_us >= (int64_t)cfg->mains_back_min * US_PER_MIN) {
-            st->fired = false;
-            st->reason[0] = '\0';
-        }
-        return false;
-    }
+    bool mains_back = cfg->mains_back_min > 0 && st->on_mains &&
+        now_us - st->mains_since_us >= (int64_t)cfg->mains_back_min * US_PER_MIN;
 
-    /* The on-battery timer needs no live reading; the other two do — a
-     * charge figure from before the link dropped says nothing about now. */
-    if (cfg->on_battery_min > 0 && st->on_battery &&
-        now_us - st->on_battery_since_us >= (int64_t)cfg->on_battery_min * US_PER_MIN) {
-        snprintf(st->reason, sizeof(st->reason), "on battery for %u min",
-                 (unsigned)cfg->on_battery_min);
-        st->fired = true;
-        return true;
-    }
-    if (obs->power == PVE_PWR_BATTERY) {
-        if (cfg->charge_pct > 0 && obs->soc_pct >= 0 &&
-            obs->soc_pct <= (int)cfg->charge_pct) {
-            snprintf(st->reason, sizeof(st->reason), "charge %d%% (limit %u%%)",
-                     obs->soc_pct, (unsigned)cfg->charge_pct);
-            st->fired = true;
-            return true;
+    unsigned fire = 0;
+    for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+        const pve_host_t *h = &cfg->hosts[i];
+        if (st->fired[i]) {
+            if (mains_back) {
+                st->fired[i] = false;
+                st->reason[i][0] = '\0';
+            }
+            continue;
         }
-        if (cfg->on_low_battery && obs->low_battery) {
-            snprintf(st->reason, sizeof(st->reason), "unit reports low battery");
-            st->fired = true;
-            return true;
+        if (!h->enabled) {
+            continue;
         }
+        /* The on-battery timer needs no live reading; the charge test does
+         * — a figure from before the link dropped says nothing about now. */
+        if (h->on_battery_min > 0 && st->on_battery &&
+            now_us - st->on_battery_since_us >= (int64_t)h->on_battery_min * US_PER_MIN) {
+            snprintf(st->reason[i], sizeof(st->reason[i]), "on battery for %u min",
+                     (unsigned)h->on_battery_min);
+        } else if (obs->power == PVE_PWR_BATTERY && h->charge_pct > 0 &&
+                   obs->soc_pct >= 0 && obs->soc_pct <= (int)h->charge_pct) {
+            snprintf(st->reason[i], sizeof(st->reason[i]), "charge %d%% (limit %u%%)",
+                     obs->soc_pct, (unsigned)h->charge_pct);
+        } else {
+            continue;
+        }
+        st->fired[i] = true;
+        fire |= 1u << i;
     }
-    return false;
+    return fire;
 }
 
-int pve_countdown_s(const pve_config_t *cfg, const pve_engine_t *st,
+int pve_countdown_s(const pve_config_t *cfg, const pve_engine_t *st, int i,
                     int64_t now_us)
 {
-    if (!cfg->enabled || cfg->on_battery_min == 0 || !st->on_battery ||
-        st->fired) {
+    if (i < 0 || i >= PVE_MAX_HOSTS) {
         return -1;
     }
-    int64_t due = st->on_battery_since_us + (int64_t)cfg->on_battery_min * US_PER_MIN;
+    const pve_host_t *h = &cfg->hosts[i];
+    if (!cfg->enabled || !h->enabled || h->on_battery_min == 0 ||
+        !st->on_battery || st->fired[i]) {
+        return -1;
+    }
+    int64_t due = st->on_battery_since_us + (int64_t)h->on_battery_min * US_PER_MIN;
     int64_t left = due - now_us;
     return left > 0 ? (int)(left / US_PER_S) : 0;
 }

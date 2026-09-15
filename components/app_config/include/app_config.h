@@ -125,6 +125,9 @@ void app_config_default_nut_password(char *buf, size_t len);
 /* Populate cfg from Kconfig defaults (no NVS access). */
 void app_config_defaults(app_config_t *cfg);
 
+/* Just the Proxmox block: off, dry run, 30 min / 10 % per host. */
+void app_config_pve_defaults(pve_config_t *pv);
+
 /* Defaults, then overlay any values stored in NVS. Always succeeds
  * (falls back to defaults on a missing/corrupt blob). */
 esp_err_t app_config_load(app_config_t *cfg);

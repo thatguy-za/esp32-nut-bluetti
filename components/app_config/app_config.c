@@ -26,14 +26,16 @@ static const char *TAG = "app_config";
  *   6: added the battery capacity (Wh) and the log level.
  *   7: added the fallback AP.
  *   8: added the Proxmox shutdown config.
+ *   9: Proxmox triggers moved into each host. The block's layout changed,
+ *      so a v8 block is reset to defaults (off, dry run) on load.
  *
  * From v3 on, fields are only ever appended, and a stored blob of an
- * older-but-recognised version (3 to 7) is kept: the bytes that were
+ * older-but-recognised version (3 to 8) is kept: the bytes that were
  * written still mean what they meant, and the newer trailing fields come
  * up at their defaults. A newer, much older, or unreadable blob is still
  * discarded.
  */
-#define CFG_VERSION 8u
+#define CFG_VERSION 9u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -55,6 +57,20 @@ void app_config_default_nut_password(char *buf, size_t len)
     uint8_t mac[6] = { 0 };
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     snprintf(buf, len, "bluetti%02X%02X", mac[4], mac[5]);
+}
+
+void app_config_pve_defaults(pve_config_t *pv)
+{
+    memset(pv, 0, sizeof(*pv));
+    pv->enabled        = false;
+    pv->armed          = false;
+    pv->mains_back_min = 5;
+    for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+        pv->hosts[i].on_battery_min = 30;
+        pv->hosts[i].charge_pct     = 10;
+        pv->hosts[i].guest_wait_s   = 30;
+        pv->hosts[i].shutdown_node  = true;
+    }
 }
 
 void app_config_defaults(app_config_t *cfg)
@@ -98,17 +114,7 @@ void app_config_defaults(app_config_t *cfg)
     /* Proxmox shutdown: off, and dry-run even once on — nothing is powered
      * off until the user arms it. The triggers default to what a small
      * home unit can actually give you: half an hour, or 10%. */
-    cfg->pve.enabled        = false;
-    cfg->pve.armed          = false;
-    cfg->pve.on_battery_min = 30;
-    cfg->pve.charge_pct     = 10;
-    cfg->pve.on_low_battery = true;
-    cfg->pve.host_delay_s   = 0;
-    cfg->pve.mains_back_min = 5;
-    for (int i = 0; i < PVE_MAX_HOSTS; i++) {
-        cfg->pve.hosts[i].guest_wait_s  = 30;
-        cfg->pve.hosts[i].shutdown_node = true;
-    }
+    app_config_pve_defaults(&cfg->pve);
 
     /* A blank SSID from Kconfig means "must provision". */
     if (strcmp(cfg->wifi_ssid, "myssid") == 0) {
@@ -171,6 +177,13 @@ esp_err_t app_config_load(app_config_t *cfg)
     *cfg = blob->cfg;
     uint32_t stored_version = blob->version;
     free(blob);
+    if (stored_version == 8u) {
+        /* v8's Proxmox block had global triggers and a different host
+         * layout; its bytes do not mean what v9's do. Off and dry-run is
+         * the only safe reading of a block we cannot interpret. */
+        ESP_LOGW(TAG, "config v8: Proxmox settings reset (layout changed in v9)");
+        app_config_pve_defaults(&cfg->pve);
+    }
     if (stored_version < 6u) {
         /* Pre-v6 had only the ble_probe bool; map it onto the new level.
          * A device that wasn't in probe mode comes up quiet (the default). */

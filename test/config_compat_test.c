@@ -20,7 +20,7 @@
 #include "app_config.h"
 
 /* Must track the #define in app_config.c. */
-#define CFG_VERSION 8u
+#define CFG_VERSION 9u
 
 static int fails;
 #define OKF(c, ...) do { bool _ok = (c); printf(_ok ? "ok:   " : "FAIL: "); \
@@ -139,11 +139,11 @@ int main(void)
      * the short read left behind. Armed-by-accident is the one outcome
      * this feature must never produce. */
     const size_t v7_len = offsetof(blob_t, cfg) + offsetof(app_config_t, pve);
-    OKF(ACCEPT(v7_len, 7u), "a v7-length blob is accepted by v8");
+    OKF(ACCEPT(v7_len, 7u), "a v7-length blob is accepted by v9");
     blob_t v7 = { .version = 7u, .cfg = defaults };
     v7.cfg.pve.enabled = false;
     v7.cfg.pve.armed = false;
-    v7.cfg.pve.on_battery_min = 30;
+    v7.cfg.pve.hosts[0].on_battery_min = 30;
     blob_t stored7;
     memset(&stored7, 0xEE, sizeof stored7);          /* garbage past the read */
     memset(&stored7.cfg, 0, sizeof stored7.cfg);
@@ -153,7 +153,14 @@ int main(void)
     OKF(v7.cfg.fb_ap_enabled == true, "a v7 blob's fallback-AP setting survives");
     OKF(!v7.cfg.pve.enabled && !v7.cfg.pve.armed,
         "Proxmox shutdown comes up OFF and in DRY RUN on a device upgrading from v7");
-    OKF(v7.cfg.pve.on_battery_min == 30, "...with the default 30-minute trigger");
+
+    /* v8 -> v9: the Proxmox block changed shape (triggers moved into the
+     * hosts), so the loader resets it. The bytes of a v8 block read as a
+     * v9 one are meaningless; this pins that they *would* be, so nobody
+     * is tempted to drop the reset. */
+    OKF(offsetof(pve_host_t, on_battery_min) > offsetof(pve_host_t, fingerprint),
+        "v9 host triggers sit after the fingerprint (v8 had none)");
+    OKF(ACCEPT(full_len, 8u), "a v8 blob is accepted (then its Proxmox block is reset)");
 
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;

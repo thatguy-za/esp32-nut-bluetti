@@ -107,9 +107,10 @@ a `.bin` when the bridge has no route out:
 - **Survives the network going away** — retries forever instead of dropping into
   setup, and can raise a fallback AP so a bridge whose Wi-Fi has gone is still
   reachable.
-- **Proxmox shutdown** — shut PVE hosts and guests down through their API on
-  battery time or charge, pve-ups style: one-privilege token, pinned
-  certificate, dry-run until you arm it. No agent on the host.
+- **Proxmox shutdown** — shut PVE hosts and guests down through their API,
+  each host on its own battery-time or charge threshold, pve-ups style: a
+  least-privilege token, pinned certificate, dry-run until you arm it. No
+  agent on the host, no dependency on NUT.
 - **Device controls** — AC/DC output, ECO modes, charging mode and more from
   the web page. Off by default; NUT stays read-only.
 - **Static IP or DHCP**, settable hostname, status LED support.

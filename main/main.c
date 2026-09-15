@@ -212,8 +212,13 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
      */
     if (!st->sweep_done) {
         nut_server_set_status("OL WAIT");
+        pve_shutdown_observe(false, false, -1);   /* not a reading yet */
         return;
     }
+    /* The Proxmox engine reads the unit directly — it must work whether or
+     * not anyone runs NUT, so it is fed here rather than from the status
+     * string below. */
+    pve_shutdown_observe(true, st->ac_input_present, st->soc_pct);
 
     char status[24];
     if (st->ac_input_present) {
@@ -244,7 +249,6 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
      * never disagree. Edge detection and rate limiting live in notify. */
     notify_ups_status(status, st->soc_pct,
                       st->ac_input_present ? -1 : st->minutes_remaining);
-    pve_shutdown_observe(status, st->soc_pct);
 }
 
 static void bluetti_cb(const bluetti_state_t *state, void *user)
@@ -272,7 +276,7 @@ static void staleness_task(void *arg)
                                bluetti_ble_connected() ? "connected-no-data"
                                                        : "disconnected");
             notify_ups_status(s, have ? st.soc_pct : 0, -1);
-            pve_shutdown_observe(s, -1);   /* WAIT/OFF -> unknown, fail-safe */
+            pve_shutdown_observe(false, false, -1);   /* stale: unknown, fail-safe */
         } else {
             nut_server_set_var("driver.state", "updated");
         }

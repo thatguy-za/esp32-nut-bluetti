@@ -627,9 +627,10 @@ static esp_err_t h_admin_credentials(httpd_req_t *r);
  * fp is the certificate the server presented when nothing is pinned yet. */
 static bool pve_host_from_form(const char *, int, pve_host_t *,
                                const pve_host_t *, char *, size_t);
-static esp_err_t h_pve_test(httpd_req_t *r)
+/* Shared by the test and guest-list endpoints: read the posted host into
+ * `h`, validated as if enabled. */
+static esp_err_t pve_read_host(httpd_req_t *r, pve_host_t *h, int *idx)
 {
-    REQUIRE_AUTH(r);
     int len = r->content_len;
     if (len <= 0 || len > 1024) {
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
@@ -650,30 +651,68 @@ static esp_err_t h_pve_test(httpd_req_t *r)
         free(body);
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad host index");
     }
-    pve_host_t h = P.cfg->pve.hosts[i];
+    *h = P.cfg->pve.hosts[i];
     char err[80] = "";
-    /* The form may leave "enabled" off while testing; validate as if on. */
-    bool ok = pve_host_from_form(body, i, &h, &P.cfg->pve.hosts[i], err, sizeof(err));
+    bool ok = pve_host_from_form(body, i, h, &P.cfg->pve.hosts[i], err, sizeof(err));
     memset(body, 0, len);
     free(body);
-    h.enabled = true;
-    if (ok && (strncmp(h.url, "https://", 8) != 0 || !h.node[0] ||
-               !h.token_id[0] || !h.secret[0])) {
+    h->enabled = true;
+    if (ok && (strncmp(h->url, "https://", 8) != 0 || !h->node[0] ||
+               !h->token_id[0] || !h->secret[0])) {
         ok = false;
-        snprintf(err, sizeof(err), "URL (https://…), node, token ID and secret are required");
+        snprintf(err, sizeof(err), "URL (https://\xE2\x80\xA6), node, token ID and secret are required");
     }
     if (!ok) {
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, err);
     }
+    *idx = i;
+    return ESP_OK;
+}
 
+/* POST /api/pve-guests — the host's VMs and containers, for the picker. */
+static esp_err_t h_pve_guests(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    pve_host_t h;
+    int i;
+    esp_err_t rc = pve_read_host(r, &h, &i);
+    if (rc != ESP_OK) {
+        return rc;                      /* already answered */
+    }
+    char *json = malloc(4096);
+    if (!json) {
+        memset(&h, 0, sizeof(h));
+        return httpd_resp_send_500(r);
+    }
+    char err[120] = "";
+    int n = pve_shutdown_list_guests(&h, json, 4096, err, sizeof(err));
+    memset(&h, 0, sizeof(h));
+    if (n < 0) {
+        free(json);
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, err);
+    }
+    rc = send_json(r, json);
+    free(json);
+    return rc;
+}
+
+static esp_err_t h_pve_test(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    pve_host_t h;
+    int i;
+    esp_err_t rc = pve_read_host(r, &h, &i);
+    if (rc != ESP_OK) {
+        return rc;                      /* already answered */
+    }
     char msg[200], fp[96];
-    int rc = pve_shutdown_test(&h, msg, sizeof(msg), fp);
-    pve_shutdown_note_test(i, rc == 0, rc == 1 ? "not pinned yet" : msg);
+    int t = pve_shutdown_test(&h, msg, sizeof(msg), fp);
+    pve_shutdown_note_test(i, t == 0, t == 1 ? "not pinned yet" : msg);
     memset(&h, 0, sizeof(h));
 
     char out[360];
     snprintf(out, sizeof(out), "{\"ok\":%s,\"pinned\":%s,\"msg\":\"%s\",\"fp\":\"%s\"}",
-             rc == 0 ? "true" : "false", rc != 1 ? "true" : "false", msg, fp);
+             t == 0 ? "true" : "false", t != 1 ? "true" : "false", msg, fp);
     return send_json(r, out);
 }
 /* POST /api/notify-test — send a Telegram message with the posted (or
@@ -738,7 +777,7 @@ static esp_err_t start_httpd(bool captive)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 32;
+    c.max_uri_handlers = 33;
     c.stack_size = 12288;   /* the Proxmox test does a TLS handshake in here */
     if (captive) {
         c.uri_match_fn = httpd_uri_match_wildcard;
@@ -778,6 +817,7 @@ static esp_err_t start_httpd(bool captive)
         reg(P.httpd, "/api/credentials", HTTP_POST, h_admin_credentials);
         reg(P.httpd, "/api/notify-test", HTTP_POST, h_notify_test);
         reg(P.httpd, "/api/pve-test", HTTP_POST, h_pve_test);
+        reg(P.httpd, "/api/pve-guests", HTTP_POST, h_pve_guests);
         reg(P.httpd, "/api/ble-scan", HTTP_GET, h_ble_scan);
         reg(P.httpd, "/api/wifi-scan", HTTP_GET, h_wifi_scan);
         reg(P.httpd, "/api/reboot", HTTP_POST, h_admin_reboot);
@@ -950,19 +990,17 @@ static esp_err_t h_admin_status(httpd_req_t *r)
         n--;
     }
     n += snprintf(out + n, 2600 - n,
-                  ",\"pve\":{\"enabled\":%s,\"armed\":%s,\"fired\":%s,"
-                  "\"countdown_s\":%d,\"on_battery_s\":%d,\"last\":\"%s\",\"hosts\":[",
+                  ",\"pve\":{\"enabled\":%s,\"armed\":%s,\"on_battery_s\":%d,\"hosts\":[",
                   ps.enabled ? "true" : "false", ps.armed ? "true" : "false",
-                  ps.fired ? "true" : "false", ps.countdown_s, ps.on_battery_s,
-                  ps.last);
+                  ps.on_battery_s);
     for (int i = 0; i < PVE_MAX_HOSTS && n < 2600; i++) {
         const pve_host_status_t *h = &ps.hosts[i];
         n += snprintf(out + n, 2600 - n,
                       "%s{\"node\":\"%s\",\"enabled\":%s,\"pinned\":%s,"
-                      "\"last\":\"%s\",\"ok\":%s}",
+                      "\"fired\":%s,\"countdown_s\":%d,\"last\":\"%s\",\"ok\":%s}",
                       i ? "," : "", h->node, h->enabled ? "true" : "false",
-                      h->pinned ? "true" : "false", h->last,
-                      h->last_ok ? "true" : "false");
+                      h->pinned ? "true" : "false", h->fired ? "true" : "false",
+                      h->countdown_s, h->last, h->last_ok ? "true" : "false");
     }
     if (n < 2600) {
         snprintf(out + n, 2600 - n, "]}}");
@@ -1064,13 +1102,9 @@ static esp_err_t h_admin_config(httpd_req_t *r)
         n--;
     }
     n += snprintf(out + n, 3000 - n,
-                  ",\"pve\":{\"enabled\":%s,\"armed\":%s,\"on_battery_min\":%u,"
-                  "\"charge_pct\":%u,\"on_low_battery\":%s,\"host_delay_s\":%u,"
-                  "\"mains_back_min\":%u,\"hosts\":[",
+                  ",\"pve\":{\"enabled\":%s,\"armed\":%s,\"mains_back_min\":%u,\"hosts\":[",
                   pv->enabled ? "true" : "false", pv->armed ? "true" : "false",
-                  (unsigned)pv->on_battery_min, (unsigned)pv->charge_pct,
-                  pv->on_low_battery ? "true" : "false",
-                  (unsigned)pv->host_delay_s, (unsigned)pv->mains_back_min);
+                  (unsigned)pv->mains_back_min);
     for (int i = 0; i < PVE_MAX_HOSTS && n < 3000; i++) {
         const pve_host_t *h = &pv->hosts[i];
         char fp[96] = "";
@@ -1087,11 +1121,12 @@ static esp_err_t h_admin_config(httpd_req_t *r)
         n += snprintf(out + n, 3000 - n,
                       "%s{\"enabled\":%s,\"url\":\"%s\",\"node\":\"%s\","
                       "\"token_id\":\"%s\",\"has_secret\":%s,\"guests\":\"%s\","
-                      "\"guest_wait_s\":%u,\"shutdown_node\":%s,\"fingerprint\":\"%s\"}",
+                      "\"guest_wait_s\":%u,\"shutdown_node\":%s,\"fingerprint\":\"%s\","
+                      "\"on_battery_min\":%u,\"charge_pct\":%u}",
                       i ? "," : "", h->enabled ? "true" : "false", h->url, h->node,
                       h->token_id, h->secret[0] ? "true" : "false", h->guests,
                       (unsigned)h->guest_wait_s, h->shutdown_node ? "true" : "false",
-                      fp);
+                      fp, (unsigned)h->on_battery_min, (unsigned)h->charge_pct);
     }
     if (n < 3000) {
         snprintf(out + n, 3000 - n, "]}}");
@@ -1170,6 +1205,14 @@ static bool pve_host_from_form(const char *body, int i, pve_host_t *h,
 {
     char k[24], v[128];
 #define HK(name) (snprintf(k, sizeof(k), "h%d_%s", i, name), k)
+    /* "Remove" on the page: wipe the slot, secret and pin included, rather
+     * than leave a disabled ghost that would show "unchanged" if re-added. */
+    if (form_get(body, HK("clear"), v, sizeof(v)) && v[0] == '1') {
+        pve_config_t d;
+        app_config_pve_defaults(&d);
+        *h = d.hosts[0];
+        return true;
+    }
     h->enabled = form_get(body, HK("on"), v, sizeof(v)) && v[0] == '1';
     form_get(body, HK("url"), h->url, sizeof(h->url));
     form_get(body, HK("node"), h->node, sizeof(h->node));
@@ -1178,6 +1221,12 @@ static bool pve_host_from_form(const char *body, int i, pve_host_t *h,
     h->shutdown_node = form_get(body, HK("node_off"), v, sizeof(v)) && v[0] == '1';
     if (form_get(body, HK("wait"), v, sizeof(v)) && atoi(v) >= 0) {
         h->guest_wait_s = (uint16_t)atoi(v);
+    }
+    if (form_get(body, HK("min"), v, sizeof(v)) && atoi(v) >= 0 && atoi(v) <= 1440) {
+        h->on_battery_min = (uint16_t)atoi(v);
+    }
+    if (form_get(body, HK("pct"), v, sizeof(v)) && atoi(v) >= 0 && atoi(v) <= 100) {
+        h->charge_pct = (uint8_t)atoi(v);
     }
     if (form_get(body, HK("secret"), v, sizeof(v)) && v[0]) {
         strlcpy(h->secret, v, sizeof(h->secret));
@@ -1210,6 +1259,10 @@ static bool pve_host_from_form(const char *body, int i, pve_host_t *h,
         }
         if (!strchr(h->token_id, '!')) {
             snprintf(err, esz, "host %d: token ID looks like user@realm!name", i + 1);
+            return false;
+        }
+        if (!h->on_battery_min && !h->charge_pct) {
+            snprintf(err, esz, "host %d: set a time or a charge to shut down at", i + 1);
             return false;
         }
     }
@@ -1408,17 +1461,6 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         pve_config_t *pv = &P.pending.pve;
         pv->enabled = form_get(body, "pve_enabled", v, sizeof(v)) && v[0] == '1';
         pv->armed   = form_get(body, "pve_armed", v, sizeof(v)) && v[0] == '1';
-        if (form_get(body, "pve_on_battery_min", v, sizeof(v)) && atoi(v) >= 0) {
-            pv->on_battery_min = (uint16_t)atoi(v);
-        }
-        if (form_get(body, "pve_charge_pct", v, sizeof(v)) && atoi(v) >= 0 &&
-            atoi(v) <= 100) {
-            pv->charge_pct = (uint8_t)atoi(v);
-        }
-        pv->on_low_battery = form_get(body, "pve_on_lb", v, sizeof(v)) && v[0] == '1';
-        if (form_get(body, "pve_host_delay_s", v, sizeof(v)) && atoi(v) >= 0) {
-            pv->host_delay_s = (uint16_t)atoi(v);
-        }
         if (form_get(body, "pve_mains_back_min", v, sizeof(v)) && atoi(v) >= 0) {
             pv->mains_back_min = (uint16_t)atoi(v);
         }
@@ -1435,11 +1477,6 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         free(body);
         if (!ok) {
             return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, err);
-        }
-        if (pv->enabled && !pv->on_battery_min && !pv->charge_pct &&
-            !pv->on_low_battery) {
-            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
-                                       "enable at least one trigger");
         }
 
     /* ---- Telegram notifications ---- */

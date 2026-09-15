@@ -46,7 +46,9 @@ extern "C" {
 
 #define PVE_MAX_HOSTS 4
 
-/* One Proxmox host, shut down in array order. */
+/* One Proxmox host, with its own triggers: each host runs its own
+ * countdown against the same outage and fires independently, so a NAS can
+ * go at ten minutes and the hypervisor at thirty. */
 typedef struct {
     bool     enabled;
     char     url[64];        /* https://10.0.0.10:8006 — one per node      */
@@ -58,28 +60,29 @@ typedef struct {
     bool     shutdown_node;  /* false = guests only, the node stays up     */
     char     fingerprint[65];/* SHA-256 of the server cert, 64 hex, no
                                 colons; blank = not pinned, nothing is sent */
+    /* Triggers. Either one that is set and met fires this host. */
+    uint16_t on_battery_min; /* on battery this long; 0 = off              */
+    uint8_t  charge_pct;     /* charge at or below this, on battery; 0 = off */
 } pve_host_t;
 
-/* Triggers. Any one that is set and met fires the sequence. Stored inside
- * app_config_t, so append-only like everything else there. */
+/* Stored inside app_config_t. Its layout changed at CFG_VERSION 9, when
+ * the triggers moved into the hosts; the loader resets an older block. */
 typedef struct {
     bool     enabled;        /* the feature at all                         */
     bool     armed;          /* false = dry-run: log + notify, touch nothing */
-    uint16_t on_battery_min; /* on battery this long; 0 = off              */
-    uint8_t  charge_pct;     /* charge at or below this, on battery; 0 = off */
-    bool     on_low_battery; /* NUT's LB flag                              */
-    uint16_t host_delay_s;   /* pause between hosts                        */
     uint16_t mains_back_min; /* mains back this long before re-arming      */
     pve_host_t hosts[PVE_MAX_HOSTS];
 } pve_config_t;
 
 /* ---- the decision, kept pure so the host suite can drive it -------- */
 
+/* Read straight off the Bluetti telemetry — nothing here depends on the
+ * NUT server or its thresholds. UNKNOWN covers no link, no data yet, and a
+ * sweep that has not read the mains registers: never a power reading. */
 typedef enum { PVE_PWR_UNKNOWN = 0, PVE_PWR_LINE, PVE_PWR_BATTERY } pve_power_t;
 
 typedef struct {
     pve_power_t power;
-    bool        low_battery; /* LB present in ups.status                   */
     int         soc_pct;     /* -1 = unknown                               */
 } pve_obs_t;
 
@@ -88,24 +91,22 @@ typedef struct {
     int64_t on_battery_since_us;  /* ...since this edge (our clock)        */
     bool    on_mains;             /* known to be on the mains...           */
     int64_t mains_since_us;       /* ...since this edge                    */
-    bool    fired;                /* latched until the mains has been back */
-    char    reason[80];           /* why it fired, for the log and alerts  */
+    bool    fired[PVE_MAX_HOSTS]; /* per host: latched until mains is back */
+    char    reason[PVE_MAX_HOSTS][64];  /* why each fired                  */
 } pve_engine_t;
 
-/* Fold one observation into the engine. Returns true exactly once per
- * outage, the moment a trigger is met; the caller decides armed vs dry-run.
- * Never returns true while `fired` is latched. */
-bool pve_eval(const pve_config_t *cfg, pve_engine_t *st,
-              const pve_obs_t *obs, int64_t now_us);
+/* Fold one observation into the engine. Returns a bitmask of the hosts
+ * whose trigger is met on this observation — each host appears in it
+ * exactly once per outage, and never while its latch is set. The caller
+ * decides armed vs dry-run. */
+unsigned pve_eval(const pve_config_t *cfg, pve_engine_t *st,
+                  const pve_obs_t *obs, int64_t now_us);
 
-/* Seconds until the on-battery trigger fires, or -1 when no countdown is
- * running / that trigger is off. For the status page. */
-int pve_countdown_s(const pve_config_t *cfg, const pve_engine_t *st,
+/* Seconds until host `i`'s on-battery trigger fires, or -1 when no
+ * countdown is running, that trigger is off, or the host is latched. */
+int pve_countdown_s(const pve_config_t *cfg, const pve_engine_t *st, int i,
                     int64_t now_us);
 
-/* Turn a NUT status string ("OL", "OB LB DISCHRG", "OL WAIT", "OFF") into an
- * observation. WAIT and OFF are UNKNOWN: not a power-state reading. */
-void pve_obs_from_status(const char *status, int soc_pct, pve_obs_t *out);
 
 /* ---- runtime ------------------------------------------------------ */
 
@@ -117,25 +118,27 @@ typedef void (*pve_event_cb_t)(const char *text, void *user);
 int  pve_shutdown_start(const pve_config_t *cfg, pve_event_cb_t cb, void *user);
 void pve_shutdown_reconfigure(const pve_config_t *cfg);
 
-/* Feed the engine. Call with every status publish, and again from the
- * staleness path so a lost link is seen as UNKNOWN promptly. */
-void pve_shutdown_observe(const char *ups_status, int soc_pct);
+/* Feed the engine from the Bluetti state. `known` is false whenever the
+ * reading cannot be trusted — no link, nothing decoded, or the first sweep
+ * still running — and then `on_mains`/`soc_pct` are ignored. Call on every
+ * decoded update, and from the staleness path with known = false. */
+void pve_shutdown_observe(bool known, bool on_mains, int soc_pct);
 
 /* Snapshot for the status page: the engine, and one line per host. */
 typedef struct {
     char node[32];
     bool enabled;
     bool pinned;                 /* a fingerprint is stored               */
+    bool fired;                  /* latched                                */
+    int  countdown_s;            /* -1 = none running                      */
     char last[64];               /* "" until something happens; then the
                                     last test or shutdown result          */
     bool last_ok;
 } pve_host_status_t;
 
 typedef struct {
-    bool enabled, armed, fired;
-    int  countdown_s;            /* -1 = none running */
+    bool enabled, armed;
     int  on_battery_s;           /* -1 = not on battery */
-    char last[128];              /* last sequence result, "" = none yet */
     pve_host_status_t hosts[PVE_MAX_HOSTS];
 } pve_status_t;
 void pve_shutdown_status(pve_status_t *out);
@@ -148,6 +151,13 @@ void pve_shutdown_status(pve_status_t *out);
  * 0 = all good, -1 = a problem. `msg` is filled either way. */
 int  pve_shutdown_test(const pve_host_t *host, char *msg, size_t msg_sz,
                        char seen_fp[96]);
+
+/* List the host's VMs and containers as a JSON array of
+ * {id,name,type:"qemu"|"lxc",status}, for the picker. Needs the token to
+ * carry VM.Audit, and the certificate to be pinned. Returns the count, or
+ * -1 with `err` filled. Blocking. */
+int  pve_shutdown_list_guests(const pve_host_t *host, char *json, size_t json_sz,
+                              char *err, size_t err_sz);
 
 /* Record a test outcome against host slot `i` so the status page shows it. */
 void pve_shutdown_note_test(int i, bool ok, const char *msg);
