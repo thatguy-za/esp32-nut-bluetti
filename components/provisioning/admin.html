@@ -350,9 +350,9 @@
   <form id="pveForm">
     <input type="hidden" name="section" value="pve">
     <div class="box">
-      <h2>Proxmox</h2>
+      <h2>Proxmox Virtual Environment</h2>
       <label class="chk"><input type="checkbox" id="pveEnabled" name="pve_enabled"
-        value="1" style="width:auto"> Shut Proxmox hosts down when the Bluetti runs low</label>
+        value="1" style="width:auto"> Enable control of Proxmox hosts, VMs and containers</label>
       <div class="modes" style="margin-top:.8rem">
         <label><input type="radio" name="pve_armed" value="0" checked>
           <b>Dry run</b><br><span class="hint">Counts down and alerts. Sends nothing.</span></label>
@@ -361,10 +361,6 @@
       </div>
       <div class="inline">Re-arm once the mains has been back for
         <input name="pve_mains_back_min" id="pveMainsBack" type="number" min="0" max="1440"> minutes</div>
-      <p class="hint" style="margin:.3rem 0 0">Each host fires once per outage and then
-        stays fired until the mains has been back that long, so a flickering supply can't
-        fire twice into a host that's mid-shutdown. Losing the Bluetti never triggers
-        anything on its own.</p>
     </div>
 
     <div id="pveHostBoxes"></div>
@@ -894,8 +890,9 @@ async function loadConfig() {
       $(`#h${i}_pct`).value = h.charge_pct ?? 10;
       document.querySelector(`[name=h${i}_node_off]`).checked = h.shutdown_node !== false;
       document.querySelector(`[name=h${i}_clear]`).value = '';
+      $(`#h${i}_fp_clear`).value = '';
       pveTitle(i);
-      pveChip(i, h.fingerprint ? 'ok' : 'dim', h.fingerprint ? 'pinned' : 'not tested');
+      pveSyncChip(i);
       if (!pveSlot[i].guests) pveRenderGuests(i);
     });
     pveShowSlots();
@@ -1306,7 +1303,7 @@ function renderPve(p) {
     let text, warn = false;
     if (!h.enabled)          { text = 'disabled'; }
     else if (h.fired)        { text = h.last || 'fired'; warn = !h.ok; }
-    else if (!h.pinned)      { text = 'certificate not pinned — will be skipped'; warn = true; }
+    else if (!h.pinned)      { text = 'certificate not trusted yet — will be skipped'; warn = true; }
     else if (h.countdown_s >= 0) { text = `shutdown in ${fmtMMSS(h.countdown_s)} unless the mains returns`; warn = true; }
     else if (p.on_battery_s >= 0) { text = 'on battery — waiting on the charge trigger'; }
     else                     { text = h.last && !h.ok ? h.last : 'ready'; warn = h.last && !h.ok; }
@@ -1331,6 +1328,8 @@ function pveHostBox(i) {
     </h2>
     <input type="hidden" name="h${i}_clear" value="">
     <input type="hidden" name="h${i}_guests" id="h${i}_guests">
+    <input type="hidden" name="h${i}_fp" id="h${i}_fp" value="">
+    <input type="hidden" name="h${i}_fp_clear" id="h${i}_fp_clear" value="">
     <label class="chk"><input type="checkbox" name="h${i}_on" value="1"
       style="width:auto"> Enabled</label>
 
@@ -1354,14 +1353,12 @@ function pveHostBox(i) {
       to list and stop guests — <a href="https://github.com/thatguy-za/esp32-nut-bluetti/blob/main/docs/CONFIGURING.md#proxmox-shutdown"
       target="_blank" rel="noopener">the four <code>pveum</code> lines</a>.</p>
 
-    <div class="sect">Certificate</div>
-    <div class="row" style="margin:.2rem 0">
-      <input id="h${i}_fp" name="h${i}_fp" autocomplete="off" spellcheck="false"
-             placeholder="SHA-256 fingerprint — Test to fetch it" style="flex:1;min-width:14rem;max-width:none">
-      <button type="button" class="act pveTest" data-i="${i}">Test</button>
+    <div class="row" style="margin:.6rem 0 0">
+      <button type="button" class="act pveTest" data-i="${i}">Test connection</button>
+      <button type="button" class="act minibtn pveForget" data-i="${i}" id="h${i}_forget" hidden>Forget trusted certificate</button>
     </div>
-    <p class="hint" id="h${i}_msg" style="margin:.2rem 0 0">Nothing is sent to a host — not even
-      the token — until its certificate is pinned.</p>
+    <p class="hint" id="h${i}_msg" style="margin:.2rem 0 0">Trusts this host's certificate the
+      first time it connects, then refuses to talk to it again if that certificate ever changes.</p>
 
     <div class="sect">Shut down when</div>
     <div class="inline">on battery for
@@ -1396,6 +1393,14 @@ function pveChip(i, cls, text) {
   c.className = 'chip ' + cls;
   c.textContent = text;
 }
+/* Chip + Forget button reflect only whether a certificate is currently
+   trusted — 'ready'/'ok' (a full test just passed) is set separately by
+   the Test handler, which calls this first and then overrides on success. */
+function pveSyncChip(i) {
+  const has = !!$(`#h${i}_fp`).value;
+  pveChip(i, has ? 'ok' : 'dim', has ? 'trusted' : 'not tested');
+  $(`#h${i}_forget`).hidden = !has;
+}
 function pveTitle(i) {
   $(`#h${i}_title`).textContent = $(`#h${i}_node`).value ? '· ' + $(`#h${i}_node`).value : '';
 }
@@ -1421,6 +1426,7 @@ function pveHostForm(i) {
     const v = $(`#h${i}_${k}`).value;
     if (v) fd.set(`h${i}_${k}`, v);
   }
+  if ($(`#h${i}_fp_clear`).value) fd.set(`h${i}_fp_clear`, $(`#h${i}_fp_clear`).value);
   fd.set(`h${i}_guests`, $(`#h${i}_guests`).value);
   if (document.querySelector(`[name=h${i}_node_off]`).checked) fd.set(`h${i}_node_off`, '1');
   return fd;
@@ -1492,8 +1498,6 @@ for (let i = 0; i < PVE_SLOTS; i++) {
   $(`#h${i}_gtext`).oninput = () => {
     $(`#h${i}_guests`).value = $(`#h${i}_gtext`).value.split(/[\s,]+/).filter(x => /^\d+$/.test(x)).join(',');
   };
-  $(`#h${i}_fp`).oninput = () => pveChip(i, $(`#h${i}_fp`).value ? 'warn' : 'dim',
-                                          $(`#h${i}_fp`).value ? 'pinned — save & test' : 'not tested');
 }
 document.querySelectorAll('.pveLoad').forEach(b => b.onclick = () => pveLoadGuests(+b.dataset.i, false));
 
@@ -1508,12 +1512,21 @@ $('#pveAddHost').onclick = () => {
 document.querySelectorAll('.pveRemove').forEach(b => b.onclick = () => {
   const i = +b.dataset.i;
   for (const k of ['url', 'node', 'token', 'secret', 'fp', 'guests', 'gtext']) $(`#h${i}_${k}`).value = '';
+  $(`#h${i}_fp_clear`).value = '';
   document.querySelector(`[name=h${i}_on]`).checked = false;
   document.querySelector(`[name=h${i}_clear]`).value = '1';   /* wipe the slot on save */
   pveSlot[i] = { stored: {}, guests: null, added: false };
   $(`#h${i}_msg`).textContent = ''; $(`#h${i}_gmsg`).textContent = '';
-  pveTitle(i); pveChip(i, 'dim', 'not tested'); pveRenderGuests(i);
+  pveTitle(i); pveSyncChip(i); pveRenderGuests(i);
   pveShowSlots();
+});
+
+document.querySelectorAll('.pveForget').forEach(b => b.onclick = () => {
+  const i = +b.dataset.i;
+  $(`#h${i}_fp`).value = '';
+  $(`#h${i}_fp_clear`).value = '1';
+  pveSyncChip(i);
+  $(`#h${i}_msg`).textContent = 'Certificate forgotten — Test connection will trust whatever this host presents next.';
 });
 
 document.querySelectorAll('.pveTest').forEach(b => b.onclick = async () => {
@@ -1522,31 +1535,18 @@ document.querySelectorAll('.pveTest').forEach(b => b.onclick = async () => {
   msg.textContent = 'Testing…';
   try {
     const j = await pvePost('/api/pve-test', pveHostForm(i));
-    if (!j.pinned && j.fp) {
-      /* Trust-on-first-use, with the user in the loop. */
-      msg.innerHTML = '';
-      const pin = document.createElement('button');
-      pin.type = 'button'; pin.className = 'act minibtn'; pin.textContent = 'Pin this certificate';
-      pin.onclick = () => {
-        $(`#h${i}_fp`).value = j.fp;
-        pveChip(i, 'warn', 'pinned — save & test');
-        msg.textContent = 'Pinned in the form. Save & reboot, then Test again to check the token.';
-      };
-      const code = document.createElement('code'); code.textContent = j.fp;
-      msg.append('Certificate ', code, document.createTextNode(' — compare it with Proxmox (System › Certificates), then '), pin,
-                 document.createTextNode('. Nothing was sent.'));
-      pveChip(i, 'warn', 'not pinned');
-    } else if (j.ok) {
+    if (j.fp) { $(`#h${i}_fp`).value = j.fp; $(`#h${i}_fp_clear`).value = ''; }
+    pveSyncChip(i);
+    if (j.ok) {
       msg.textContent = '✓ ' + j.msg;
       pveChip(i, 'ok', 'ready');
       pveLoadGuests(i, true);
     } else {
       msg.textContent = '✗ ' + j.msg;
-      pveChip(i, 'bad', 'failed');
+      if (j.pinned) pveChip(i, 'warn', 'trusted');
     }
   } catch (e) {
     msg.textContent = 'Failed: ' + e.message;
-    pveChip(i, 'bad', 'failed');
   }
   b.disabled = false;
 });
@@ -1573,7 +1573,7 @@ wireForm('#pveForm', '#pveSave', '#pveMsg', fd => {
   if (!hosts) { $('#pveMsg').textContent = 'Enable at least one host.'; return false; }
   if (untriggered.length) { $('#pveMsg').textContent = `${untriggered.join(', ')}: set a time or a charge to shut down at.`; return false; }
   if (armed && unpinned.length) {
-    $('#pveMsg').textContent = `${unpinned.join(', ')}: no pinned certificate — would be skipped. Test first.`;
+    $('#pveMsg').textContent = `${unpinned.join(', ')}: certificate not trusted yet — would be skipped. Test connection first.`;
     return false;
   }
   if (armed) return confirm('ARM the Proxmox shutdown? When a host\'s trigger is met, the bridge will really shut it down.');

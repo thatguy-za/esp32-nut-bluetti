@@ -623,8 +623,9 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r);
 static esp_err_t h_admin_credentials(httpd_req_t *r);
 
 /* POST /api/pve-test — check one Proxmox host with the posted (or stored)
- * settings. Blocking. Reply: {"ok":bool,"msg":"…","fp":"AB:CD:…"|""} where
- * fp is the certificate the server presented when nothing is pinned yet. */
+ * settings. Blocking. Reply: {"ok":bool,"pinned":bool,"msg":"…","fp":"AB:CD:…"|""}
+ * where fp carries the fingerprint only when this call is the one that just
+ * trusted it (first connection, or after "Forget"), for the form to keep. */
 static bool pve_host_from_form(const char *, int, pve_host_t *,
                                const pve_host_t *, char *, size_t);
 /* Shared by the test and guest-list endpoints: read the posted host into
@@ -707,12 +708,13 @@ static esp_err_t h_pve_test(httpd_req_t *r)
     }
     char msg[200], fp[96];
     int t = pve_shutdown_test(&h, msg, sizeof(msg), fp);
-    pve_shutdown_note_test(i, t == 0, t == 1 ? "not pinned yet" : msg);
+    pve_shutdown_note_test(i, t == 0, msg);
+    bool pinned = h.fingerprint[0] != '\0';
     memset(&h, 0, sizeof(h));
 
     char out[360];
     snprintf(out, sizeof(out), "{\"ok\":%s,\"pinned\":%s,\"msg\":\"%s\",\"fp\":\"%s\"}",
-             t == 0 ? "true" : "false", t != 1 ? "true" : "false", msg, fp);
+             t == 0 ? "true" : "false", pinned ? "true" : "false", msg, fp);
     return send_json(r, out);
 }
 /* POST /api/notify-test — send a Telegram message with the posted (or

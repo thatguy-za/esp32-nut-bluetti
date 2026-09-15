@@ -237,17 +237,16 @@ only ever want the node shut down. Revoke at any time with
 
 ### On the bridge
 
-**Proxmox** tab. Tick *Shut Proxmox hosts down when the Bluetti runs low*, pick
-**Dry run** (the default) or **Armed**, and set how long the mains has to be
-back before a fired host re-arms (default 5 minutes).
+**Proxmox** tab. Tick *Enable control of Proxmox hosts, VMs and containers*,
+pick **Dry run** (the default) or **Armed**, and set how long the mains has to
+be back before a fired host re-arms (default 5 minutes).
 
 Then the first host — **+ Add host** for more, up to four. Each host is
 self-contained:
 
 | | |
 | --- | --- |
-| **Connection** | API URL (`https://<node-ip>:8006`, **one per node** even in a cluster — a node that has already shut down can't proxy for the ones still to come), node name, token ID and secret. The secret is write-only: the page never shows it again. |
-| **Certificate** | Pinned by fingerprint — see below. |
+| **Connection** | API URL (`https://<node-ip>:8006`, **one per node** even in a cluster — a node that has already shut down can't proxy for the ones still to come), node name, token ID and API key (Proxmox's own two-field token — no certificate to type in, see below). The key is write-only: the page never shows it again. |
 | **Shut down when** | *On battery for N minutes* (default 30), timed on the bridge's own clock from the moment the mains drops; *or charge at or below N %* (default 10). Either one fires this host. 0 turns a trigger off; at least one must be set. |
 | **What to shut down** | **Load guests** lists the node's VMs and containers; tick the ones to stop first. Then a wait, then the node itself — untick that for guests only. |
 
@@ -255,26 +254,29 @@ Hosts fire **independently**: each has its own countdown off the same outage
 and its own fire-once latch, so a NAS can go at ten minutes and the hypervisor
 at thirty.
 
-### Pinning the certificate
+### The certificate
 
 Proxmox ships a self-signed certificate, so there is no authority to verify it
-against. pve-ups leaves verification off; this bridge pins the certificate
-instead. **Until a host has a pinned fingerprint, nothing is sent to it — not
-even the token.**
+against. pve-ups leaves verification off; this bridge trusts the certificate
+instead, the way SSH trusts a server's host key the first time you connect —
+**trust-on-first-use**. There's no fingerprint to copy from anywhere and
+compare: nothing to check it *against* until the bridge has seen it once, so
+the page never shows or asks for one.
 
-1. Fill in the connection and click **Test**. The bridge completes the TLS
-   handshake, reports the SHA-256 fingerprint of the certificate it was shown,
-   and stops.
-2. Compare it with Proxmox: node → **System → Certificates** → `pve-ssl.pem`
-   (or `pveproxy-ssl.pem` if you installed your own). They must match.
-3. Click **Pin this certificate**, **Save & reboot**, then **Test** again. This
-   time the token goes out, the test confirms the privileges are actually
-   granted, and the guest list loads.
+1. Fill in the connection (URL, node, token ID, API key) and click **Test
+   connection**. On a host it hasn't seen before, the bridge completes the TLS
+   handshake, trusts the certificate it was shown, and — in that same click —
+   uses it to confirm the token's privileges and load the guest list.
+2. From then on, every connection to that host — including the next Test — is
+   checked against exactly that certificate. If it ever changes (Proxmox
+   reissued it, or something is intercepting the connection), the host is
+   refused and skipped with a clear message rather than silently trusted
+   again.
+3. Reissued Proxmox's certificate yourself? Click **Forget trusted
+   certificate**, then **Test connection** to trust the new one.
 
-If Proxmox's certificate is ever regenerated the pin stops matching, the host is
-skipped with a clear message, and you repeat the three steps. That is the
-trade-off for never sending a power-off credential to something you haven't
-identified.
+Until a host's certificate has been trusted, nothing is sent to it — not even
+the token.
 
 ### Dry run, then arm
 

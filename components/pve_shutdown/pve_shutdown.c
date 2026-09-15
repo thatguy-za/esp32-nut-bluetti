@@ -401,9 +401,9 @@ static void run_host(int i, const pve_config_t *cfg, const char *reason)
     }
     if (!h->fingerprint[0]) {
         snprintf(text, sizeof(text), "\xE2\x9D\x8C Proxmox %s NOT shut down: "
-                 "certificate not pinned (use Test on the Proxmox tab)", h->node);
+                 "certificate not trusted yet (use Test connection on the Proxmox tab)", h->node);
         emit(text);
-        note_host(i, false, "not pinned \xE2\x80\x94 skipped");
+        note_host(i, false, "not trusted \xE2\x80\x94 skipped");
         return;
     }
 
@@ -594,7 +594,7 @@ static bool has_priv(cJSON *data, const char *path, const char *priv)
     return v && ((cJSON_IsNumber(v) && v->valueint) || cJSON_IsTrue(v));
 }
 
-int pve_shutdown_test(const pve_host_t *h, char *msg, size_t msg_sz,
+int pve_shutdown_test(pve_host_t *h, char *msg, size_t msg_sz,
                       char seen_fp[96])
 {
     char err[80] = "";
@@ -606,21 +606,25 @@ int pve_shutdown_test(const pve_host_t *h, char *msg, size_t msg_sz,
         return -1;
     }
     int ret = -1;
+    bool trusted_now = false;
 
     req_result_t r = tls_request(h, "/version", NULL, resp, RESP_MAX,
                                  err, sizeof(err));
     if (r.status == 0) {
+        /* Nothing trusted yet: this is the only moment there is anything to
+         * compare against, so trust what was just shown — like SSH on a new
+         * host key — and go straight on to the real request. Every
+         * connection after this one is checked against exactly this value. */
+        strlcpy(h->fingerprint, r.seen_fp, sizeof(h->fingerprint));
         fp_pretty(r.seen_fp, seen_fp);
-        snprintf(msg, msg_sz, "Connected. Certificate fingerprint %s \xE2\x80\x94 "
-                 "check it against Proxmox (System \xE2\x80\xBA Certificates), "
-                 "pin it, and test again. Nothing was sent.", seen_fp);
-        ret = 1;
-        goto done;
+        trusted_now = true;
+        r = tls_request(h, "/version", NULL, resp, RESP_MAX, err, sizeof(err));
     }
     if (r.status != 200) {
         char d[80];
         describe(r.status, err, d, sizeof(d));
-        snprintf(msg, msg_sz, "GET /version: %s", d);
+        snprintf(msg, msg_sz, "%sGET /version: %s",
+                 trusted_now ? "Certificate trusted. " : "", d);
         ret = -1;
         goto done;
     }
@@ -670,12 +674,14 @@ int pve_shutdown_test(const pve_host_t *h, char *msg, size_t msg_sz,
     cJSON_Delete(j);
 
     if (node_ok && !guests_missing) {
-        snprintf(msg, msg_sz, "PVE %s: certificate pinned, Sys.PowerMgmt ok%s", ver,
-                 guests ? ", VM.PowerMgmt ok for the guests" : "");
+        snprintf(msg, msg_sz, "%sPVE %s: Sys.PowerMgmt ok%s",
+                 trusted_now ? "Certificate trusted (first connection). " : "",
+                 ver, guests ? ", VM.PowerMgmt ok for the guests" : "");
         ret = 0;
         goto done;
     }
-    snprintf(msg, msg_sz, "PVE %s reachable, but %s%s%s", ver,
+    snprintf(msg, msg_sz, "%sPVE %s reachable, but %s%s%s",
+             trusted_now ? "Certificate trusted. " : "", ver,
              node_ok ? "" : "Sys.PowerMgmt not confirmed on /nodes",
              (!node_ok && guests_missing) ? "; " : "",
              guests_missing ? "VM.PowerMgmt missing for some guests" : "");

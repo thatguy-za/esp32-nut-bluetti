@@ -29,11 +29,15 @@
  * Proxmox ships a self-signed certificate on 8006, so there is no CA to
  * verify against. Rather than skip verification (pve-ups's default), each
  * host is pinned by the SHA-256 fingerprint of its certificate — the same
- * one Proxmox shows under System > Certificates. Trust-on-first-use with
- * an explicit step: until a fingerprint is pinned, the Test button
- * completes the handshake, reports what it saw, and sends nothing. The
- * token never crosses an unpinned connection. The client is plain mbedTLS
- * (not esp-tls), so no global setting is loosened for anything else.
+ * one Proxmox shows under System > Certificates. Trust-on-first-use, like
+ * an SSH host key: the first Test against a host trusts whatever
+ * certificate it presents and remembers it; every connection after that —
+ * Test included — is refused if the certificate ever changes. There is
+ * nothing to compare the first sighting against, so the fingerprint is
+ * never shown or typed in; "Forget trusted certificate" clears it so the
+ * next Test trusts again. The token never crosses a connection whose
+ * certificate doesn't match. The client is plain mbedTLS (not esp-tls), so
+ * no global setting is loosened for anything else.
  */
 
 #include <stdbool.h>
@@ -143,13 +147,16 @@ typedef struct {
 } pve_status_t;
 void pve_shutdown_status(pve_status_t *out);
 
-/* Blocking connection test against one host. With no fingerprint pinned:
- * handshake only, returns 1 and puts the certificate's fingerprint in
- * `seen_fp` (colon-separated, for the user to pin) — the token is not
- * sent. With one pinned: GET /version, then confirm Sys.PowerMgmt on
- * /nodes (or /nodes/<node>) and VM.PowerMgmt for each listed guest;
- * 0 = all good, -1 = a problem. `msg` is filled either way. */
-int  pve_shutdown_test(const pve_host_t *host, char *msg, size_t msg_sz,
+/* Blocking connection test against one host. With no certificate trusted
+ * yet, trusts whatever this connection presents (TOFU) and continues in
+ * the same call — `host->fingerprint` comes back filled in, and `seen_fp`
+ * carries the same value (colon-separated) so the caller can persist it.
+ * Either way: GET /version, then confirm Sys.PowerMgmt on /nodes (or
+ * /nodes/<node>) and VM.PowerMgmt for each listed guest; 0 = all good,
+ * -1 = a problem (including a certificate that no longer matches the one
+ * trusted before). `msg` is filled either way; `seen_fp` is only filled
+ * when this call is the one that established trust. */
+int  pve_shutdown_test(pve_host_t *host, char *msg, size_t msg_sz,
                        char seen_fp[96]);
 
 /* List the host's VMs and containers as a JSON array of
