@@ -48,6 +48,7 @@ Served at `http://<device-ip>/` once the bridge is on your network.
 | **Status** | Live power flow (sources → battery → AC/DC load), charge, the NUT variables, network details, and a tail of the device log (~12 KB ring buffer). |
 | **Bluetti** | BLE target and the device-controls toggle. |
 | **NUT** | UPS name, TCP port, low-battery %, AC rating, battery capacity, and the optional NUT login. |
+| **Proxmox** | Shut Proxmox VE hosts (and guests) down through their API when the battery runs low. Off by default, dry-run until armed. |
 | **Network** | Join a network or run an access point; hostname; DHCP or static IPv4; the fallback AP. Addressing is station-only — an AP always serves `192.168.4.1`. |
 | **Alerts** | Telegram push notifications. |
 | **Maintenance** | Firmware update, restart, admin login, factory reset, status-LED settings. |
@@ -202,6 +203,108 @@ keeps serving NUT and drops the message rather than stalling.
 Mains lost/restored fire only on genuine on-line ↔ on-battery transitions —
 coming back from a dropped link (a reboot, say) is silent unless the
 unreachable/back alert is on.
+
+## Proxmox shutdown
+
+The bridge can shut Proxmox VE hosts down itself, through the Proxmox API, when
+the Bluetti has been on battery too long or its charge is too low. It is the
+appliance approach of [pve-ups](https://github.com/ffind-dev/pve-ups) in
+firmware: no `upsmon` on the host, no shutdown script, no SSH — a dedicated API
+token with one privilege, and the decision made here where you can see it.
+
+### On Proxmox, once
+
+A user that can do exactly one thing, and a token that inherits it. In the node
+shell (web UI → node → `>_ Shell`), as root; in a cluster this runs on any one
+node and is valid on all of them:
+
+```bash
+pveum user add ups@pve
+pveum role add UpsShutdown -privs "Sys.PowerMgmt"
+pveum acl modify /nodes -user ups@pve -role UpsShutdown
+pveum user token add ups@pve shutdown --privsep 0
+```
+
+The last line prints the **token ID** (`ups@pve!shutdown`) and the **secret** —
+shown only once, copy it now. To also stop particular guests before the node,
+add `VM.PowerMgmt` to the role and grant it on `/vms` (or `/vms/<id>`). Revoke
+at any time with `pveum user token remove ups@pve shutdown`.
+
+### On the bridge
+
+**Proxmox** tab. Tick *Shut Proxmox down from this bridge*, then per host:
+
+| Field | |
+| --- | --- |
+| API URL | `https://<node-ip>:8006`. **One per node**, even in a cluster — the API would proxy to another node, but a node that has already shut down can't proxy for the ones still to come. |
+| Node name | As Proxmox shows it. Retried as `localhost` if it fails, so a typo costs a round trip rather than the shutdown. |
+| Token ID / secret | From the commands above. The secret is write-only: the page never shows it again. |
+| Certificate fingerprint | See below. |
+| Stop these guests first | VM or CT IDs, comma-separated. Each gets its own orderly shutdown before the node; VM and CT are tried in turn. |
+| Then wait | Seconds after the last guest before the node itself. |
+| Shut the node down | Untick for guests only. |
+
+Hosts go in **slot order**, with the *Pause between hosts* in between. Put the
+one that must go last in the last slot.
+
+**Triggers** — any one that is set and met fires the sequence:
+
+- **On battery for N minutes** (default 30). Timed on the bridge's own clock
+  from the moment the mains drops, never from a counter the unit reports.
+- **Charge at or below N %** (default 10), while on battery.
+- **Low battery** — the unit's own `LB`, the same flag NUT publishes.
+
+### Pinning the certificate
+
+Proxmox ships a self-signed certificate, so there is no authority to verify it
+against. pve-ups leaves verification off; this bridge pins the certificate
+instead. **Until a host has a pinned fingerprint, nothing is sent to it — not
+even the token.**
+
+1. Fill in the host and click **Test**. The bridge completes the TLS handshake,
+   reports the SHA-256 fingerprint of the certificate it was shown, and stops.
+2. Compare it with Proxmox: node → **System → Certificates** → `pve-ssl.pem`
+   (or `pveproxy-ssl.pem` if you installed your own). They must match.
+3. Click *pin this*, **Save**, then **Test** again. This time the token goes
+   out, and the test confirms `Sys.PowerMgmt` (and `VM.PowerMgmt` for any
+   guests) is actually granted.
+
+If Proxmox's certificate is ever regenerated the pin stops matching, the host is
+skipped with a clear message, and you repeat the three steps. That is the
+trade-off for never sending a power-off credential to something you haven't
+identified.
+
+### Dry run, then arm
+
+New installs are in **dry run**. Everything happens — the countdown on the
+Status page, the log lines, the Telegram message — except the API call. Watch
+one outage (or pull the Bluetti's mains plug) fire in dry run, check every host
+reads *test ok* on the Status page, and only then switch to **Armed**. Saving
+armed asks you to confirm.
+
+### The safety model
+
+Borrowed wholesale from pve-ups, because it is right:
+
+- **Losing the Bluetti is never a reason to shut down.** `OFF` and `OL WAIT`
+  start no countdown and satisfy no trigger. A countdown that was *already*
+  running keeps running, though — a confirmed outage doesn't become less
+  confirmed because the Bluetooth link died in it, and a switch losing power is
+  itself a symptom.
+- **Fires once, then latches** until the mains has been back for *Re-arm after*
+  minutes (default 5). A supply that flaps can't fire twice into a host that is
+  mid-shutdown.
+- **A failed request is retried** — three attempts, five seconds apart. A 503
+  from a busy `pveproxy` isn't proof the node is going down.
+- **Charge and LB need a live reading**; a figure from before the link dropped
+  says nothing about now. Only the timer fires blind.
+
+The **Status** page shows the mode, the countdown while on battery, and a line
+per host: *ready*, *test ok*, *shutdown sent*, or what went wrong.
+
+> **The token can power off servers.** Keep the bridge on the same trusted
+> network as the Proxmox web interface. The admin page's login is what stands
+> between the network and the *Armed* switch.
 
 ## NUT variables
 

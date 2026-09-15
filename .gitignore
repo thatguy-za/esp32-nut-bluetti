@@ -26,4 +26,5 @@ dist/*.bin
 /test/ota_gh_test
 /test/lb_test
 /test/config_compat_test
+/test/pve_engine_test
 /test/nut_server_test

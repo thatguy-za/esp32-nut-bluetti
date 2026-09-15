@@ -1,7 +1,7 @@
 # Host tests
 
 Portable-logic tests that run without ESP-IDF or hardware. `make` builds and
-runs all eight C suites:
+runs all nine C suites:
 
 | Suite | Covers |
 | --- | --- |
@@ -12,12 +12,15 @@ runs all eight C suites:
 | `lb_test` | the low-battery decision: `LB` on the charge threshold **or** the runtime threshold, the heavy-load case percentage alone misses, unknown runtime, and a disabled runtime threshold |
 | `ipv4_test` | the static-addressing dotted-quad validator: valid addresses, and rejection of the lenient forms `esp_ip4addr_aton()` accepts (`192.168.1`, `0xC0.0xA8.1.1`), whitespace, signs and out-of-range octets |
 | `ota_gh_test` | GitHub update helpers: version ordering (a string compare would put `0.10.0` before `0.9.0`) and the streaming release scanner, fed at every chunk size from 1 to 40 so no token split is handled correctly only by luck |
-| `config_compat_test` | the forward-compatible NVS loader: pins the append-only field order (`led_gpio`, `controls_enabled`, `battery_wh`, `log_level`) and that `log_level` is last, and that a short v3-length blob loads with the stored fields intact and the newer ones at their defaults — a future field reorder that would silently wipe or misread everyone's config fails here |
+| `config_compat_test` | the forward-compatible NVS loader: pins the append-only field order (`led_gpio`, `controls_enabled`, `battery_wh`, `log_level`, the fallback AP, the Proxmox block) and that the Proxmox block is last, and that short v3/v6/v7-length blobs load with the stored fields intact and the newer ones at their defaults — including that a v7 device upgrading comes up with Proxmox shutdown **off and in dry run** |
+| `pve_engine_test` | drives the real `pve_engine.c` through outages minute by minute: the NUT status strings it must and must not read as a power state, the 30-minute countdown on the bridge's own clock, the fire-once latch and its release after the mains has been back, a mains blip inside the latch not re-firing, fail-safe on `OFF`/`OL WAIT` (never starts a countdown, never releases the latch), a running countdown surviving a lost link, the charge and LB triggers needing a live reading, each trigger switched off, and `t = 0` being a valid start — the zero-sentinel bug this suite caught |
 
 ## Not covered here
 
 Anything that needs the radio or a real unit: the BLE handshake timing, the
 `ff02` write-type behaviour, and whether a control **write** is actually
-honoured by the power station. The register addresses and scaling for models
+honoured by the power station. The Proxmox side's runtime half — the pinned
+TLS client, the API calls and the shutdown sequence — needs a real PVE host;
+only the decision is tested. The register addresses and scaling for models
 other than the Elite 10 Mini are also unproven — these tests pin the
 arithmetic and the per-model gating, not the map itself.

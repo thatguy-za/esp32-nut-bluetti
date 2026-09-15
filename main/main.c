@@ -33,6 +33,7 @@
 #include "nut_server.h"
 #include "bluetti_ble.h"
 #include "notify.h"
+#include "pve_shutdown.h"
 #include "led_status.h"
 
 static const char *TAG = "app";
@@ -243,6 +244,7 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
      * never disagree. Edge detection and rate limiting live in notify. */
     notify_ups_status(status, st->soc_pct,
                       st->ac_input_present ? -1 : st->minutes_remaining);
+    pve_shutdown_observe(status, st->soc_pct);
 }
 
 static void bluetti_cb(const bluetti_state_t *state, void *user)
@@ -270,6 +272,7 @@ static void staleness_task(void *arg)
                                bluetti_ble_connected() ? "connected-no-data"
                                                        : "disconnected");
             notify_ups_status(s, have ? st.soc_pct : 0, -1);
+            pve_shutdown_observe(s, -1);   /* WAIT/OFF -> unknown, fail-safe */
         } else {
             nut_server_set_var("driver.state", "updated");
         }
@@ -287,6 +290,12 @@ static bool nut_verify_login(const char *user, const char *pass, void *ctx)
     }
     return strcmp(user, cfg->nut_user) == 0 &&
            app_config_check_nut_password(cfg, pass);
+}
+
+static void pve_event(const char *text, void *user)
+{
+    (void)user;
+    notify_send(text);
 }
 
 static void start_services(const app_config_t *cfg)
@@ -347,6 +356,12 @@ static void start_services(const app_config_t *cfg)
     strlcpy(ncfg.bot_token, cfg->tg_token, sizeof(ncfg.bot_token));
     strlcpy(ncfg.chat_id, cfg->tg_chat, sizeof(ncfg.chat_id));
     notify_start(&ncfg, cfg->ups_name);
+
+    /* Proxmox shutdown. Its events (fired, dry-run, a host that failed)
+     * go out through Telegram if that is on — the same channel as the
+     * power alerts, so the "shutting down" message lands where the
+     * "mains lost" one did. */
+    pve_shutdown_start(&cfg->pve, pve_event, NULL);
 
     provisioning_admin_start(cfg);
     xTaskCreate(staleness_task, "staleness", 3072, NULL, 4, NULL);

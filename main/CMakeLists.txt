@@ -15,4 +15,5 @@ idf_component_register(
         bluetti_ble
         notify
         led_status
+        pve_shutdown
 )

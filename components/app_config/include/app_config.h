@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
+#include "pve_shutdown.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -95,6 +96,11 @@ typedef struct {
     bool     fb_ap_enabled;
     char     fb_ap_ssid[33];   /* blank = the board's default name */
     char     fb_ap_pass[65];   /* blank = open network             */
+
+    /* Proxmox shutdown on UPS events (see components/pve_shutdown). The
+     * token secrets live in here in the clear, like the Telegram token;
+     * they are never sent back out through the config JSON. */
+    pve_config_t pve;
 } app_config_t;
 
 /* How long the station has to be down before the fallback AP comes up.

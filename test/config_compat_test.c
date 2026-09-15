@@ -20,7 +20,7 @@
 #include "app_config.h"
 
 /* Must track the #define in app_config.c. */
-#define CFG_VERSION 7u
+#define CFG_VERSION 8u
 
 static int fails;
 #define OKF(c, ...) do { bool _ok = (c); printf(_ok ? "ok:   " : "FAIL: "); \
@@ -56,9 +56,13 @@ int main(void)
     OKF(offsetof(app_config_t, fb_ap_ssid) > offsetof(app_config_t, fb_ap_enabled) &&
         offsetof(app_config_t, fb_ap_pass) > offsetof(app_config_t, fb_ap_ssid),
         "the fallback AP's SSID and password follow it, in order");
-    OKF(offsetof(app_config_t, fb_ap_pass) + sizeof(((app_config_t *)0)->fb_ap_pass)
-            + 3 >= sizeof(app_config_t),
-        "fb_ap_pass is the last field");
+    OKF(offsetof(app_config_t, pve) > offsetof(app_config_t, fb_ap_pass),
+        "the Proxmox block (v8) was appended after the fallback AP");
+    OKF(offsetof(app_config_t, pve) + sizeof(pve_config_t) + 3 >= sizeof(app_config_t),
+        "the Proxmox block is the last field");
+    OKF(sizeof(pve_config_t) < 1400,
+        "the Proxmox block is bounded (%zu bytes for %d hosts)",
+        sizeof(pve_config_t), PVE_MAX_HOSTS);
 
     const size_t full_len = sizeof(blob_t);
     const size_t min_len  = offsetof(blob_t, cfg) + V3_END;
@@ -129,6 +133,27 @@ int main(void)
         "the fallback AP comes up off on a device upgrading from v6");
     OKF(v6.cfg.fb_ap_ssid[0] == '\0',
         "the fallback AP SSID comes up blank on a device upgrading from v6");
+
+    /* A v7 device upgrading to v8: the Proxmox block must come up with the
+     * defaults the loader pre-seeded — off, dry-run — not with whatever
+     * the short read left behind. Armed-by-accident is the one outcome
+     * this feature must never produce. */
+    const size_t v7_len = offsetof(blob_t, cfg) + offsetof(app_config_t, pve);
+    OKF(ACCEPT(v7_len, 7u), "a v7-length blob is accepted by v8");
+    blob_t v7 = { .version = 7u, .cfg = defaults };
+    v7.cfg.pve.enabled = false;
+    v7.cfg.pve.armed = false;
+    v7.cfg.pve.on_battery_min = 30;
+    blob_t stored7;
+    memset(&stored7, 0xEE, sizeof stored7);          /* garbage past the read */
+    memset(&stored7.cfg, 0, sizeof stored7.cfg);
+    stored7.version = 7u;
+    stored7.cfg.fb_ap_enabled = true;
+    memcpy(&v7, &stored7, v7_len);
+    OKF(v7.cfg.fb_ap_enabled == true, "a v7 blob's fallback-AP setting survives");
+    OKF(!v7.cfg.pve.enabled && !v7.cfg.pve.armed,
+        "Proxmox shutdown comes up OFF and in DRY RUN on a device upgrading from v7");
+    OKF(v7.cfg.pve.on_battery_min == 30, "...with the default 30-minute trigger");
 
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;

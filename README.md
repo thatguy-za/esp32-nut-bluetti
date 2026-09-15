@@ -107,6 +107,9 @@ a `.bin` when the bridge has no route out:
 - **Survives the network going away** — retries forever instead of dropping into
   setup, and can raise a fallback AP so a bridge whose Wi-Fi has gone is still
   reachable.
+- **Proxmox shutdown** — shut PVE hosts and guests down through their API on
+  battery time or charge, pve-ups style: one-privilege token, pinned
+  certificate, dry-run until you arm it. No agent on the host.
 - **Device controls** — AC/DC output, ECO modes, charging mode and more from
   the web page. Off by default; NUT stays read-only.
 - **Static IP or DHCP**, settable hostname, status LED support.
@@ -115,7 +118,7 @@ a `.bin` when the bridge has no route out:
 
 | | |
 | --- | --- |
-| [`docs/CONFIGURING.md`](docs/CONFIGURING.md) | Setup walkthrough, admin page, device controls, alerts, full NUT variable list, source layout, building |
+| [`docs/CONFIGURING.md`](docs/CONFIGURING.md) | Setup walkthrough, admin page, device controls, alerts, Proxmox shutdown, full NUT variable list, source layout, building |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | The Bluetti BLE protocol — handshake, framing, register map |
 | [`dist/FLASHING.md`](dist/FLASHING.md) | Flashing without the web installer |
 

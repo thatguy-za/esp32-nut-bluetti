@@ -9,7 +9,7 @@ CFLAGS  ?= -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter
 NUT     := ../components/nut_server
 
 .PHONY: all clean
-all: nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test ota_gh_test config_compat_test
+all: nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test ota_gh_test config_compat_test pve_engine_test
 	./nut_server_test
 	./auth_test
 	./ipv4_test
@@ -18,6 +18,7 @@ all: nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test ota_
 	./bt_regs_test
 	./ota_gh_test ota_gh_test
 	./config_compat_test
+	./pve_engine_test
 
 nut_server_test: nut_server_test.c $(NUT)/nut_server.c
 	$(CC) $(CFLAGS) -Ishim -I$(NUT)/include $^ -lpthread -o $@
@@ -42,7 +43,11 @@ ota_gh_test: ota_gh_test.c
 	$(CC) $(CFLAGS) $^ -o $@
 
 config_compat_test: config_compat_test.c ../components/app_config/include/app_config.h
-	$(CC) $(CFLAGS) -Ishim -I../components/app_config/include config_compat_test.c -o $@
+	$(CC) $(CFLAGS) -Ishim -I../components/app_config/include -I../components/pve_shutdown/include config_compat_test.c -o $@
 
 clean:
-	rm -rf nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test ota_gh_test config_compat_test *.dSYM
+	rm -rf nut_server_test auth_test ipv4_test lb_test bt_frame_test bt_regs_test ota_gh_test config_compat_test pve_engine_test *.dSYM
+
+PVE := ../components/pve_shutdown
+pve_engine_test: pve_engine_test.c $(PVE)/pve_engine.c $(PVE)/include/pve_shutdown.h
+	$(CC) $(CFLAGS) -DPVE_HOST_ONLY -I$(PVE)/include pve_engine_test.c $(PVE)/pve_engine.c -o $@

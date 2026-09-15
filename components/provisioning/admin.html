@@ -117,6 +117,7 @@
   <button data-tab="status" class="active">Status</button>
   <button data-tab="bluetti">Bluetti</button>
   <button data-tab="nut">NUT</button>
+  <button data-tab="pve">Proxmox</button>
   <button data-tab="wifi">Network</button>
   <button data-tab="notify">Alerts</button>
   <button data-tab="maint">Maintenance</button>
@@ -173,6 +174,11 @@
       </div>
     </div>
     <div class="statusDots" id="statusDots"></div>
+  </div>
+  <div class="box" id="pveBox" hidden>
+    <h2>Proxmox shutdown <span class="sub" id="pveMode"></span></h2>
+    <p id="pveLine" class="hint" style="margin:0 0 .5rem"></p>
+    <table id="pveHosts"></table>
   </div>
   <div class="box">
     <h2>Logs <span class="sub">device log tail, ~12&nbsp;KB</span></h2>
@@ -300,6 +306,85 @@
 </section>
 
 <!-- ---------------- Wi-Fi ---------------- -->
+<!-- ---------------- Proxmox ---------------- -->
+<section id="pve">
+  <form id="pveForm">
+    <input type="hidden" name="section" value="pve">
+    <div class="box">
+      <h2>Shutdown on power loss</h2>
+      <label class="chk"><input type="checkbox" id="pveEnabled" name="pve_enabled"
+        value="1" style="width:auto"> Shut Proxmox down from this bridge</label>
+      <div class="modes" style="margin-top:.7rem">
+        <label><input type="radio" name="pve_armed" value="0" checked>
+          <b>Dry run</b> — log and alert, shut nothing down</label>
+        <label><input type="radio" name="pve_armed" value="1">
+          <b>Armed</b> — actually shut down</label>
+      </div>
+      <p class="hint">Dry run behaves exactly like armed — it counts down,
+        logs and sends the Telegram message — but sends nothing to Proxmox.
+        Leave it there until a Test passes on every host and you've seen a
+        dry run fire.</p>
+
+      <h3 style="font-size:.85rem; margin:1.1rem 0 .3rem">Triggers <span class="sub"
+        style="font-weight:400;opacity:.6">any one fires it</span></h3>
+      <label for="pveBattMin">On battery for</label>
+      <div class="row" style="margin:0">
+        <input id="pveBattMin" name="pve_on_battery_min" type="number" min="0"
+               max="1440" style="width:6rem"> <span class="hint">minutes (0 = off).
+        Timed on this bridge's own clock from the moment the mains drops.</span>
+      </div>
+      <label for="pveChargePct">Battery charge at or below</label>
+      <div class="row" style="margin:0">
+        <input id="pveChargePct" name="pve_charge_pct" type="number" min="0"
+               max="100" style="width:6rem"> <span class="hint">% while on battery
+        (0 = off)</span>
+      </div>
+      <label class="chk" style="margin-top:.7rem"><input type="checkbox" id="pveOnLb"
+        name="pve_on_lb" value="1" style="width:auto"> When NUT reports low battery
+        (<code>LB</code>)</label>
+
+      <h3 style="font-size:.85rem; margin:1.1rem 0 .3rem">Sequence</h3>
+      <label for="pveHostDelay">Pause between hosts</label>
+      <div class="row" style="margin:0">
+        <input id="pveHostDelay" name="pve_host_delay_s" type="number" min="0"
+               max="3600" style="width:6rem"> <span class="hint">seconds</span>
+      </div>
+      <label for="pveMainsBack">Re-arm after mains has been back for</label>
+      <div class="row" style="margin:0">
+        <input id="pveMainsBack" name="pve_mains_back_min" type="number" min="0"
+               max="1440" style="width:6rem"> <span class="hint">minutes. Once
+        fired it stays fired until then, so a flapping supply can't fire twice
+        into a host that's mid-shutdown.</span>
+      </div>
+      <p class="hint" style="margin-top:.8rem">Losing the Bluetti is never a
+        reason to shut down — an unknown power state raises no trigger. A
+        countdown already running keeps running, though: a confirmed outage
+        doesn't become less confirmed because the Bluetooth link dropped in it.</p>
+    </div>
+
+    <div id="pveHostBoxes"></div>
+
+    <div class="box">
+      <h2>Setting up the token <span class="sub">once, on any node of a cluster</span></h2>
+      <p class="hint" style="margin:0 0 .4rem">A dedicated user with a single
+        privilege, and a token that inherits it. In the node shell, as root:</p>
+<pre style="max-height:none">pveum user add ups@pve
+pveum role add UpsShutdown -privs "Sys.PowerMgmt"
+pveum acl modify /nodes -user ups@pve -role UpsShutdown
+pveum user token add ups@pve shutdown --privsep 0</pre>
+      <p class="hint">The last line prints the token ID (<code>ups@pve!shutdown</code>)
+        and the secret — shown once, copy it now. To also stop guests before the
+        node, add <code>VM.PowerMgmt</code> to the role and grant it on
+        <code>/vms</code>. Give every host its own URL: a node that is already
+        off can't forward the shutdown for the ones still to come. Revoke any
+        time with <code>pveum user token remove ups@pve shutdown</code>.</p>
+    </div>
+
+    <p><button class="act primary" id="pveSave">Save &amp; reboot</button>
+       <span class="hint" id="pveMsg"></span></p>
+  </form>
+</section>
+
 <section id="wifi">
   <form id="wifiForm">
     <input type="hidden" name="section" value="wifi">
@@ -667,6 +752,7 @@ async function refreshStatus() {
     renderStatus(j);
     $('#setupWarn').hidden = !!j.configured;
     $('#fbWarn').hidden = !j.fb_ap_up;
+    renderPve(j.pve);
     if (j.fb_ap_up && j.network) $('#fbWarnNet').textContent = `"${j.network}"`;
     /* Name the tab after the device, so several bridges are told apart in
        a row of tabs. Falls back to the static title before the first poll
@@ -799,6 +885,29 @@ async function loadConfig() {
     $('#staticGw').value = cfg.static_gw || '';
     $('#staticDns').value = cfg.static_dns || '';
     syncStatic();
+
+    const pv = cfg.pve || {};
+    $('#pveEnabled').checked = !!pv.enabled;
+    document.querySelector(`input[name=pve_armed][value="${pv.armed ? 1 : 0}"]`).checked = true;
+    $('#pveBattMin').value = pv.on_battery_min ?? 30;
+    $('#pveChargePct').value = pv.charge_pct ?? 10;
+    $('#pveOnLb').checked = pv.on_low_battery !== false;
+    $('#pveHostDelay').value = pv.host_delay_s ?? 0;
+    $('#pveMainsBack').value = pv.mains_back_min ?? 5;
+    pveStored = pv.hosts || [];
+    (pv.hosts || []).forEach((h, i) => {
+      if (i >= PVE_SLOTS) return;
+      document.querySelector(`[name=h${i}_on]`).checked = !!h.enabled;
+      $(`#h${i}_url`).value = h.url || '';
+      $(`#h${i}_node`).value = h.node || '';
+      $(`#h${i}_token`).value = h.token_id || '';
+      $(`#h${i}_secret`).placeholder = h.has_secret ? 'unchanged' : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
+      $(`#h${i}_fp`).value = h.fingerprint || '';
+      $(`#h${i}_guests`).value = h.guests || '';
+      $(`#h${i}_wait`).value = h.guest_wait_s ?? 30;
+      document.querySelector(`[name=h${i}_node_off]`).checked = h.shutdown_node !== false;
+    });
+    syncPveTriggers();
 
     $('#fbAp').checked = !!cfg.fb_ap_enabled;
     $('#fbApSsid').value = cfg.fb_ap_ssid || cfg.default_ap_ssid || '';
@@ -1181,6 +1290,161 @@ wireForm('#nutForm', '#nutSave', '#nutMsg', fd => {
     $('#nutMsg').textContent = 'Set a password, or tick "No login required".';
     return false;
   }
+});
+
+/* ---- Proxmox status box ---- */
+function fmtMMSS(s) {
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+function renderPve(p) {
+  const box = $('#pveBox');
+  if (!p || !p.enabled) { box.hidden = true; return; }
+  box.hidden = false;
+  $('#pveMode').textContent = p.armed ? 'ARMED' : 'dry run';
+  $('#pveMode').style.color = p.armed ? '#c00' : '';
+  let line;
+  if (p.fired) {
+    line = 'Fired — ' + (p.last || 'sequence running') + '. Re-arms once the mains has been back long enough.';
+  } else if (p.countdown_s >= 0) {
+    line = `On battery ${fmtMMSS(p.on_battery_s)} — shutdown in ${fmtMMSS(p.countdown_s)} unless the mains returns.`;
+  } else if (p.on_battery_s >= 0) {
+    line = `On battery ${fmtMMSS(p.on_battery_s)}. Waiting on the charge / low-battery triggers.`;
+  } else {
+    line = 'Standing by' + (p.last ? ` · last: ${p.last}` : '') + '.';
+  }
+  $('#pveLine').textContent = line;
+  const t = $('#pveHosts');
+  t.innerHTML = '';
+  (p.hosts || []).forEach((h, i) => {
+    if (!h.enabled && !h.node) return;
+    const tr = document.createElement('tr');
+    const name = document.createElement('td');
+    name.textContent = h.node || `host ${i + 1}`;
+    const st = document.createElement('td');
+    let text, cls = '';
+    if (!h.enabled) { text = 'disabled'; }
+    else if (!h.pinned) { text = 'certificate not pinned — will be skipped'; cls = 'warn'; }
+    else if (!h.last) { text = 'ready'; }
+    else { text = h.last; cls = h.ok ? '' : 'warn'; }
+    st.textContent = text;
+    if (cls) st.style.color = '#d9822b';
+    tr.append(name, st);
+    t.appendChild(tr);
+  });
+}
+
+/* ---- Proxmox tab ---- */
+const PVE_SLOTS = 4;
+function pveHostBox(i) {
+  const n = i + 1;
+  return `<div class="box pveHost" data-i="${i}">
+    <h2>Host ${n} <span class="sub">shut down ${n === 1 ? 'first' : n === PVE_SLOTS ? 'last' : 'in this order'}</span></h2>
+    <label class="chk"><input type="checkbox" name="h${i}_on" value="1"
+      style="width:auto"> Enabled</label>
+    <label for="h${i}_url">API URL</label>
+    <input id="h${i}_url" name="h${i}_url" autocomplete="off" spellcheck="false"
+           placeholder="https://10.0.0.10:8006">
+    <label for="h${i}_node">Node name</label>
+    <input id="h${i}_node" name="h${i}_node" autocomplete="off" spellcheck="false"
+           placeholder="pve">
+    <label for="h${i}_token">Token ID</label>
+    <input id="h${i}_token" name="h${i}_token" autocomplete="off" spellcheck="false"
+           placeholder="ups@pve!shutdown">
+    <label for="h${i}_secret">Token secret</label>
+    <input id="h${i}_secret" name="h${i}_secret" type="password" autocomplete="off"
+           placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+    <label for="h${i}_fp">Certificate fingerprint (SHA-256)</label>
+    <input id="h${i}_fp" name="h${i}_fp" autocomplete="off" spellcheck="false"
+           placeholder="not pinned — run Test">
+    <p class="hint" id="h${i}_fphint">Nothing is sent to a host until its
+      certificate is pinned. Test reports the fingerprint it sees; check it
+      against Proxmox (node → System → Certificates) and pin it.</p>
+    <label for="h${i}_guests">Stop these guests first</label>
+    <input id="h${i}_guests" name="h${i}_guests" autocomplete="off" spellcheck="false"
+           placeholder="101, 102 — VM or CT IDs, blank for none">
+    <label for="h${i}_wait">Then wait</label>
+    <div class="row" style="margin:0">
+      <input id="h${i}_wait" name="h${i}_wait" type="number" min="0" max="600"
+             style="width:6rem"> <span class="hint">seconds before the node</span>
+    </div>
+    <label class="chk" style="margin-top:.7rem"><input type="checkbox"
+      name="h${i}_node_off" value="1" style="width:auto"> Shut the node down
+      (untick for guests only)</label>
+    <p><button type="button" class="act pveTest" data-i="${i}">Test</button>
+       <span class="hint" id="h${i}_msg"></span></p>
+  </div>`;
+}
+$('#pveHostBoxes').innerHTML = Array.from({ length: PVE_SLOTS }, (_, i) => pveHostBox(i)).join('');
+
+/* Which host slots already have a secret / fingerprint stored, so a blank
+   field means "keep it" rather than "none". */
+let pveStored = [];
+
+function syncPveTriggers() {
+  /* Dim rather than disable: a disabled input is left out of the form, and
+     the server would read the missing host fields as blank. */
+  const on = $('#pveEnabled').checked;
+  document.querySelectorAll('#pveHostBoxes .box').forEach(b => b.style.opacity = on ? '' : '.5');
+}
+$('#pveEnabled').onchange = syncPveTriggers;
+
+document.querySelectorAll('.pveTest').forEach(b => b.onclick = async () => {
+  const i = +b.dataset.i, msg = $(`#h${i}_msg`);
+  const fd = new FormData();
+  fd.set('i', i);
+  for (const k of ['url', 'node', 'token', 'secret', 'guests', 'fp']) {
+    const v = $(`#h${i}_${k}`).value;
+    if (v) fd.set(`h${i}_${k}`, v);
+  }
+  if (document.querySelector(`[name=h${i}_node_off]`).checked) fd.set(`h${i}_node_off`, '1');
+  b.disabled = true;
+  msg.textContent = 'Testing…';
+  try {
+    const r = await fetch('/api/pve-test', { method: 'POST', body: new URLSearchParams(fd) });
+    if (bounceIfSignedOut(r)) return;
+    if (!r.ok) throw new Error((await r.text()).trim() || 'HTTP ' + r.status);
+    const j = await r.json();
+    if (!j.pinned && j.fp) {
+      /* Trust-on-first-use, with the user in the loop: show it, offer to
+         fill the field, and say it still has to be saved. */
+      msg.innerHTML = '';
+      const t = document.createElement('span');
+      t.textContent = `Certificate ${j.fp} — `;
+      const a = document.createElement('a');
+      a.href = '#'; a.textContent = 'pin this';
+      a.onclick = ev => {
+        ev.preventDefault();
+        $(`#h${i}_fp`).value = j.fp;
+        msg.textContent = 'Pinned in the form — Save, then Test again to check the token.';
+      };
+      msg.append(t, a, document.createTextNode(' (check it against Proxmox first). Nothing was sent.'));
+    } else {
+      msg.textContent = (j.ok ? '✓ ' : '✗ ') + j.msg;
+    }
+  } catch (e) {
+    msg.textContent = 'Failed: ' + e.message;
+  }
+  b.disabled = false;
+});
+
+wireForm('#pveForm', '#pveSave', '#pveMsg', fd => {
+  const armed = fd.get('pve_armed') === '1';
+  if (fd.get('pve_enabled') !== '1') return true;
+  let hosts = 0, unpinned = [];
+  for (let i = 0; i < PVE_SLOTS; i++) {
+    if (fd.get(`h${i}_on`) !== '1') continue;
+    hosts++;
+    if (!fd.get(`h${i}_fp`) && !(pveStored[i] || {}).fingerprint) unpinned.push(i + 1);
+  }
+  if (!hosts) { $('#pveMsg').textContent = 'Enable at least one host.'; return false; }
+  if (armed && unpinned.length) {
+    $('#pveMsg').textContent = `Host ${unpinned.join(', ')} has no pinned certificate — it would be skipped. Run Test first.`;
+    return false;
+  }
+  if (armed) {
+    return confirm('ARM the Proxmox shutdown? Once a trigger is met the bridge will really shut these hosts down.');
+  }
+  return true;
 });
 
 /* ---- Wi-Fi tab ---- */
