@@ -5,13 +5,22 @@ UPS on your network, using an ESP32 as a Bluetooth-to-Wi-Fi bridge.
 
 Point your NAS, server or Raspberry Pi's `upsmon` at the ESP32 on port `3493`
 and it sees the Bluetti as a normal UPS — on-battery / on-line status, charge,
-runtime — so hosts shut down cleanly when the mains fails.
+runtime — so hosts shut down cleanly when the mains fails. It can also shut a
+**Proxmox VE** cluster down itself, straight through the Proxmox API, on the
+same battery-time or charge thresholds — no agent on the host, no NUT client
+required there at all.
 
 ```
  ┌───────────┐   BLE    ┌─────────┐   TCP/3493 (NUT)   ┌──────────────┐
  │  Bluetti  │ ───────► │  ESP32  │ ─────────────────► │ upsmon /     │
  │  station  │ ◄─────── │         │ ◄───────────────── │ upsc clients │
- └───────────┘          └─────────┘                    └──────────────┘
+ └───────────┘          └────┬────┘                    └──────────────┘
+                             │ HTTPS (Proxmox API)
+                             ▼
+                     ┌──────────────┐
+                     │  Proxmox VE  │
+                     │ hosts/guests │
+                     └──────────────┘
 ```
 
 No cloud, no account, no pairing — the BLE handshake uses fixed keys from the
