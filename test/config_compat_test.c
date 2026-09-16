@@ -12,6 +12,7 @@
  * discard everyone's config fails here first. They mirror the loader's
  * arithmetic (the real function needs NVS) against the actual layout. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -105,12 +106,19 @@ int main(void)
     OKF(b.cfg.controls_enabled == false,
         "controls_enabled, absent from the short blob, keeps its default");
 
-    #define ACCEPT(L, V) !((size_t)(L) > full_len || (size_t)(L) < min_len || \
+    /* v8-v11's inline guest arrays could make a real stored blob bigger
+     * than sizeof(blob_t) — the loader sizes its read off the actual
+     * on-disk length now, not the current struct, so "too long" is no
+     * longer a rejection reason (an 8 KiB sanity cap still is). */
+    #define MAX_ON_DISK 8192u
+    #define ACCEPT(L, V) !((size_t)(L) > MAX_ON_DISK || (size_t)(L) < min_len || \
                            (V) < 3u || (V) > CFG_VERSION)
     OKF(!ACCEPT(min_len, 2u),        "version 2 is rejected");
     OKF(!ACCEPT(min_len, CFG_VERSION + 1u), "a newer version is rejected");
     OKF(!ACCEPT(min_len - 1, 5u),    "a blob shorter than the v3 boundary is rejected");
-    OKF(!ACCEPT(full_len + 1, 5u),   "a blob longer than the current struct is rejected");
+    OKF(!ACCEPT(MAX_ON_DISK + 1, 5u), "an implausibly large blob is rejected");
+    OKF(ACCEPT(full_len + 1200, 10u), "a blob longer than the current struct is accepted "
+        "(v8-v11's inline guest arrays could make one)");
     OKF(ACCEPT(full_len, CFG_VERSION), "a full current blob is accepted");
     OKF(ACCEPT(min_len, 3u),         "a full v3 blob is accepted");
     OKF(ACCEPT(min_len, 4u),         "a full v4 blob is accepted");
@@ -165,6 +173,41 @@ int main(void)
     OKF(offsetof(pve_host_t, on_battery_min) > offsetof(pve_host_t, fingerprint),
         "v9 host triggers sit after the fingerprint (v8 had none)");
     OKF(ACCEPT(full_len, 8u), "a v8 blob is accepted (then its Proxmox block is reset)");
+
+    /* The actual incident: a real v10 device (1.6.0, inline 8-guest arrays
+     * per host) has an on-disk blob bigger than today's cfg_blob_t. Reading
+     * it with a buffer sized to today's struct made NVS fail the read
+     * outright (ESP_ERR_NVS_INVALID_LENGTH — it won't do a partial read
+     * into a too-small buffer), discarding the WHOLE config, not just
+     * Proxmox — the device came up unprovisioned, looking as if the OTA
+     * that shipped v12+ had silently failed. Model that oversized blob
+     * here and check the fields before `pve` still survive, and nothing
+     * past it (which doesn't line up byte-for-byte with today's layout)
+     * gets trusted. */
+    {
+        const size_t oversized_len = full_len + 1200;   /* bigger than sizeof(blob_t) */
+        unsigned char *big = malloc(oversized_len);
+        memset(big, 0xEE, oversized_len);                /* garbage past pve */
+        blob_t *stored_big = (blob_t *)big;
+        memset(&stored_big->cfg, 0, sizeof stored_big->cfg);
+        stored_big->version = 10u;
+        strcpy(stored_big->cfg.wifi_ssid, "home-net");
+        stored_big->cfg.ble_probe = false;
+
+        blob_t big_result = { .version = 10u, .cfg = defaults };  /* pre-seeded */
+        big_result.cfg.pve.enabled = false;
+        big_result.cfg.pve.armed = false;
+        /* Only the pre-`pve` bytes are trusted for v8-v11 (see loader). */
+        memcpy(&big_result.cfg, &stored_big->cfg, offsetof(app_config_t, pve));
+        free(big);
+
+        OKF(oversized_len > full_len,
+            "the simulated v10 blob is bigger than today's struct, as the real one was");
+        OKF(strcmp(big_result.cfg.wifi_ssid, "home-net") == 0,
+            "an oversized v10 blob's ssid (before `pve`) survives the upgrade");
+        OKF(!big_result.cfg.pve.enabled && !big_result.cfg.pve.armed,
+            "Proxmox shutdown still comes up OFF and in DRY RUN from an oversized v10 blob");
+    }
 
     /* v9 -> v10 and v10 -> v11 both reshaped the guest data that used to
      * live inside pve_host_t (free-text list, then 8 rule slots, then 32).

@@ -55,6 +55,14 @@ static const char *TAG = "app_config";
  * written still mean what they meant, and the newer trailing fields come
  * up at their defaults. A newer, much older, or unreadable blob is still
  * discarded.
+ *
+ * v8-v11's inline guest arrays made those blobs bigger than any version
+ * since — the one case where an old blob is larger than sizeof(cfg_blob_t)
+ * rather than smaller. app_config_load() sizes its read off the actual
+ * on-disk length, not sizeof(cfg_blob_t), and for v8-v11 only trusts the
+ * bytes before the pve field (see there for why): a fixed-size read once
+ * discarded the whole blob outright on any v8-v11 device that upgraded
+ * straight to v12+, since NVS refuses a read into a too-small buffer.
  */
 #define CFG_VERSION 14u
 
@@ -243,15 +251,35 @@ esp_err_t app_config_load(app_config_t *cfg)
         return ESP_OK;
     }
 
+    /* Find out how big the stored blob actually is before reading it. v8
+     * through v11 embedded each host's guest rules inline (up to 32
+     * pve_guest_t per host); that pve_config_t was far bigger than today's
+     * (guests moved to their own per-host NVS blobs at v12), so an old
+     * blob can be considerably LARGER than sizeof(cfg_blob_t) — the
+     * reverse of every other version bump, which only ever appended
+     * fields. Reading with a buffer sized to today's struct then fails
+     * outright with ESP_ERR_NVS_INVALID_LENGTH — NVS won't do a partial
+     * read into a too-small buffer — discarding a perfectly good config
+     * instead of just resetting the part whose layout changed. */
+    size_t on_disk = 0;
+    err = nvs_get_blob(h, CFG_KEY, NULL, &on_disk);
+    if (err != ESP_OK || on_disk > 8192) {
+        nvs_close(h);
+        ESP_LOGI(TAG, "no stored config (%s), using defaults",
+                 esp_err_to_name(err));
+        return ESP_OK;
+    }
+
     /* Pre-seed the struct with defaults so that a short read from an
      * older, smaller layout leaves the newer trailing fields alone.
      *
      * On the heap, not the stack: this runs on the main task, whose stack
-     * is a few KB, and the blob is over 2 KB since the Proxmox block. v1.3.0
-     * put it on the stack and overflowed on boot — before the image could
-     * mark itself valid, so the bootloader quietly rolled every device back
-     * to v1.2.0. */
-    cfg_blob_t *blob = malloc(sizeof(*blob));
+     * is a few KB, and the blob can run past 2 KB for an old, guest-heavy
+     * Proxmox block. v1.3.0 put it on the stack and overflowed on boot —
+     * before the image could mark itself valid, so the bootloader quietly
+     * rolled every device back to v1.2.0. */
+    size_t alloc_len = on_disk > sizeof(cfg_blob_t) ? on_disk : sizeof(cfg_blob_t);
+    cfg_blob_t *blob = malloc(alloc_len);
     if (!blob) {
         nvs_close(h);
         ESP_LOGE(TAG, "no memory to load config; using defaults");
@@ -259,17 +287,18 @@ esp_err_t app_config_load(app_config_t *cfg)
     }
     blob->version = CFG_VERSION;
     blob->cfg = *cfg;
-    size_t len = sizeof(*blob);
+    size_t len = alloc_len;
     err = nvs_get_blob(h, CFG_KEY, blob, &len);
     nvs_close(h);
 
-    /* Accept any v3+ blob: every version since only appends fields, so a
-     * shorter blob still means what it says and the trailing fields stay
-     * at their defaults. Anything older, newer, or a length that cannot be
-     * a v3-or-later blob is discarded and the device re-provisions. */
+    /* Accept any v3+ blob: every version since only appends or reshuffles
+     * fields, so a shorter blob still means what it says and the trailing
+     * fields stay at their defaults. Anything older, newer, or a length
+     * that cannot be a v3-or-later blob is discarded and the device
+     * re-provisions. */
     const size_t min_len =
         offsetof(cfg_blob_t, cfg) + offsetof(app_config_t, led_gpio);
-    if (err != ESP_OK || len > sizeof(*blob) || len < min_len ||
+    if (err != ESP_OK || len < min_len ||
         blob->version < 3u || blob->version > CFG_VERSION) {
         ESP_LOGW(TAG, "stored config unusable (err=%s len=%u ver=%u), defaults",
                  esp_err_to_name(err), (unsigned)len,
@@ -282,7 +311,15 @@ esp_err_t app_config_load(app_config_t *cfg)
         ESP_LOGW(TAG, "config v%u < v%u: kept, new fields at defaults",
                  (unsigned)blob->version, (unsigned)CFG_VERSION);
     }
-    *cfg = blob->cfg;
+    if (blob->version <= 11u) {
+        /* v8-v11's pve_config_t (inline guest arrays) is not today's —
+         * neither is anything laid out after it (tg_on_pve_host/guest).
+         * Only the bytes before it line up field-for-field with today's
+         * struct; leave the rest at the defaults already seeded above. */
+        memcpy(cfg, &blob->cfg, offsetof(app_config_t, pve));
+    } else {
+        *cfg = blob->cfg;
+    }
     uint32_t stored_version = blob->version;
     free(blob);
     if (stored_version >= 8u && stored_version <= 11u) {
