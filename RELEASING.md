@@ -24,7 +24,7 @@ git push origin main "v$V"
 
 rm -rf build && ./tools/package.sh      # builds + names the artifacts by version
 
-gh release create "v$V" --prerelease --notes-file NOTES.md \
+gh release create "v$V" --latest --notes-file NOTES.md \
   "dist/esp32-nut-bluetti-$V-factory.bin" "dist/esp32-nut-bluetti-$V.bin"
 ```
 
@@ -44,4 +44,4 @@ Artifacts:
   version, new tag.
 - One tag per version; the tag name is `v` + `version.txt`.
 - `dist/*.bin` is git-ignored — binaries live only on the release.
-- Stay `--prerelease` until the BLE handshake is confirmed on real hardware.
+- Releases are cut as full releases (`--latest`), not `--prerelease`.
