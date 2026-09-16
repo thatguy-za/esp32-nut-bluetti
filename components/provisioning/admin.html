@@ -52,16 +52,20 @@
          margin: 0 0 1rem; }
   .box > h2 { font-size: .95rem; margin: 0 0 .6rem; }
   .box > h2 .sub { font-weight: 400; opacity: .6; font-size: .85rem; }
+  /* A box whose button destroys something (factory reset) — tinted, not
+     just its button, so "be careful here" reads before you even get to
+     the button. */
+  .box.danger { border-color: #dc262666; background: #dc262610; }
+  .box.danger > h2 { color: #dc2626; }
   .pair { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
   .pair > .box { flex: 1 1 14rem; }
 
-  /* Appears only once a form actually has something unsaved, attached to
-     the bottom of whichever box currently sits above it (the negative
-     margin overlaps that box's own bottom margin — works regardless of
-     which box that is, since a hidden one takes no space). */
+  /* Appears only once a form actually has something unsaved — moved by JS
+     to be the last child of whichever box that change was made in (or
+     currently shows last, for a multi-box form), so it reads as part of
+     that box rather than a separate one stacked underneath. */
   .saveBar { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
-             margin: -1rem 0 1rem; border: 1px solid #8884; border-top: 0;
-             border-radius: 0 0 .6rem .6rem; padding: .8rem 1rem; }
+             margin-top: .8rem; padding-top: .7rem; border-top: 1px solid #8883; }
   .saveBar[hidden] { display: none; }
 
   pre { background: #111b; color: #d7e0e8; padding: .75rem; border-radius: .4rem;
@@ -104,6 +108,8 @@
   td:first-child { opacity: .7; white-space: nowrap; }
   tr:last-child td { border-bottom: 0; }
   .hint { font-size: .82rem; opacity: .65; }
+  .hint.ok { color: #16a34a; opacity: 1; font-weight: 600; }
+  .hint.err { color: #dc2626; opacity: 1; font-weight: 600; }
   .warn { border-left: 3px solid #d9822b; background: #d9822b1a; padding: .5rem .7rem;
           border-radius: .3rem; font-size: .88rem; margin: 0 0 1rem; }
   code { background: #8882; padding: .05em .3em; border-radius: .25em; }
@@ -655,7 +661,7 @@
          <span class="hint" id="rebootMsg"></span></p>
     </div>
 
-    <div class="box">
+    <div class="box danger">
       <h2>Reset</h2>
       <p>Forget every setting (Wi-Fi, admin login, Bluetti, NUT) and reboot into
         the setup access point.</p>
@@ -690,6 +696,17 @@
 
 <script>
 const $ = s => document.querySelector(s);
+
+/* Save/status feedback: 'ok' (green) once something actually succeeded,
+   'err' (red) once it actually failed, or plain hint-gray (kind omitted)
+   for anything in between ("Saving…") — so a result reads at a glance
+   instead of blending into every other line of gray hint text. */
+function setMsg(sel, text, kind) {
+  const el = $(sel);
+  el.textContent = text;
+  el.classList.remove('ok', 'err');
+  if (kind) el.classList.add(kind);
+}
 
 /* The session can lapse or be cleared by a reboot. Any 401 means the
    cookie is no longer good, so drop back to the login form rather than
@@ -1125,6 +1142,13 @@ loadConfig();   /* eager, not just on first visit to a config tab — the
    run once (from loadConfig, above) after every field has its loaded
    value — not at wireForm() time, since the fields aren't populated yet. */
 const formBaselines = [];
+/* The box a save bar should live in right now: the last one actually on
+   screen, so a hidden box (a Wi-Fi mode not selected, say) never ends up
+   holding it. Falls back to the form itself if a section has no boxes. */
+function lastVisibleBox(form) {
+  const boxes = [...form.querySelectorAll('.box')].filter(b => b.offsetParent !== null);
+  return boxes[boxes.length - 1] || form;
+}
 function wireForm(formSel, btnSel, msgSel, after) {
   const form = $(formSel), btn = $(btnSel), bar = btn.closest('.saveBar');
   const snapshot = () => new URLSearchParams(new FormData(form)).toString();
@@ -1132,7 +1156,10 @@ function wireForm(formSel, btnSel, msgSel, after) {
   function refreshDirty() {
     if (baseline === null) return;   /* still loading; nothing to compare to */
     const dirty = snapshot() !== baseline;
-    if (dirty && bar.hidden) $(msgSel).textContent = '';   /* clear a stale "Saved." */
+    if (dirty) {
+      if (bar.hidden) setMsg(msgSel, '');   /* clear a stale "Saved." */
+      lastVisibleBox(form).appendChild(bar);   /* read as part of that box */
+    }
     bar.hidden = !dirty;
   }
   /* 'click' too, not just input/change: a dynamic control (add/remove a
@@ -1150,7 +1177,7 @@ function wireForm(formSel, btnSel, msgSel, after) {
     fd.set('section', new FormData(ev.target).get('section'));
     if (after && after(fd) === false) return;
     btn.disabled = true;
-    $(msgSel).textContent = 'Saving…';
+    setMsg(msgSel, 'Saving…');
     let reboot = true;
     try {
       const r = await fetch('/api/reconfigure',
@@ -1163,15 +1190,15 @@ function wireForm(formSel, btnSel, msgSel, after) {
       }
       try { const j = await r.json(); if (j.reboot === false) reboot = false; } catch (e) {}
     } catch (e) {
-      $(msgSel).textContent = 'Failed: ' + e.message;
+      setMsg(msgSel, 'Failed: ' + e.message, 'err');
       btn.disabled = false;
       return;
     }
     baseline = snapshot();   /* what was just saved is "clean" now */
     if (reboot) {
-      $(msgSel).textContent = 'Saved. Rebooting — reload in ~15 s.';
+      setMsg(msgSel, 'Saved. Rebooting — reload in ~15 s.', 'ok');
     } else {
-      $(msgSel).textContent = 'Saved.';
+      setMsg(msgSel, 'Saved.', 'ok');
       btn.disabled = false;
     }
   };
@@ -1406,11 +1433,11 @@ let ghTimer = null;
 $('#ghCheck').onclick = async () => {
   $('#ghCheck').disabled = true;
   $('#ghCheck').textContent = 'Checking…';
-  $('#ghMsg').textContent = 'Asking GitHub…';
+  setMsg('#ghMsg', 'Asking GitHub…');
   try {
     const j = await (await fetch('/api/update/check')).json();
     if (j.error) {
-      $('#ghMsg').textContent = j.error;
+      setMsg('#ghMsg', j.error, 'err');
     } else {
       const sel = $('#ghSel');
       sel.innerHTML = '';
@@ -1431,7 +1458,7 @@ $('#ghCheck').onclick = async () => {
         : 'Already on the latest release. You can still reinstall or go back.';
     }
   } catch (e) {
-    $('#ghMsg').textContent = 'Could not check: ' + e.message;
+    setMsg('#ghMsg', 'Could not check: ' + e.message, 'err');
   }
   $('#ghCheck').disabled = false;
   $('#ghCheck').textContent = 'Check for updates';
@@ -1450,12 +1477,12 @@ function pollGh() {
           ? 'Downloading… ' + j.pct + '%' : 'Downloading…';
       } else if (j.state === 'done') {
         clearInterval(ghTimer);
-        $('#ghMsg').textContent = 'Installed. Rebooting — this page will ' +
-                                  'come back on its own.';
+        setMsg('#ghMsg', 'Installed. Rebooting — this page will ' +
+                         'come back on its own.', 'ok');
       } else if (j.state === 'failed') {
         clearInterval(ghTimer);
         $('#ghProg').style.display = 'none';
-        $('#ghMsg').textContent = 'Update failed: ' + j.msg;
+        setMsg('#ghMsg', 'Update failed: ' + j.msg, 'err');
         $('#ghGo').disabled = false;
       }
     } catch (e) { /* the device reboots mid-poll; keep trying */ }
@@ -1468,7 +1495,7 @@ $('#ghGo').onclick = async () => {
   if (!confirm('Install ' + v + '? The bridge reboots and monitoring stops ' +
                'for about a minute.')) return;
   $('#ghGo').disabled = true;
-  $('#ghMsg').textContent = 'Starting…';
+  setMsg('#ghMsg', 'Starting…');
   try {
     const r = await fetch('/api/update/install', {
       method: 'POST',
@@ -1478,7 +1505,7 @@ $('#ghGo').onclick = async () => {
     if (!r.ok) throw new Error((await r.text()).trim() || 'HTTP ' + r.status);
     pollGh();
   } catch (e) {
-    $('#ghMsg').textContent = 'Could not start: ' + e.message;
+    setMsg('#ghMsg', 'Could not start: ' + e.message, 'err');
     $('#ghGo').disabled = false;
   }
 };
@@ -1795,6 +1822,7 @@ function pveResetAndRetry(i) {
 async function pveRunTest(i) {
   const msg = $(`#h${i}_msg`), b = document.querySelector(`.pveTest[data-i="${i}"]`);
   b.disabled = true;
+  msg.classList.remove('ok', 'err');
   msg.textContent = 'Testing…';
   try {
     const j = await pvePost('/api/pve-test', pveHostForm(i));
@@ -1802,6 +1830,7 @@ async function pveRunTest(i) {
     pveSyncChip(i);
     if (j.ok) {
       msg.textContent = '✓ ' + j.msg;
+      msg.classList.add('ok');
       pveChip(i, 'ok', 'ready');
       pveLoadGuests(i, true);
     } else if (j.pinned && j.msg.includes('does not match')) {
@@ -1826,10 +1855,12 @@ async function pveRunTest(i) {
       pveLoadGuests(i, true);
     } else {
       msg.textContent = '✗ ' + j.msg;
+      msg.classList.add('err');
       if (j.pinned) pveChip(i, 'warn', 'connected before');
     }
   } catch (e) {
     msg.textContent = 'Failed: ' + e.message;
+    msg.classList.add('err');
   }
   b.disabled = false;
 }
@@ -1963,17 +1994,17 @@ wireForm('#wifiForm', '#wifiSave', '#wifiMsg', fd => {
 
 /* ---- maintenance ---- */
 async function ledPost(fields, working, done) {
-  $('#ledMsg').textContent = working;
+  setMsg('#ledMsg', working);
   try {
     const r = await fetch('/api/led', {
       method: 'POST', body: new URLSearchParams(fields),
     });
     if (bounceIfSignedOut(r)) return false;
     if (!r.ok) throw new Error((await r.text()).trim() || 'HTTP ' + r.status);
-    $('#ledMsg').textContent = done;
+    setMsg('#ledMsg', done, 'ok');
     return true;
   } catch (err) {
-    $('#ledMsg').textContent = 'Could not change it: ' + err.message;
+    setMsg('#ledMsg', 'Could not change it: ' + err.message, 'err');
     return false;
   }
 }
@@ -1986,7 +2017,7 @@ $('#ledOn').onchange = async (e) => {
 $('#ledGpio').onchange = (e) => {
   const g = parseInt(e.target.value, 10);
   if (isNaN(g) || g < -1 || g > 48) {
-    $('#ledMsg').textContent = 'Enter a pin from -1 to 48.';
+    setMsg('#ledMsg', 'Enter a pin from -1 to 48.', 'err');
     return;
   }
   ledPost({ gpio: g }, 'Moving the LED…',
@@ -1995,7 +2026,7 @@ $('#ledGpio').onchange = (e) => {
 $('#ledTest').onclick = () => {
   const g = parseInt($('#ledGpio').value, 10);
   if (isNaN(g) || g < -1 || g > 48) {
-    $('#ledMsg').textContent = 'Enter a pin from -1 to 48 first.';
+    setMsg('#ledMsg', 'Enter a pin from -1 to 48 first.', 'err');
     return;
   }
   ledPost({ gpio: g, test: 1 }, 'Flashing red / green / blue on GPIO ' + g + '…',
@@ -2004,15 +2035,14 @@ $('#ledTest').onclick = () => {
 $('#reboot').onclick = () => {
   if (!confirm('Reboot the bridge?')) return;
   $('#reboot').disabled = true;
-  fetch('/api/reboot', { method: 'POST' })
-    .then(() => $('#rebootMsg').textContent = 'Rebooting — reload in ~15 s.')
-    .catch(() => $('#rebootMsg').textContent = 'Rebooting — reload in ~15 s.');
+  const done = () => setMsg('#rebootMsg', 'Rebooting — reload in ~15 s.', 'ok');
+  fetch('/api/reboot', { method: 'POST' }).then(done).catch(done);
 };
 $('#reset').onclick = () => {
   if (!confirm('Forget every setting and reboot into setup mode?')) return;
   fetch('/api/factory-reset', { method: 'POST' })
-    .then(() => $('#resetMsg').textContent =
-      'Rebooting into setup mode — join the esp-nut-bluetti-XXXX network.');
+    .then(() => setMsg('#resetMsg',
+      'Rebooting into setup mode — join the esp-nut-bluetti-XXXX network.', 'ok'));
 };
 
 /* ---- admin login ---- */
@@ -2023,7 +2053,7 @@ $('#reset').onclick = () => {
   function refreshCredDirty() {
     if (credBaseline === null) return;
     const dirty = credSnapshot() !== credBaseline;
-    if (dirty && credBar.hidden) $('#credMsg').textContent = '';
+    if (dirty && credBar.hidden) setMsg('#credMsg', '');
     credBar.hidden = !dirty;
   }
   credForm.addEventListener('input', refreshCredDirty);
@@ -2033,13 +2063,13 @@ $('#reset').onclick = () => {
     ev.preventDefault();
     const fd = new FormData(ev.target);
     if (!fd.get('auth_pass')) {
-      $('#credMsg').textContent = 'Enter a new password.'; return;
+      setMsg('#credMsg', 'Enter a new password.', 'err'); return;
     }
     if (fd.get('auth_pass') !== $('#credNew2').value) {
-      $('#credMsg').textContent = 'The two passwords don’t match.'; return;
+      setMsg('#credMsg', 'The two passwords don’t match.', 'err'); return;
     }
     $('#credSave').disabled = true;
-    $('#credMsg').textContent = 'Saving…';
+    setMsg('#credMsg', 'Saving…');
     try {
       const r = await fetch('/api/credentials',
         { method: 'POST', body: new URLSearchParams(fd) });
@@ -2050,11 +2080,11 @@ $('#reset').onclick = () => {
         throw new Error(why);
       }
     } catch (e) {
-      $('#credMsg').textContent = 'Failed: ' + e.message;
+      setMsg('#credMsg', 'Failed: ' + e.message, 'err');
       $('#credSave').disabled = false;
       return;
     }
-    $('#credMsg').textContent = 'Login updated.';
+    setMsg('#credMsg', 'Login updated.', 'ok');
     ev.target.reset();
     $('#credUser').value = cfg.auth_user || 'admin';
     $('#avatarBtn').textContent = (cfg.auth_user || 'admin').trim().charAt(0).toUpperCase() || 'A';
@@ -2109,7 +2139,7 @@ $('#tgTest').onclick = async () => {
   if ($('#tgToken').value) fd.set('tg_token', $('#tgToken').value);
   if ($('#tgChat').value) fd.set('tg_chat', $('#tgChat').value);
   $('#tgTest').disabled = true;
-  $('#tgTestMsg').textContent = 'Sending…';
+  setMsg('#tgTestMsg', 'Sending…');
   try {
     const r = await fetch('/api/notify-test',
       { method: 'POST', body: new URLSearchParams(fd) });
@@ -2119,9 +2149,9 @@ $('#tgTest').onclick = async () => {
       if (!why || why.length > 120 || why.includes('<')) why = 'HTTP ' + r.status;
       throw new Error(why);
     }
-    $('#tgTestMsg').textContent = 'Sent — check Telegram.';
+    setMsg('#tgTestMsg', 'Sent — check Telegram.', 'ok');
   } catch (e) {
-    $('#tgTestMsg').textContent = 'Failed: ' + e.message;
+    setMsg('#tgTestMsg', 'Failed: ' + e.message, 'err');
   }
   $('#tgTest').disabled = false;
 };
@@ -2145,16 +2175,16 @@ $('#fwGo').onclick = () => {
   };
   x.onload = () => {
     if (x.status === 200) {
-      $('#fwMsg').textContent = 'Uploaded. Rebooting into the new firmware — '
-        + 'reload this page in ~20 s.';
+      setMsg('#fwMsg', 'Uploaded. Rebooting into the new firmware — '
+        + 'reload this page in ~20 s.', 'ok');
     } else {
-      $('#fwMsg').textContent = 'Update failed: ' + (x.responseText || x.status);
+      setMsg('#fwMsg', 'Update failed: ' + (x.responseText || x.status), 'err');
       $('#fwGo').disabled = false;
     }
   };
   x.onerror = () => {
-    $('#fwMsg').textContent = 'Connection dropped (device may be rebooting). '
-      + 'Reload in ~20 s to check the version.';
+    setMsg('#fwMsg', 'Connection dropped (device may be rebooting). '
+      + 'Reload in ~20 s to check the version.');
   };
   x.send(f);
 };
