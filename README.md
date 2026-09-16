@@ -95,6 +95,29 @@ a `.bin` when the bridge has no route out:
 
 <img src="screenshots/maintenance.png" alt="Maintenance tab: update from GitHub, update from a file, and status LED settings" width="820">
 
+## Proxmox shutdown
+
+No agent on the host, no dependency on NUT — the bridge talks to the Proxmox
+API directly and can shut a cluster down itself as the battery runs out,
+pve-ups style:
+
+- **Per-host trigger** — each node gets its own battery-time or charge
+  threshold, so a NAS can go at ten minutes while the hypervisor waits thirty.
+- **Per-guest rules** — any VM or container can have its own, tighter
+  trigger (or none — it still goes down with its node). Unlimited guests per
+  host; nothing to preconfigure on the Proxmox side beyond the token.
+- **Least-privilege token** — a dedicated API token with just
+  `Sys.PowerMgmt`, `VM.Audit` and `VM.PowerMgmt`, not a user's own
+  credentials.
+- **Certificate pinned on first connect** — Proxmox's self-signed cert is
+  trusted the way SSH trusts a host key, not blindly accepted.
+- **Dry run until you arm it** — counts down and alerts without touching
+  anything, so you can watch a full outage play out before it can act.
+
+Set up from the **Proxmox** tab; full walkthrough (token setup, the safety
+model, re-arming after mains returns) in
+[`docs/CONFIGURING.md`](docs/CONFIGURING.md#proxmox-shutdown).
+
 ## What you get
 
 - **NUT server** — upsd-compatible, read-only, with an optional login gating
@@ -102,15 +125,13 @@ a `.bin` when the bridge has no route out:
 - **Web admin** — live power flow, logs, config, all on the device.
 - **Over-the-air updates** — pick a GitHub release from the Maintenance tab, or
   upload a `.bin`. Spare-slot write with bootloader rollback.
-- **Telegram alerts** — mains lost/restored, battery low, unit unreachable.
-  Held and retried if the network is down when they're raised.
+- **Telegram alerts** — mains lost/restored, battery low, unit unreachable,
+  Proxmox host/guest shutdowns. Held and retried if the network is down when
+  they're raised.
 - **Survives the network going away** — retries forever instead of dropping into
   setup, and can raise a fallback AP so a bridge whose Wi-Fi has gone is still
   reachable.
-- **Proxmox shutdown** — shut PVE hosts and guests down through their API,
-  each host on its own battery-time or charge threshold, pve-ups style: a
-  least-privilege token, pinned certificate, dry-run until you arm it. No
-  agent on the host, no dependency on NUT.
+- **Proxmox shutdown** — see above.
 - **Device controls** — AC/DC output, ECO modes, charging mode and more from
   the web page. Off by default; NUT stays read-only.
 - **Static IP or DHCP**, settable hostname, status LED support.
