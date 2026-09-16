@@ -34,14 +34,17 @@
   .avatarBtn { width: 1.9rem; height: 1.9rem; border-radius: 50%; border: 0;
                background: #2563eb; color: #fff; font: inherit; font-weight: 600;
                font-size: .85rem; cursor: pointer; display: flex;
-               align-items: center; justify-content: center; padding: 0; }
+               align-items: center; justify-content: center; padding: 0;
+               transition: background .12s; }
+  .avatarBtn:hover { background: #3b74ee; }
   .menu { position: absolute; right: 0; top: calc(100% + .4rem); min-width: 11rem;
           background: Canvas; color: CanvasText; border: 1px solid #8886;
           border-radius: .5rem; box-shadow: 0 4px 16px #0006; overflow: hidden;
           z-index: 10; }
   .menu button { display: block; width: 100%; text-align: left; border: 0;
                  background: none; color: inherit; font: inherit; padding: .6rem .9rem;
-                 cursor: pointer; border-bottom: 1px solid transparent; }
+                 cursor: pointer; border-bottom: 1px solid transparent;
+                 transition: background .1s; }
   .menu button:hover { background: #8882; }
   .menu button + button { border-top: 1px solid #8883; }
 
@@ -52,27 +55,48 @@
   .pair { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
   .pair > .box { flex: 1 1 14rem; }
 
+  /* Appears only once a form actually has something unsaved, attached to
+     the bottom of whichever box currently sits above it (the negative
+     margin overlaps that box's own bottom margin — works regardless of
+     which box that is, since a hidden one takes no space). */
+  .saveBar { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+             margin: -1rem 0 1rem; border: 1px solid #8884; border-top: 0;
+             border-radius: 0 0 .6rem .6rem; padding: .8rem 1rem; }
+  .saveBar[hidden] { display: none; }
+
   pre { background: #111b; color: #d7e0e8; padding: .75rem; border-radius: .4rem;
         overflow: auto; max-height: 50vh; font: 12px/1.45 ui-monospace, monospace;
         white-space: pre-wrap; word-break: break-word; margin: 0; }
   .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .5rem 0; }
   .act { padding: .45rem .8rem; font: inherit; border-radius: .35rem;
-         border: 1px solid #8886; background: #8882; color: inherit; cursor: pointer; }
+         border: 1px solid #8886; background: #8882; color: inherit; cursor: pointer;
+         transition: background .12s, border-color .12s, transform .05s; }
+  button.act:hover:not(:disabled) { background: #8883; border-color: #8889; }
+  button.act:active:not(:disabled) { transform: translateY(1px); }
   select.act { padding-right: .5rem; }
   button.act:disabled { opacity: .5; cursor: progress; }
   button.danger { border-color: #c00; background: #c00; color: #fff; }
+  button.danger:hover:not(:disabled) { background: #d81a1a; border-color: #d81a1a; }
   button.primary { border-color: #2563eb; background: #2563eb; color: #fff; }
+  button.primary:hover:not(:disabled) { background: #3b74ee; border-color: #3b74ee; }
   label.chk { display: inline-flex; gap: .35rem; align-items: center; }
   form label { display: block; margin: .7rem 0 .2rem; font-size: .85rem; opacity: .8; }
   form input, form select { width: 100%; max-width: 24rem; padding: .4rem .5rem;
     font: inherit; border: 1px solid #8886; border-radius: .35rem;
-    background: Canvas; color: CanvasText; }
+    background: Canvas; color: CanvasText; transition: border-color .12s; }
   form input[type=number] { width: 6rem; }
   form details { margin: .5rem 0; }
   form summary { cursor: pointer; font-size: .88rem; }
   .modes { display: flex; gap: .5rem; margin: .2rem 0 .6rem; }
   .modes label { flex: 1; margin: 0; border: 1px solid #8886; border-radius: .5rem;
-                 padding: .5rem .6rem; cursor: pointer; font-size: .9rem; opacity: 1; }
+                 padding: .5rem .6rem; cursor: pointer; font-size: .9rem; opacity: 1;
+                 transition: border-color .12s, background .12s; }
+  .modes label:hover { border-color: #8889; }
+
+  :focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+  form input:focus-visible, form select:focus-visible { border-color: #2563eb; }
+  nav button { transition: border-color .12s, opacity .12s; }
+  nav button:hover:not(.active) { opacity: .75; }
   .modes label:has(input:checked) { border-color: #2563eb; background: #2563eb1a; }
   .modes input { width: auto; margin-right: .35rem; }
   table { border-collapse: collapse; width: 100%; }
@@ -180,13 +204,16 @@
   .ghead .gstat { font-size: .78rem; opacity: .6; white-space: nowrap; }
   .ghead .gstat.up { color: #16a34a; opacity: .9; }
   .ghead .spacer { flex: 1; }
-  .gswitch { position: relative; width: 2.1rem; height: 1.2rem; flex: none; }
-  .gswitch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
-  .gtrack { position: absolute; inset: 0; background: #8886; border-radius: 1rem; transition: background .15s; }
-  .gtrack::after { content: ''; position: absolute; top: 2px; left: 2px; width: 1rem; height: 1rem;
+  .toggle { position: relative; width: 2.1rem; height: 1.2rem; flex: none; }
+  .toggle input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+  .track { position: absolute; inset: 0; background: #8886; border-radius: 1rem;
+            transition: background .15s; }
+  .track::after { content: ''; position: absolute; top: 2px; left: 2px; width: 1rem; height: 1rem;
                    background: #fff; border-radius: 50%; transition: left .15s; box-shadow: 0 1px 2px #0003; }
-  .gswitch input:checked + .gtrack { background: #2563eb; }
-  .gswitch input:checked + .gtrack::after { left: 1.1rem; }
+  .toggle input:checked + .track { background: #2563eb; }
+  .toggle input:checked + .track::after { left: 1.1rem; }
+  .toggle input:focus-visible + .track { outline: 2px solid #2563eb; outline-offset: 2px; }
+  .toggle:has(input:disabled) { opacity: .5; }
   .grule { display: none; margin-top: .5rem; padding-top: .5rem; border-top: 1px solid #8883; }
   .gcard.on .grule { display: block; }
   .grule .inline { margin: 0; font-size: .88rem; }
@@ -309,16 +336,16 @@
 
     <div class="box">
       <h2>Device controls <span class="sub">experimental</span></h2>
-      <label class="chk"><input type="checkbox" id="cfgControls"
-        style="width:auto"> Allow controlling the unit</label>
+      <label class="chk"><span class="toggle"><input type="checkbox" id="cfgControls">
+        <span class="track"></span></span> Allow controlling the unit</label>
       <p class="hint">Experimental. Control the power station from this UI; NUT
         stays read-only.</p>
       <div id="ctrlList" hidden style="margin-top:.8rem; border-top:1px solid #8883; padding-top:.6rem"></div>
       <p class="hint" id="ctrlMsg" hidden></p>
     </div>
 
-    <p><button class="act primary" id="efSave">Save &amp; reboot</button>
-       <span class="hint" id="efMsg"></span></p>
+    <div class="saveBar" hidden><button class="act primary" id="efSave">Save &amp; reboot</button>
+       <span class="hint" id="efMsg"></span></div>
   </form>
 </section>
 
@@ -377,8 +404,9 @@
           <circle cx="12" cy="12" r="3"/></svg>
         </button>
       </div>
-      <label class="chk" style="margin-top:.5rem"><input type="checkbox" id="nutNoAuth"
-        name="nut_noauth" value="1" style="width:auto"> No login required</label>
+      <label class="chk" style="margin-top:.5rem"><span class="toggle">
+        <input type="checkbox" id="nutNoAuth" name="nut_noauth" value="1">
+        <span class="track"></span></span> No login required</label>
       <p class="hint">These gate <code>LOGIN</code> and <code>PRIMARY</code> — the
         commands <code>upsmon</code> uses to coordinate shutdown. Reading values
         stays anonymous, as it is on a normal NUT server, because
@@ -388,8 +416,8 @@
         <span id="monUser">upsmon</span> <span id="monPass">&lt;password&gt;</span> slave</code></p>
     </div>
 
-    <p><button class="act primary" id="nutSave">Save &amp; reboot</button>
-       <span class="hint" id="nutMsg"></span></p>
+    <div class="saveBar" hidden><button class="act primary" id="nutSave">Save &amp; reboot</button>
+       <span class="hint" id="nutMsg"></span></div>
   </form>
 </section>
 
@@ -415,8 +443,8 @@
 
     <div id="pveHostBoxes"></div>
 
-    <p><button class="act primary" id="pveSave">Save</button>
-       <span class="hint" id="pveMsg"></span></p>
+    <div class="saveBar" hidden><button class="act primary" id="pveSave">Save</button>
+       <span class="hint" id="pveMsg"></span></div>
   </form>
 </section>
 
@@ -437,8 +465,9 @@
       <label for="wifiPass">Password</label>
       <input id="wifiPass" name="wifi_pass" type="password" autocomplete="off"
              placeholder="unchanged">
-      <label class="chk" style="margin-top:.5rem"><input type="checkbox" id="wifiOpen"
-        name="wifi_open" value="1" style="width:auto"> Open network (no password)</label>
+      <label class="chk" style="margin-top:.5rem"><span class="toggle">
+        <input type="checkbox" id="wifiOpen" name="wifi_open" value="1">
+        <span class="track"></span></span> Open network (no password)</label>
     </div>
 
     <div class="box" id="wifiHostBox">
@@ -475,16 +504,17 @@
 
     <div class="box" id="wifiFbBox">
       <h2>Fallback access point</h2>
-      <label class="chk"><input type="checkbox" id="fbAp" name="fb_ap" value="1"
-        style="width:auto"> Host a network when this one is unreachable</label>
+      <label class="chk"><span class="toggle"><input type="checkbox" id="fbAp" name="fb_ap" value="1">
+        <span class="track"></span></span> Host a network when this one is unreachable</label>
       <div id="fbApFields">
         <label for="fbApSsid">Network name (SSID)</label>
         <input id="fbApSsid" name="fb_ap_ssid" autocomplete="off" maxlength="32">
         <label for="fbApPass">Password</label>
         <input id="fbApPass" name="fb_ap_pass" type="password" autocomplete="off"
                maxlength="63" placeholder="unchanged">
-        <label class="chk" style="margin-top:.5rem"><input type="checkbox" id="fbApOpen"
-          name="fb_ap_open" value="1" style="width:auto"> Open network (no password)</label>
+        <label class="chk" style="margin-top:.5rem"><span class="toggle">
+          <input type="checkbox" id="fbApOpen" name="fb_ap_open" value="1">
+          <span class="track"></span></span> Open network (no password)</label>
       </div>
       <p class="hint">If the ESP32 can't reach your WiFi network for 60 seconds,
         it brings up its own AP so you can still get to this page on
@@ -499,13 +529,14 @@
       <label for="apPass">Password</label>
       <input id="apPass" name="ap_pass" type="password" autocomplete="off"
              maxlength="63" placeholder="unchanged">
-      <label class="chk" style="margin-top:.5rem"><input type="checkbox" id="apOpen"
-        name="ap_open" value="1" style="width:auto"> Open network (no password)</label>
+      <label class="chk" style="margin-top:.5rem"><span class="toggle">
+        <input type="checkbox" id="apOpen" name="ap_open" value="1">
+        <span class="track"></span></span> Open network (no password)</label>
       <p class="hint">At least 8 characters. NUT clients must join this network.</p>
     </div>
 
-    <p><button class="act primary" id="wifiSave">Save &amp; reboot</button>
-       <span class="hint" id="wifiMsg"></span></p>
+    <div class="saveBar" hidden><button class="act primary" id="wifiSave">Save &amp; reboot</button>
+       <span class="hint" id="wifiMsg"></span></div>
   </form>
 </section>
 
@@ -530,22 +561,22 @@
          <span class="hint" id="tgTestMsg"></span></p>
 
       <h3 style="font-size:.85rem; margin:1.1rem 0 .5rem">Which events</h3>
-      <label class="chk"><input type="checkbox" id="tgPower" name="tg_on_power"
-        value="1" style="width:auto"> Mains lost / restored</label><br>
-      <label class="chk"><input type="checkbox" id="tgLow" name="tg_on_low_batt"
-        value="1" style="width:auto"> Battery low</label><br>
-      <label class="chk"><input type="checkbox" id="tgLink" name="tg_on_link"
-        value="1" style="width:auto"> Bluetti unit unreachable / back</label><br>
-      <label class="chk"><input type="checkbox" id="tgPveHost" name="tg_on_pve_host"
-        value="1" style="width:auto"> Proxmox host shutdowns</label><br>
-      <label class="chk"><input type="checkbox" id="tgPveGuest" name="tg_on_pve_guest"
-        value="1" style="width:auto"> Proxmox guest (VM/CT) shutdowns</label>
+      <label class="chk"><span class="toggle"><input type="checkbox" id="tgPower" name="tg_on_power" value="1">
+        <span class="track"></span></span> Mains lost / restored</label><br>
+      <label class="chk"><span class="toggle"><input type="checkbox" id="tgLow" name="tg_on_low_batt" value="1">
+        <span class="track"></span></span> Battery low</label><br>
+      <label class="chk"><span class="toggle"><input type="checkbox" id="tgLink" name="tg_on_link" value="1">
+        <span class="track"></span></span> Bluetti unit unreachable / back</label><br>
+      <label class="chk"><span class="toggle"><input type="checkbox" id="tgPveHost" name="tg_on_pve_host" value="1">
+        <span class="track"></span></span> Proxmox host shutdowns</label><br>
+      <label class="chk"><span class="toggle"><input type="checkbox" id="tgPveGuest" name="tg_on_pve_guest" value="1">
+        <span class="track"></span></span> Proxmox guest (VM/CT) shutdowns</label>
       <p class="hint">Repeats of the same event inside a minute are suppressed,
         so a flapping supply won't spam the chat.</p>
     </div>
 
-    <p><button class="act primary" id="tgSave">Save</button>
-       <span class="hint" id="tgMsg"></span></p>
+    <div class="saveBar" hidden><button class="act primary" id="tgSave">Save</button>
+       <span class="hint" id="tgMsg"></span></div>
   </form>
 </section>
 
@@ -557,17 +588,17 @@
       <h2>Integrations</h2>
       <p class="hint">When disabled, the tab is hidden and service stopped.
         Bluetti stays on always; it's how the bridge reads the unit.</p>
-      <label class="chk"><input type="checkbox" id="intNut" name="nut_enabled"
-        value="1" style="width:auto"> NUT server</label><br>
-      <label class="chk"><input type="checkbox" id="intPve" name="pve_enabled"
-        value="1" style="width:auto"> Proxmox shutdown</label><br>
-      <label class="chk"><input type="checkbox" id="intTg" name="tg_enabled"
-        value="1" style="width:auto"> Telegram alerts</label>
+      <label class="chk"><span class="toggle"><input type="checkbox" id="intNut" name="nut_enabled" value="1">
+        <span class="track"></span></span> NUT server</label><br>
+      <label class="chk"><span class="toggle"><input type="checkbox" id="intPve" name="pve_enabled" value="1">
+        <span class="track"></span></span> Proxmox shutdown</label><br>
+      <label class="chk"><span class="toggle"><input type="checkbox" id="intTg" name="tg_enabled" value="1">
+        <span class="track"></span></span> Telegram alerts</label>
       <p class="hint">Proxmox and Telegram apply immediately; changing NUT
         needs a reboot.</p>
     </div>
-    <p><button class="act primary" id="intSave">Save</button>
-       <span class="hint" id="intMsg"></span></p>
+    <div class="saveBar" hidden><button class="act primary" id="intSave">Save</button>
+       <span class="hint" id="intMsg"></span></div>
   </form>
 
   <div class="box" id="otaBox" hidden>
@@ -603,7 +634,8 @@
       <b style="color:#dc2626">red</b> while starting up,
       <b style="color:#16a34a">green</b> once it is talking to the Bluetti
       unit over Bluetooth.</p>
-    <label class="chk"><input type="checkbox" id="ledOn"> LED on</label>
+    <label class="chk"><span class="toggle"><input type="checkbox" id="ledOn">
+      <span class="track"></span></span> LED on</label>
     <div class="row" style="margin-top:.7rem">
       <label for="ledGpio" style="margin:0">Data GPIO</label>
       <input id="ledGpio" type="number" min="-1" max="48" style="width:5rem">
@@ -648,7 +680,7 @@
              autocomplete="new-password" required>
       <label for="credNew2">Confirm new password</label>
       <input id="credNew2" type="password" autocomplete="new-password" required>
-      <p><button class="act primary" id="credSave">Update credentials</button>
+      <p id="credBar" hidden><button class="act primary" id="credSave">Update credentials</button>
          <span class="hint" id="credMsg"></span></p>
       <p class="hint">Your browser caches the old login for this session — after
         changing it, close the tab (or use a private window) to be asked again.</p>
@@ -1080,20 +1112,44 @@ async function loadConfig() {
     $('#apPass').placeholder = cfg.has_ap_pass ? 'unchanged' : 'none set';
     syncWifiMode();
     cfgLoaded = true;
+    formBaselines.forEach(fn => fn());   /* now that every field above has
+      its loaded value, this is "clean" — capture it so each save bar
+      knows what "changed" means and starts out hidden. */
   } catch (e) { $('#efMsg').textContent = 'Could not load current config.'; }
 }
 loadConfig();   /* eager, not just on first visit to a config tab — the
                    avatar needs auth_user right away, whichever tab is up. */
 
 /* ---- generic section submit ---- */
+/* Each wireForm() call registers a "this form is now clean" callback here,
+   run once (from loadConfig, above) after every field has its loaded
+   value — not at wireForm() time, since the fields aren't populated yet. */
+const formBaselines = [];
 function wireForm(formSel, btnSel, msgSel, after) {
-  $(formSel).onsubmit = async ev => {
+  const form = $(formSel), btn = $(btnSel), bar = btn.closest('.saveBar');
+  const snapshot = () => new URLSearchParams(new FormData(form)).toString();
+  let baseline = null;
+  function refreshDirty() {
+    if (baseline === null) return;   /* still loading; nothing to compare to */
+    const dirty = snapshot() !== baseline;
+    if (dirty && bar.hidden) $(msgSel).textContent = '';   /* clear a stale "Saved." */
+    bar.hidden = !dirty;
+  }
+  /* 'click' too, not just input/change: a dynamic control (add/remove a
+     Proxmox host, forget a certificate) mutates the form's fields from a
+     button handler, not a native input event. */
+  form.addEventListener('input', refreshDirty);
+  form.addEventListener('change', refreshDirty);
+  form.addEventListener('click', () => setTimeout(refreshDirty, 0));
+  formBaselines.push(() => { baseline = snapshot(); refreshDirty(); });
+
+  form.onsubmit = async ev => {
     ev.preventDefault();
     const fd = new FormData(ev.target);
     for (const [k, v] of [...fd.entries()]) if (v === '') fd.delete(k);
     fd.set('section', new FormData(ev.target).get('section'));
     if (after && after(fd) === false) return;
-    $(btnSel).disabled = true;
+    btn.disabled = true;
     $(msgSel).textContent = 'Saving…';
     let reboot = true;
     try {
@@ -1108,14 +1164,15 @@ function wireForm(formSel, btnSel, msgSel, after) {
       try { const j = await r.json(); if (j.reboot === false) reboot = false; } catch (e) {}
     } catch (e) {
       $(msgSel).textContent = 'Failed: ' + e.message;
-      $(btnSel).disabled = false;
+      btn.disabled = false;
       return;
     }
+    baseline = snapshot();   /* what was just saved is "clean" now */
     if (reboot) {
       $(msgSel).textContent = 'Saved. Rebooting — reload in ~15 s.';
     } else {
       $(msgSel).textContent = 'Saved.';
-      $(btnSel).disabled = false;
+      btn.disabled = false;
     }
   };
 }
@@ -1263,7 +1320,6 @@ function renderControls(j) {
     if (it.kind === 'bool') {
       input = document.createElement('input');
       input.type = 'checkbox';
-      input.style.width = 'auto';
       input.checked = it.value === 1;
       input.onchange = () => {
         const want = input.checked ? 1 : 0;
@@ -1276,6 +1332,14 @@ function renderControls(j) {
         }
         sendControl(it.field, want);
       };
+      const wrap = document.createElement('span');
+      wrap.className = 'toggle';
+      const track = document.createElement('span');
+      track.className = 'track';
+      wrap.append(input, track);
+      row.appendChild(wrap);
+      list.appendChild(row);
+      continue;
     } else if (it.kind === 'range') {
       const [lo, hi] = it.allowed.split(',').map(Number);
       input = document.createElement('input');
@@ -1468,9 +1532,9 @@ function pveHostBox(i) {
     <h2>Host ${i + 1} <span class="name" id="h${i}_title"></span>
       <span class="chip dim" id="h${i}_chip">not tested</span>
       <span class="spacer"></span>
-      <label class="gswitch" title="Enabled">
+      <label class="toggle" title="Enabled">
         <input type="checkbox" name="h${i}_on" value="1" id="h${i}_on">
-        <span class="gtrack"></span>
+        <span class="track"></span>
       </label>
       <button type="button" class="act minibtn pveExpand" data-i="${i}"
               aria-expanded="true" title="Collapse">−</button>
@@ -1525,8 +1589,8 @@ function pveHostBox(i) {
 
     <div class="inline" style="margin-top:.8rem">then wait
       <input id="h${i}_wait" name="h${i}_wait" type="number" min="0" max="600"> seconds, then
-      <label class="chk"><input type="checkbox" name="h${i}_node_off" value="1"
-        style="width:auto"> shut down the node itself</label></div>
+      <label class="chk"><span class="toggle"><input type="checkbox" name="h${i}_node_off" value="1">
+        <span class="track"></span></span> shut down the node itself</label></div>
     <p class="hint" style="margin:0">Applies when this trigger stops a guest that has no
       rule of its own — one with its own timer that already fired earlier needs no wait.</p>
     </div>
@@ -1613,9 +1677,9 @@ function pveGuestCard(i, g) {
       <span class="gid">#${g.id}</span>
       <span class="gstat${g.status === 'running' ? ' up' : ''}">${g.status || (g.name ? '' : 'not loaded')}</span>
       <span class="spacer"></span>
-      <label class="gswitch">
+      <label class="toggle">
         <input type="checkbox" ${on ? 'checked' : ''} data-id="${g.id}">
-        <span class="gtrack"></span>
+        <span class="track"></span>
       </label>
     </div>
     <div class="grule">
@@ -1643,7 +1707,7 @@ function pveRenderGuestCards(i) {
     ? `<div class="pveEmpty">${live ? 'No VMs or containers on this node.'
                                     : 'Load guests to give one its own shutdown rule.'}</div>`
     : items.map(g => pveGuestCard(i, g)).join('');
-  box.querySelectorAll('.gswitch input').forEach(cb => cb.onchange = () => {
+  box.querySelectorAll('.toggle input').forEach(cb => cb.onchange = () => {
     const id = +cb.dataset.id;
     if (cb.checked) {
       pveSlot[i].rules.set(id, { min: 0, pct: 0 });
@@ -1952,37 +2016,53 @@ $('#reset').onclick = () => {
 };
 
 /* ---- admin login ---- */
-$('#credForm').onsubmit = async ev => {
-  ev.preventDefault();
-  const fd = new FormData(ev.target);
-  if (!fd.get('auth_pass')) {
-    $('#credMsg').textContent = 'Enter a new password.'; return;
+{
+  const credForm = $('#credForm'), credBar = $('#credBar');
+  const credSnapshot = () => new URLSearchParams(new FormData(credForm)).toString();
+  let credBaseline = null;
+  function refreshCredDirty() {
+    if (credBaseline === null) return;
+    const dirty = credSnapshot() !== credBaseline;
+    if (dirty && credBar.hidden) $('#credMsg').textContent = '';
+    credBar.hidden = !dirty;
   }
-  if (fd.get('auth_pass') !== $('#credNew2').value) {
-    $('#credMsg').textContent = 'The two passwords don’t match.'; return;
-  }
-  $('#credSave').disabled = true;
-  $('#credMsg').textContent = 'Saving…';
-  try {
-    const r = await fetch('/api/credentials',
-      { method: 'POST', body: new URLSearchParams(fd) });
-    if (!r.ok) {
-      let why = '';
-      try { why = (await r.text()).trim(); } catch (e) {}
-      if (!why || why.length > 120 || why.includes('<')) why = 'HTTP ' + r.status;
-      throw new Error(why);
+  credForm.addEventListener('input', refreshCredDirty);
+  formBaselines.push(() => { credBaseline = credSnapshot(); refreshCredDirty(); });
+
+  credForm.onsubmit = async ev => {
+    ev.preventDefault();
+    const fd = new FormData(ev.target);
+    if (!fd.get('auth_pass')) {
+      $('#credMsg').textContent = 'Enter a new password.'; return;
     }
-  } catch (e) {
-    $('#credMsg').textContent = 'Failed: ' + e.message;
+    if (fd.get('auth_pass') !== $('#credNew2').value) {
+      $('#credMsg').textContent = 'The two passwords don’t match.'; return;
+    }
+    $('#credSave').disabled = true;
+    $('#credMsg').textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/credentials',
+        { method: 'POST', body: new URLSearchParams(fd) });
+      if (!r.ok) {
+        let why = '';
+        try { why = (await r.text()).trim(); } catch (e) {}
+        if (!why || why.length > 120 || why.includes('<')) why = 'HTTP ' + r.status;
+        throw new Error(why);
+      }
+    } catch (e) {
+      $('#credMsg').textContent = 'Failed: ' + e.message;
+      $('#credSave').disabled = false;
+      return;
+    }
+    $('#credMsg').textContent = 'Login updated.';
+    ev.target.reset();
+    $('#credUser').value = cfg.auth_user || 'admin';
+    $('#avatarBtn').textContent = (cfg.auth_user || 'admin').trim().charAt(0).toUpperCase() || 'A';
     $('#credSave').disabled = false;
-    return;
-  }
-  $('#credMsg').textContent = 'Login updated.';
-  ev.target.reset();
-  $('#credUser').value = cfg.auth_user || 'admin';
-  $('#avatarBtn').textContent = (cfg.auth_user || 'admin').trim().charAt(0).toUpperCase() || 'A';
-  $('#credSave').disabled = false;
-};
+    credBaseline = credSnapshot();
+    credBar.hidden = true;
+  };
+}
 
 /* ---- addressing ---- */
 function syncStatic() {
@@ -2010,6 +2090,20 @@ wireForm('#tgForm', '#tgSave', '#tgMsg', fd => {
 
 /* ---- Settings: Integrations ---- */
 wireForm('#intForm', '#intSave', '#intMsg');
+{
+  /* Proxmox and Telegram apply live; only a NUT change actually reboots —
+     say so on the button only when that's the field that moved, rather
+     than always claiming a reboot the save may not need. */
+  let nutBaseline = null;
+  $('#intForm').addEventListener('input', () => {
+    if (nutBaseline === null) return;
+    $('#intSave').textContent = $('#intNut').checked !== nutBaseline ? 'Save & reboot' : 'Save';
+  });
+  formBaselines.push(() => {
+    nutBaseline = $('#intNut').checked;
+    $('#intSave').textContent = 'Save';
+  });
+}
 $('#tgTest').onclick = async () => {
   const fd = new FormData();
   if ($('#tgToken').value) fd.set('tg_token', $('#tgToken').value);
