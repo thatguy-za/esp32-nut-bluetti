@@ -307,31 +307,40 @@ static void pve_event(pve_event_kind_t kind, const char *text, void *user)
 
 static void start_services(const app_config_t *cfg)
 {
-    /* NUT login. Standard NUT: this gates LOGIN/PRIMARY only — reads stay
-     * anonymous so `upsc` keeps working. */
-    if (cfg->nut_auth_set) {
-        nut_server_set_auth(nut_verify_login, &s_cfg);
-        ESP_LOGI(TAG, "NUT login required for LOGIN/PRIMARY (user '%s')",
-                 cfg->nut_user);
-    }
+    /* Off from the Settings tab's Integrations box: skip the listener
+     * entirely rather than starting it and refusing connections. Every
+     * nut_server_* call elsewhere no-ops safely when it was never started
+     * (they all check the lock this creates), so nothing downstream needs
+     * its own "is NUT on" check. */
+    if (cfg->nut_enabled) {
+        /* NUT login. Standard NUT: this gates LOGIN/PRIMARY only — reads
+         * stay anonymous so `upsc` keeps working. */
+        if (cfg->nut_auth_set) {
+            nut_server_set_auth(nut_verify_login, &s_cfg);
+            ESP_LOGI(TAG, "NUT login required for LOGIN/PRIMARY (user '%s')",
+                     cfg->nut_user);
+        }
 
-    nut_server_config_t nut_cfg = {
-        .ups_name = cfg->ups_name,
-        .ups_desc = "BLUETTI via ESP32",
-        .fw_version = esp_app_get_description()->version,
-        .tcp_port = cfg->nut_port,
-        .max_clients = 4,
-    };
-    if (nut_server_start(&nut_cfg) != 0) {
-        ESP_LOGE(TAG, "nut_server_start failed");
-    }
+        nut_server_config_t nut_cfg = {
+            .ups_name = cfg->ups_name,
+            .ups_desc = "BLUETTI via ESP32",
+            .fw_version = esp_app_get_description()->version,
+            .tcp_port = cfg->nut_port,
+            .max_clients = 4,
+        };
+        if (nut_server_start(&nut_cfg) != 0) {
+            ESP_LOGE(TAG, "nut_server_start failed");
+        }
 
-    /* Fixed for this configuration, so publish once. */
-    if (cfg->ac_rating_w > 0) {
-        nut_server_set_var_int("ups.realpower.nominal", cfg->ac_rating_w);
-    }
-    if (cfg->runtime_low_s > 0) {
-        nut_server_set_var_int("battery.runtime.low", cfg->runtime_low_s);
+        /* Fixed for this configuration, so publish once. */
+        if (cfg->ac_rating_w > 0) {
+            nut_server_set_var_int("ups.realpower.nominal", cfg->ac_rating_w);
+        }
+        if (cfg->runtime_low_s > 0) {
+            nut_server_set_var_int("battery.runtime.low", cfg->runtime_low_s);
+        }
+    } else {
+        ESP_LOGI(TAG, "NUT server disabled (Settings > Integrations)");
     }
 
     /* The BLUETTI side is configured from the admin page after Wi-Fi setup,

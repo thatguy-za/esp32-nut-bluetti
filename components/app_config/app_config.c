@@ -49,6 +49,12 @@ static const char *TAG = "app_config";
  *      (so a v13 device's combined on/off carries over as its new "host"
  *      setting), and tg_on_pve_guest, new past the old struct's end, comes
  *      up at its pre-seeded default.
+ *  15: added nut_enabled, the NUT server's on/off switch (pve.enabled and
+ *      tg_enabled already existed). A pre-v15 blob is kept as usual, but
+ *      nut_enabled is force-set true rather than left at its pre-seeded
+ *      default (see app_config_load) — the field didn't exist, but NUT
+ *      was never optional before now, and every device that already has a
+ *      stored blob has been relying on it running.
  *
  * From v3 on, fields are only ever appended, and a stored blob of an
  * older-but-recognised version (3 to 7) is kept: the bytes that were
@@ -64,7 +70,7 @@ static const char *TAG = "app_config";
  * discarded the whole blob outright on any v8-v11 device that upgraded
  * straight to v12+, since NVS refuses a read into a too-small buffer.
  */
-#define CFG_VERSION 14u
+#define CFG_VERSION 15u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -227,6 +233,12 @@ void app_config_defaults(app_config_t *cfg)
     cfg->ble_probe = false;   /* kept in sync with (log_level >= 2) */
     cfg->fb_ap_enabled = false;     /* don't broadcast unless asked */
 
+    /* Every integration off on a genuinely fresh device — set up what you
+     * want from the Settings tab. (A device upgrading from before these
+     * switches existed keeps running what it already had; see the
+     * version-gated overrides in app_config_load().) */
+    cfg->nut_enabled = false;
+
     /* Proxmox shutdown: off, and dry-run even once on — nothing is powered
      * off until the user arms it. The triggers default to what a small
      * home unit can actually give you: half an hour, or 10%. */
@@ -331,6 +343,13 @@ esp_err_t app_config_load(app_config_t *cfg)
         ESP_LOGW(TAG, "config v%u: Proxmox settings reset (host layout changed in v12)",
                  (unsigned)stored_version);
         app_config_pve_defaults(&cfg->pve);
+    }
+    if (stored_version < 15u) {
+        /* NUT had no switch before v15 — every provisioned device had it
+         * running, unconditionally. A stored blob existing at all means
+         * this device was already set up, so keep it running rather than
+         * letting the field's fresh-device default (off) apply here. */
+        cfg->nut_enabled = true;
     }
     if (stored_version < 6u) {
         /* Pre-v6 had only the ble_probe bool; map it onto the new level.

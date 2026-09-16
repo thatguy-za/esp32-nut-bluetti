@@ -976,7 +976,8 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              "\"output_watts\":%d,\"ac_out_watts\":%d,\"dc_out_watts\":%d,"
              "\"input_watts\":%d,\"ac_in_watts\":%d,\"dc_in_watts\":%d,"
              "\"battery_watts\":%d,\"soc_min\":%d,\"soc_max\":%d,"
-             "\"led\":%s,\"led_gpio\":%d,\"fb_ap_up\":%s,\"configured\":%s}",
+             "\"led\":%s,\"led_gpio\":%d,\"fb_ap_up\":%s,\"configured\":%s,"
+             "\"nut_enabled\":%s,\"tg_enabled\":%s}",
              ap ? "ap" : "station",
              ap ? P.cfg->ap_ssid : P.cfg->wifi_ssid, ip,
              ap ? "ap" : (P.cfg->use_static_ip ? "static" : "dhcp"), gw, dns,
@@ -999,7 +1000,9 @@ static esp_err_t h_admin_status(httpd_req_t *r)
              led_status_enabled() ? "true" : "false",
              led_status_gpio(),
              wifi_mgr_fallback_ap_active() ? "true" : "false",
-             P.cfg->ble_addr[0] ? "true" : "false");
+             P.cfg->ble_addr[0] ? "true" : "false",
+             P.cfg->nut_enabled ? "true" : "false",
+             P.cfg->tg_enabled ? "true" : "false");
 
     /* Proxmox shutdown: the engine, then one entry per host slot. Spliced
      * in over the closing brace so the block above stays one snprintf. */
@@ -1097,6 +1100,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
     }
     int n = snprintf(out, 16000,
              "{\"ble_addr\":\"%s\",\"log_level\":%d,\"controls_enabled\":%s,"
+             "\"nut_enabled\":%s,"
              "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
              "\"nut_user\":\"%s\",\"nut_auth_set\":%s,"
              "\"ac_rating_w\":%u,\"battery_wh\":%u,\"runtime_low_s\":%u,"
@@ -1112,6 +1116,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              P.cfg->ble_addr,
              P.cfg->log_level,
              P.cfg->controls_enabled ? "true" : "false",
+             P.cfg->nut_enabled ? "true" : "false",
              P.cfg->ups_name, P.cfg->nut_port, P.cfg->low_pct, P.cfg->poll_ms,
              P.cfg->nut_user, P.cfg->nut_auth_set ? "true" : "false",
              P.cfg->ac_rating_w, P.cfg->battery_wh, P.cfg->runtime_low_s,
@@ -1395,6 +1400,7 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
     body[len] = '\0';
 
     P.pending = *P.cfg;
+    bool nut_enabled_before = P.cfg->nut_enabled;
     char v[128], section[16] = "";
     form_get(body, "section", section, sizeof(section));
 
@@ -1565,7 +1571,11 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
     /* ---- Proxmox shutdown ---- */
     } else if (strcmp(section, "pve") == 0) {
         pve_config_t *pv = &P.pending.pve;
-        pv->enabled = form_get(body, "pve_enabled", v, sizeof(v)) && v[0] == '1';
+        /* Whether Proxmox is enabled at all is set from the Settings tab's
+         * Integrations box now (section "integrations") — this tab is only
+         * reachable when it's already on, so leave pv->enabled as carried
+         * over in P.pending rather than reading a field this form no
+         * longer has (which would read as absent and turn it off). */
         pv->armed   = form_get(body, "pve_armed", v, sizeof(v)) && v[0] == '1';
         if (form_get(body, "pve_mains_back_min", v, sizeof(v)) && atoi(v) >= 0) {
             pv->mains_back_min = (uint16_t)atoi(v);
@@ -1614,8 +1624,11 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
 
     /* ---- Telegram notifications ---- */
     } else if (strcmp(section, "notify") == 0) {
-        P.pending.tg_enabled =
-            form_get(body, "tg_enabled", v, sizeof(v)) && v[0] == '1';
+        /* Whether Telegram is enabled at all is set from the Settings
+         * tab's Integrations box now (section "integrations") — this tab
+         * is only reachable when it's already on, so tg_enabled is left
+         * as carried over in P.pending rather than read from a field this
+         * form no longer has. */
         /* Blank token field means "keep the stored one". */
         if (form_get(body, "tg_token", v, sizeof(v)) && v[0]) {
             strlcpy(P.pending.tg_token, v, sizeof(P.pending.tg_token));
@@ -1639,6 +1652,17 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
             return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
                                        "a bot token and chat id are required");
         }
+
+    /* ---- Settings: which integrations are on at all ---- */
+    } else if (strcmp(section, "integrations") == 0) {
+        P.pending.nut_enabled =
+            form_get(body, "nut_enabled", v, sizeof(v)) && v[0] == '1';
+        P.pending.pve.enabled =
+            form_get(body, "pve_enabled", v, sizeof(v)) && v[0] == '1';
+        P.pending.tg_enabled =
+            form_get(body, "tg_enabled", v, sizeof(v)) && v[0] == '1';
+        memset(body, 0, len);
+        free(body);
 
     } else {
         free(body);
@@ -1678,6 +1702,37 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         strlcpy(ncfg.chat_id, P.cfg->tg_chat, sizeof(ncfg.chat_id));
         notify_reconfigure(&ncfg);
         ESP_LOGW(TAG, "'notify' settings changed via web; applied live, no reboot");
+        return send_json(r, "{\"ok\":true,\"reboot\":false}");
+    }
+    if (strcmp(section, "integrations") == 0) {
+        /* Proxmox and Telegram's own enabled flags already apply live from
+         * their own tabs (see above) — do the same here, since flipping
+         * them from Settings is no different. NUT has no live stop/start
+         * (nut_server_start binds a listener with nothing to tear it back
+         * down), so only a change there needs the reboot every other
+         * section falls through to below. */
+        pve_guest_list_t live_guests[PVE_MAX_HOSTS] = { 0 };
+        for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+            app_config_pve_guests_load(i, &live_guests[i].items, &live_guests[i].n);
+        }
+        pve_shutdown_reconfigure(&P.cfg->pve, live_guests);
+        notify_config_t ncfg = {
+            .enabled = P.cfg->tg_enabled,
+            .on_power = P.cfg->tg_on_power,
+            .on_low_batt = P.cfg->tg_on_low_batt,
+            .on_link = P.cfg->tg_on_link,
+        };
+        strlcpy(ncfg.bot_token, P.cfg->tg_token, sizeof(ncfg.bot_token));
+        strlcpy(ncfg.chat_id, P.cfg->tg_chat, sizeof(ncfg.chat_id));
+        notify_reconfigure(&ncfg);
+        if (P.cfg->nut_enabled != nut_enabled_before) {
+            ESP_LOGW(TAG, "'integrations' settings changed via web (NUT %s); rebooting",
+                     P.cfg->nut_enabled ? "enabled" : "disabled");
+            send_json(r, "{\"ok\":true}");
+            xTaskCreate(reboot_after_delay, "reboot", 2048, NULL, 5, NULL);
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "'integrations' settings changed via web; applied live, no reboot");
         return send_json(r, "{\"ok\":true,\"reboot\":false}");
     }
     ESP_LOGW(TAG, "'%s' settings changed via web; rebooting", section);

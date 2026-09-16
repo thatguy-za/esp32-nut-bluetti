@@ -110,6 +110,16 @@ typedef struct {
      * appended before them. */
     bool     tg_on_pve_host;
     bool     tg_on_pve_guest;
+
+    /* Master on/off for the NUT server, alongside pve.enabled and
+     * tg_enabled — the three integrations the Settings tab's "Integrations"
+     * box can turn off and hide from the nav bar. Bluetti itself has no
+     * such switch: it's how the bridge reads the unit at all, not
+     * optional. A fresh device starts with all three off; a device
+     * upgrading from before this field existed comes up with NUT on
+     * regardless (see app_config_load) since it had no such switch and
+     * was never not running. */
+    bool     nut_enabled;
 } app_config_t;
 
 /* How long the station has to be down before the fallback AP comes up.

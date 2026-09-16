@@ -21,7 +21,7 @@
 #include "app_config.h"
 
 /* Must track the #define in app_config.c. */
-#define CFG_VERSION 14u
+#define CFG_VERSION 15u
 
 static int fails;
 #define OKF(c, ...) do { bool _ok = (c); printf(_ok ? "ok:   " : "FAIL: "); \
@@ -66,8 +66,10 @@ int main(void)
         "tg_on_pve_host (v13, split in v14) was appended after the Proxmox block");
     OKF(offsetof(app_config_t, tg_on_pve_guest) > offsetof(app_config_t, tg_on_pve_host),
         "tg_on_pve_guest (v14) follows tg_on_pve_host, in order");
-    OKF(offsetof(app_config_t, tg_on_pve_guest) + sizeof(bool) + 3 >= sizeof(app_config_t),
-        "tg_on_pve_guest is the last field");
+    OKF(offsetof(app_config_t, nut_enabled) > offsetof(app_config_t, tg_on_pve_guest),
+        "nut_enabled (v15) was appended after tg_on_pve_guest");
+    OKF(offsetof(app_config_t, nut_enabled) + sizeof(bool) + 3 >= sizeof(app_config_t),
+        "nut_enabled is the last field");
 
     const size_t full_len = sizeof(blob_t);
     const size_t min_len  = offsetof(blob_t, cfg) + V3_END;
@@ -265,6 +267,32 @@ int main(void)
         "a v13 device's combined toggle carries over as tg_on_pve_host");
     OKF(v13.cfg.tg_on_pve_guest == true,
         "tg_on_pve_guest, new in v14 and absent from the short blob, keeps its default");
+
+    /* v14 -> v15: nut_enabled is a pure append like tg_on_pve was, but
+     * unlike every other new field, the loader does NOT leave it at its
+     * pre-seeded (off) default for an upgrading device — see
+     * app_config_load's `if (stored_version < 15u) cfg->nut_enabled =
+     * true;`. NUT had no switch before v15 and was never not running, so
+     * a stored blob existing at all means force it on. Only a genuinely
+     * fresh device (app_config_defaults, no stored blob) starts with it
+     * off. */
+    const size_t v14_len = offsetof(blob_t, cfg) + offsetof(app_config_t, nut_enabled);
+    OKF(ACCEPT(v14_len, 14u), "a v14-length blob is accepted by v15");
+    blob_t v14 = { .version = 14u, .cfg = defaults };
+    v14.cfg.nut_enabled = false;                       /* fresh-device default, pre-seeded */
+    blob_t stored14;
+    memset(&stored14, 0xEE, sizeof stored14);
+    memset(&stored14.cfg, 0, sizeof stored14.cfg);
+    stored14.version = 14u;
+    strcpy(stored14.cfg.wifi_ssid, "home-net");
+    memcpy(&v14, &stored14, v14_len);                  /* the short read */
+    OKF(strcmp(v14.cfg.wifi_ssid, "home-net") == 0,
+        "a v14 blob's ssid survives the upgrade");
+    if (v14.version < 15u) {                           /* mirrors the loader's override */
+        v14.cfg.nut_enabled = true;
+    }
+    OKF(v14.cfg.nut_enabled == true,
+        "an upgrading v14 device keeps NUT on, despite nut_enabled's own fresh-device default being off");
 
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;

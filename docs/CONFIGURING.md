@@ -35,9 +35,12 @@ and likely Bluetti units are marked ★. You can also type the address by hand.
 There is no account or pairing step; the handshake uses fixed keys from the
 vendor app.
 
-The **NUT** tab sets the UPS name, TCP port, low-battery threshold, continuous
-AC rating and battery capacity. Saving either tab reboots the bridge. All
-settings live in NVS, so later boots go straight to serving NUT.
+NUT, Proxmox and Telegram are all off on a fresh device — turn on what you
+want from **Settings** → **Integrations** first; each tab appears once its
+switch is on. Turn on **NUT server**, then use the **NUT** tab to set the UPS
+name, TCP port, low-battery threshold, continuous AC rating and battery
+capacity. Saving reboots the bridge. All settings live in NVS, so later boots
+go straight to serving NUT.
 
 ## Admin page
 
@@ -50,8 +53,30 @@ Served at `http://<device-ip>/` once the bridge is on your network.
 | **NUT** | UPS name, TCP port, low-battery %, AC rating, battery capacity, and the optional NUT login. |
 | **Proxmox** | Shut Proxmox VE hosts (and guests) down through their API when the battery runs low. Off by default, dry-run until armed. |
 | **Network** | Join a network or run an access point; hostname; DHCP or static IPv4; the fallback AP. Addressing is station-only — an AP always serves `192.168.4.1`. |
-| **Alerts** | Telegram push notifications. |
-| **Maintenance** | Firmware update, restart, admin login, factory reset, status-LED settings. |
+| **Telegram** | Telegram push notifications. |
+| **Settings** | Which integrations are on, firmware update, restart, admin login, factory reset, status-LED settings. |
+
+**NUT**, **Proxmox** and **Telegram** only appear once turned on from
+**Settings** → **Integrations** — see [Integrations](#integrations) below.
+**Bluetti** has no such switch: it's how the bridge reads the unit at all.
+
+### Integrations
+
+**Settings** tab. Three switches — **NUT server**, **Proxmox shutdown**,
+**Telegram alerts** — each off by default on a fresh device. Turning one on
+makes its tab appear in the nav bar; turning it off hides the tab again and
+stops that integration completely, not just the tab: the NUT listener isn't
+bound, the Proxmox engine doesn't evaluate anything, Telegram sends nothing.
+
+A device **upgrading** from a version before these switches existed keeps
+running whatever it already had — NUT stays on (it had no switch before and
+was never optional), and Proxmox/Telegram keep whatever their own enabled
+setting already was. Only a genuinely new, never-provisioned device starts
+with all three off.
+
+Proxmox and Telegram apply immediately, the same as saving their own tabs.
+NUT does not — there's no way to stop and restart its listener at runtime,
+so switching it either way reboots the bridge.
 
 ### Log level
 
@@ -78,7 +103,7 @@ come up. Disable the whole feature with `CONFIG_ENABLE_WEB_OTA=n`.
 ### Status LED
 
 If the board has an addressable WS2812 LED it shows red while starting and
-green once linked over Bluetooth. The Maintenance tab has an on/off toggle, a
+green once linked over Bluetooth. The Settings tab has an on/off toggle, a
 **data GPIO** field, and a **Test** button that flashes red / green / blue on
 that pin, so you can find the right GPIO without a rebuild. Common values are
 48, 38 and 21; `-1` turns it off. `STATUS_LED_GPIO` sets the boot default. A
@@ -90,7 +115,7 @@ board with a plain single-colour LED, or none, stays dark.
   stored config is wiped and the device reboots into setup mode. This is also
   the way back in if you forget the admin password. Pin and hold time are
   configurable in `menuconfig`.
-- **Web** — the Maintenance tab.
+- **Web** — the Settings tab.
 
 Setup mode is only entered on request — a wipe, or a device that has never been
 provisioned. A bridge that simply can't reach its network keeps trying instead;
@@ -130,7 +155,7 @@ It is a way back in, not a way to run: NUT clients on your normal network cannot
 see the bridge while it is hosting the fallback. If you want the bridge to
 *live* on its own network, use **Run its own AP** instead.
 
-### Alerts raised while offline
+### Telegram alerts raised while offline
 
 The event most worth alerting on — the mains failing — is the one likeliest to
 take your router with it. A Telegram message that can't be sent is therefore
@@ -183,6 +208,9 @@ the Elite 10 Mini; the writes are the untested half.
 
 ## Telegram alerts
 
+Turn it on from **Settings** → **Integrations** first — the **Telegram** tab
+appears once it's on.
+
 | Event | Default |
 | --- | --- |
 | Mains lost / restored | on |
@@ -196,7 +224,7 @@ the Elite 10 Mini; the writes are the untested half.
    (group IDs start with `-`).
 3. **Send your new bot a message first** — a bot can't start a conversation, so
    without this Telegram rejects the send with "chat not found".
-4. Paste both into the Alerts tab and hit **Send test message**.
+4. Paste both into the Telegram tab and hit **Send test message**.
 
 Repeats of the same event within a minute are suppressed, so a flapping supply
 won't fill the chat. Messages are queued: if Telegram is unreachable the bridge
@@ -241,9 +269,10 @@ only ever want the node shut down. Revoke at any time with
 
 ### On the bridge
 
-**Proxmox** tab. Tick *Enable control of Proxmox hosts, VMs and containers*,
-pick **Dry run** (the default) or **Armed**, and set how long the mains has to
-be back before a fired host re-arms (default 5 minutes).
+**Settings** → **Integrations**, tick **Proxmox shutdown** — the **Proxmox**
+tab appears once it's on. There, pick **Dry run** (the default) or **Armed**,
+and set how long the mains has to be back before a fired host re-arms
+(default 5 minutes).
 
 Then the first host — **+ Add host** for more, up to four. Each host is
 self-contained:

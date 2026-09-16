@@ -11,13 +11,39 @@
   body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 1rem;
          max-width: 46rem; margin-inline: auto; }
   h1 { font-size: 1.25rem; margin: .2rem 0 1rem; }
-  nav { display: flex; gap: .3rem; border-bottom: 1px solid #8884;
-        margin-bottom: 1rem; flex-wrap: wrap; }
+  nav { display: flex; align-items: center; gap: .1rem; border-bottom: 1px solid #8884;
+        margin-bottom: 1rem; }
   nav button { border: 0; background: none; color: inherit; font: inherit;
                padding: .5rem .9rem; cursor: pointer; border-bottom: 2px solid transparent; }
   nav button.active { border-bottom-color: #2563eb; font-weight: 600; }
   section { display: none; }
   section.active { display: block; }
+
+  /* One line always: tabs scroll horizontally instead of wrapping once
+     they no longer fit (a narrow window, or a phone). The arrows are
+     JS-toggled — hidden unless there's actually somewhere to scroll to. */
+  .tabScroll { display: flex; overflow-x: auto; scroll-behavior: smooth;
+               scrollbar-width: none; flex: 1 1 auto; min-width: 0; }
+  .tabScroll::-webkit-scrollbar { display: none; }
+  .tabScroll button { flex: none; }
+  .navArrow { flex: none; border: 0; background: none; color: inherit;
+              font: inherit; font-size: 1.1rem; line-height: 1;
+              padding: .5rem .4rem; cursor: pointer; }
+
+  .avatarWrap { position: relative; display: flex; align-items: center; }
+  .avatarBtn { width: 1.9rem; height: 1.9rem; border-radius: 50%; border: 0;
+               background: #2563eb; color: #fff; font: inherit; font-weight: 600;
+               font-size: .85rem; cursor: pointer; display: flex;
+               align-items: center; justify-content: center; padding: 0; }
+  .menu { position: absolute; right: 0; top: calc(100% + .4rem); min-width: 11rem;
+          background: Canvas; color: CanvasText; border: 1px solid #8886;
+          border-radius: .5rem; box-shadow: 0 4px 16px #0006; overflow: hidden;
+          z-index: 10; }
+  .menu button { display: block; width: 100%; text-align: left; border: 0;
+                 background: none; color: inherit; font: inherit; padding: .6rem .9rem;
+                 cursor: pointer; border-bottom: 1px solid transparent; }
+  .menu button:hover { background: #8882; }
+  .menu button + button { border-top: 1px solid #8883; }
 
   .box { border: 1px solid #8884; border-radius: .6rem; padding: .9rem 1rem 1.1rem;
          margin: 0 0 1rem; }
@@ -170,14 +196,25 @@
 <body>
 <h1 id="pageTitle">Bluetti NUT Bridge</h1>
 <nav>
-  <button data-tab="status" class="active">Status</button>
-  <button data-tab="bluetti">Bluetti</button>
-  <button data-tab="nut">NUT</button>
-  <button data-tab="pve">Proxmox</button>
-  <button data-tab="wifi">Network</button>
-  <button data-tab="notify">Alerts</button>
-  <button data-tab="maint">Maintenance</button>
-  <button id="signout" style="margin-left:auto">Sign out</button>
+  <button class="navArrow" id="navLeft" aria-label="Scroll tabs left" hidden>‹</button>
+  <div class="tabScroll">
+    <button data-tab="status" class="active">Status</button>
+    <button data-tab="bluetti">Bluetti</button>
+    <button data-tab="nut">NUT</button>
+    <button data-tab="pve">Proxmox</button>
+    <button data-tab="wifi">Network</button>
+    <button data-tab="notify">Telegram</button>
+  </div>
+  <button class="navArrow" id="navRight" aria-label="Scroll tabs right" hidden>›</button>
+  <div class="avatarWrap" style="margin-left:auto">
+    <button id="avatarBtn" class="avatarBtn" title="Account" aria-label="Account"
+            aria-haspopup="true" aria-expanded="false">?</button>
+    <div id="accountMenu" class="menu" hidden>
+      <button data-tab="account">User Account</button>
+      <button data-tab="maint">Device Settings</button>
+      <button id="signout">Log out</button>
+    </div>
+  </div>
 </nav>
 
 <div id="setupWarn" class="warn" hidden>
@@ -363,10 +400,8 @@
     <input type="hidden" name="section" value="pve">
     <div class="box">
       <h2>Proxmox Virtual Environment</h2>
-      <label class="chk"><input type="checkbox" id="pveEnabled" name="pve_enabled"
-        value="1" style="width:auto"> Enable control of Proxmox hosts, VMs and containers</label>
       <div id="pveModeFields">
-        <div class="modes" style="margin-top:.8rem">
+        <div class="modes">
           <label><input type="radio" name="pve_armed" value="0" checked>
             <b>Dry run</b><br><span class="hint">Counts down and alerts. Sends nothing.</span></label>
           <label><input type="radio" name="pve_armed" value="1">
@@ -474,15 +509,12 @@
   </form>
 </section>
 
-<!-- ---------------- Alerts ---------------- -->
+<!-- ---------------- Telegram ---------------- -->
 <section id="notify">
   <form id="tgForm">
     <input type="hidden" name="section" value="notify">
     <div class="box">
       <h2>Telegram <span class="sub">push alerts for power events</span></h2>
-      <label class="chk"><input type="checkbox" id="tgEnabled" name="tg_enabled"
-        value="1" style="width:auto"> Send Telegram messages</label>
-
       <label for="tgToken">Bot token</label>
       <input id="tgToken" name="tg_token" autocomplete="off"
              placeholder="123456789:AA…">
@@ -517,8 +549,27 @@
   </form>
 </section>
 
-<!-- ---------------- Maintenance ---------------- -->
+<!-- ---------------- Settings ---------------- -->
 <section id="maint">
+  <form id="intForm">
+    <input type="hidden" name="section" value="integrations">
+    <div class="box">
+      <h2>Integrations</h2>
+      <p class="hint">When disabled, the tab is hidden and service stopped.
+        Bluetti stays on always; it's how the bridge reads the unit.</p>
+      <label class="chk"><input type="checkbox" id="intNut" name="nut_enabled"
+        value="1" style="width:auto"> NUT server</label><br>
+      <label class="chk"><input type="checkbox" id="intPve" name="pve_enabled"
+        value="1" style="width:auto"> Proxmox shutdown</label><br>
+      <label class="chk"><input type="checkbox" id="intTg" name="tg_enabled"
+        value="1" style="width:auto"> Telegram alerts</label>
+      <p class="hint">Proxmox and Telegram apply immediately; changing NUT
+        needs a reboot.</p>
+    </div>
+    <p><button class="act primary" id="intSave">Save</button>
+       <span class="hint" id="intMsg"></span></p>
+  </form>
+
   <div class="box" id="otaBox" hidden>
     <h2>Update from GitHub</h2>
     <p>Running <code id="fwNow">?</code>. Checks this project's releases and
@@ -564,6 +615,26 @@
       that pin.</p>
   </div>
 
+  <div class="pair">
+    <div class="box">
+      <h2>Restart</h2>
+      <p>Reboot the bridge. Every setting is kept.</p>
+      <p><button class="act primary" id="reboot">Reboot</button>
+         <span class="hint" id="rebootMsg"></span></p>
+    </div>
+
+    <div class="box">
+      <h2>Reset</h2>
+      <p>Forget every setting (Wi-Fi, admin login, Bluetti, NUT) and reboot into
+        the setup access point.</p>
+      <p><button class="act danger" id="reset">Reset &amp; reboot</button>
+         <span class="hint" id="resetMsg"></span></p>
+    </div>
+  </div>
+</section>
+
+<!-- ---------------- User Account ---------------- -->
+<section id="account">
   <div class="box">
     <h2>Admin login</h2>
     <form id="credForm">
@@ -582,23 +653,6 @@
       <p class="hint">Your browser caches the old login for this session — after
         changing it, close the tab (or use a private window) to be asked again.</p>
     </form>
-  </div>
-
-  <div class="pair">
-    <div class="box">
-      <h2>Restart</h2>
-      <p>Reboot the bridge. Every setting is kept.</p>
-      <p><button class="act primary" id="reboot">Reboot</button>
-         <span class="hint" id="rebootMsg"></span></p>
-    </div>
-
-    <div class="box">
-      <h2>Reset</h2>
-      <p>Forget every setting (Wi-Fi, admin login, Bluetti, NUT) and reboot into
-        the setup access point.</p>
-      <p><button class="act danger" id="reset">Reset &amp; reboot</button>
-         <span class="hint" id="resetMsg"></span></p>
-    </div>
   </div>
 </section>
 
@@ -620,15 +674,52 @@ $('#signout').onclick = async () => {
   try { await fetch('/api/logout', { method: 'POST' }); } catch (e) {}
   location.replace('/');
 };
-const tabs = document.querySelectorAll('nav button');
+
+/* The account menu's own items switch tabs too (data-tab, same as the top
+   nav), so they're matched here as well — [data-tab] excludes the avatar
+   button and "Log out", which aren't tabs and keep their own handlers
+   above/below instead of being overwritten by this one. */
+const tabs = document.querySelectorAll('nav button[data-tab]');
 tabs.forEach(b => b.onclick = () => {
   tabs.forEach(x => x.classList.toggle('active', x === b));
   document.querySelectorAll('section').forEach(s =>
     s.classList.toggle('active', s.id === b.dataset.tab));
+  closeAccountMenu();
+  if (b.closest('.tabScroll')) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   if (b.dataset.tab === 'status') pollLogs();
-  if (['bluetti', 'nut', 'pve', 'wifi', 'notify', 'maint'].includes(b.dataset.tab)) loadConfig();
+  if (['bluetti', 'nut', 'pve', 'wifi', 'notify', 'maint', 'account'].includes(b.dataset.tab)) loadConfig();
   ctrlActive = b.dataset.tab === 'bluetti';
   if (ctrlActive) refreshControls();
+});
+
+/* ---- nav scroll arrows (narrow windows, phones: tabs no longer wrap,
+   they scroll) ---- */
+const tabScroll = $('.tabScroll');
+function updateNavArrows() {
+  const overflowing = tabScroll.scrollWidth > tabScroll.clientWidth + 1;
+  $('#navLeft').hidden = !overflowing || tabScroll.scrollLeft <= 0;
+  $('#navRight').hidden = !overflowing ||
+    tabScroll.scrollLeft + tabScroll.clientWidth >= tabScroll.scrollWidth - 1;
+}
+$('#navLeft').onclick = () => tabScroll.scrollBy({ left: -120, behavior: 'smooth' });
+$('#navRight').onclick = () => tabScroll.scrollBy({ left: 120, behavior: 'smooth' });
+tabScroll.addEventListener('scroll', updateNavArrows);
+window.addEventListener('resize', updateNavArrows);
+updateNavArrows();
+
+/* ---- account menu ---- */
+function closeAccountMenu() {
+  $('#accountMenu').hidden = true;
+  $('#avatarBtn').setAttribute('aria-expanded', 'false');
+}
+$('#avatarBtn').onclick = ev => {
+  ev.stopPropagation();
+  const open = $('#accountMenu').hidden;
+  $('#accountMenu').hidden = !open;
+  $('#avatarBtn').setAttribute('aria-expanded', String(open));
+};
+document.addEventListener('click', ev => {
+  if (!$('#accountMenu').hidden && !ev.target.closest('.avatarWrap')) closeAccountMenu();
 });
 
 /* ---- status ---- */
@@ -668,6 +759,23 @@ function pveHostDot(h, p) {
   if (h.last && !h.ok) return { cls: 'warn', title: h.last };
   return { cls: 'up', title: 'ready' };
 }
+/* Hides a tab from the nav entirely when its integration is off — Bluetti
+   and the always-present tabs (Status, Network, Settings) are never in
+   this set. If the tab a user is sitting on just got hidden out from under
+   them (disabled from another session, or this save), fall back to Status
+   rather than leaving them on a blank, unreachable section. */
+function applyIntegrationVisibility(nutOn, pveOn, tgOn) {
+  const map = { nut: nutOn, pve: pveOn, notify: tgOn };
+  let activeHidden = false;
+  for (const [tab, on] of Object.entries(map)) {
+    const btn = document.querySelector(`nav button[data-tab="${tab}"]`);
+    btn.hidden = !on;
+    if (!on && btn.classList.contains('active')) activeHidden = true;
+  }
+  if (activeHidden) {
+    document.querySelector('nav button[data-tab="status"]').click();
+  }
+}
 function renderStatus(j) {
   const valid = !!j.telemetry_valid;
   $('#statusWaiting').hidden = valid;
@@ -680,9 +788,10 @@ function renderStatus(j) {
     ['Gateway', j.gateway || '—'],
     ['Firmware', (j.fw_version || '?') + (j.fw_date ? ' (' + j.fw_date + ')' : '')],
   ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
-  let dots =
-    `<span class="dot${j.ble_connected ? ' up' : ''}">BLE${j.ble_connected ? ' linked' : ''}</span>` +
-    `<span class="dot up">NUT :${j.nut_port || 3493}</span>`;
+  let dots = `<span class="dot${j.ble_connected ? ' up' : ''}">BLE${j.ble_connected ? ' linked' : ''}</span>`;
+  if (j.nut_enabled) {
+    dots += `<span class="dot up">NUT :${j.nut_port || 3493}</span>`;
+  }
   const pv = j.pve;
   if (pv && pv.enabled) {
     dots += (pv.hosts || []).filter(h => h.enabled || h.node).map(h => {
@@ -691,6 +800,7 @@ function renderStatus(j) {
     }).join('');
   }
   $('#statusDots').innerHTML = dots;
+  applyIntegrationVisibility(!!j.nut_enabled, !!(pv && pv.enabled), !!j.tg_enabled);
   if (!valid) {
     $('#nutTable').innerHTML = '<tr><td colspan="2">Waiting for Bluetti…</td></tr>';
     return;
@@ -913,7 +1023,6 @@ async function loadConfig() {
     syncStatic();
 
     const pv = cfg.pve || {};
-    $('#pveEnabled').checked = !!pv.enabled;
     document.querySelector(`input[name=pve_armed][value="${pv.armed ? 1 : 0}"]`).checked = true;
     $('#pveMainsBack').value = pv.mains_back_min ?? 5;
     (pv.hosts || []).forEach((h, i) => {
@@ -942,7 +1051,10 @@ async function loadConfig() {
       pveRenderGuestCards(i);
     });
     pveShowSlots();
-    syncPveTriggers();
+
+    $('#intNut').checked = !!cfg.nut_enabled;
+    $('#intPve').checked = !!pv.enabled;
+    $('#intTg').checked = !!cfg.tg_enabled;
 
     $('#fbAp').checked = !!cfg.fb_ap_enabled;
     $('#fbApSsid').value = cfg.fb_ap_ssid || cfg.default_ap_ssid || '';
@@ -952,7 +1064,6 @@ async function loadConfig() {
     $('#fbApPass').disabled = $('#fbApOpen').checked;
     syncFallbackAp();
 
-    $('#tgEnabled').checked = !!cfg.tg_enabled;
     $('#tgChat').value = cfg.tg_chat || '';
     $('#tgToken').placeholder = cfg.has_tg_token ? 'unchanged' : '123456789:AA…';
     $('#tgPower').checked = !!cfg.tg_on_power;
@@ -964,12 +1075,15 @@ async function loadConfig() {
     $('#credUser').value = cfg.auth_user || 'admin';
     $('#credCur').disabled = !cfg.auth_set;
     $('#credCur').placeholder = cfg.auth_set ? '' : 'no password set yet';
+    $('#avatarBtn').textContent = (cfg.auth_user || 'admin').trim().charAt(0).toUpperCase() || 'A';
     $('#wifiPass').placeholder = cfg.has_wifi_pass ? 'unchanged' : 'none set';
     $('#apPass').placeholder = cfg.has_ap_pass ? 'unchanged' : 'none set';
     syncWifiMode();
     cfgLoaded = true;
   } catch (e) { $('#efMsg').textContent = 'Could not load current config.'; }
 }
+loadConfig();   /* eager, not just on first visit to a config tab — the
+                   avatar needs auth_user right away, whichever tab is up. */
 
 /* ---- generic section submit ---- */
 function wireForm(formSel, btnSel, msgSel, after) {
@@ -1657,19 +1771,8 @@ async function pveRunTest(i) {
 }
 document.querySelectorAll('.pveTest').forEach(b => b.onclick = () => pveRunTest(+b.dataset.i));
 
-function syncPveTriggers() {
-  /* Hidden rather than disabled: a disabled input is left out of the form,
-     and the server would read the missing host fields as blank. Hidden
-     inputs still submit their values, so nothing is lost by hiding. */
-  const on = $('#pveEnabled').checked;
-  $('#pveModeFields').hidden = !on;
-  $('#pveHostBoxes').hidden = !on;
-}
-$('#pveEnabled').onchange = syncPveTriggers;
-
 wireForm('#pveForm', '#pveSave', '#pveMsg', fd => {
   const armed = fd.get('pve_armed') === '1';
-  if (fd.get('pve_enabled') !== '1') return true;
   let hosts = 0, unpinned = [], untriggered = [];
   for (let i = 0; i < PVE_SLOTS; i++) {
     if (fd.get(`h${i}_on`) !== '1') continue;
@@ -1877,6 +1980,7 @@ $('#credForm').onsubmit = async ev => {
   $('#credMsg').textContent = 'Login updated.';
   ev.target.reset();
   $('#credUser').value = cfg.auth_user || 'admin';
+  $('#avatarBtn').textContent = (cfg.auth_user || 'admin').trim().charAt(0).toUpperCase() || 'A';
   $('#credSave').disabled = false;
 };
 
@@ -1890,17 +1994,22 @@ syncStatic();
 
 const IPV4 = /^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
 
-/* ---- alerts ---- */
+/* ---- Telegram ---- */
 wireForm('#tgForm', '#tgSave', '#tgMsg', fd => {
-  if (fd.get('tg_enabled') && !fd.get('tg_chat')) {
+  /* This tab is only reachable while Telegram is on (see Settings >
+     Integrations), so a chat ID and token are always required here now. */
+  if (!fd.get('tg_chat')) {
     $('#tgMsg').textContent = 'A chat ID is required.';
     return false;
   }
-  if (fd.get('tg_enabled') && !fd.get('tg_token') && !cfg.has_tg_token) {
+  if (!fd.get('tg_token') && !cfg.has_tg_token) {
     $('#tgMsg').textContent = 'A bot token is required.';
     return false;
   }
 });
+
+/* ---- Settings: Integrations ---- */
+wireForm('#intForm', '#intSave', '#intMsg');
 $('#tgTest').onclick = async () => {
   const fd = new FormData();
   if ($('#tgToken').value) fd.set('tg_token', $('#tgToken').value);
