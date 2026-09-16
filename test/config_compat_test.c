@@ -20,7 +20,7 @@
 #include "app_config.h"
 
 /* Must track the #define in app_config.c. */
-#define CFG_VERSION 10u
+#define CFG_VERSION 14u
 
 static int fails;
 #define OKF(c, ...) do { bool _ok = (c); printf(_ok ? "ok:   " : "FAIL: "); \
@@ -58,11 +58,15 @@ int main(void)
         "the fallback AP's SSID and password follow it, in order");
     OKF(offsetof(app_config_t, pve) > offsetof(app_config_t, fb_ap_pass),
         "the Proxmox block (v8) was appended after the fallback AP");
-    OKF(offsetof(app_config_t, pve) + sizeof(pve_config_t) + 3 >= sizeof(app_config_t),
-        "the Proxmox block is the last field");
-    OKF(sizeof(pve_config_t) < 1400,
-        "the Proxmox block is bounded (%zu bytes for %d hosts)",
-        sizeof(pve_config_t), PVE_MAX_HOSTS);
+    OKF(sizeof(pve_config_t) < 1300,
+        "the Proxmox block is bounded (%zu bytes for %d hosts; guest rules "
+        "live outside it now, unbounded)", sizeof(pve_config_t), PVE_MAX_HOSTS);
+    OKF(offsetof(app_config_t, tg_on_pve_host) >= offsetof(app_config_t, pve) + sizeof(pve_config_t),
+        "tg_on_pve_host (v13, split in v14) was appended after the Proxmox block");
+    OKF(offsetof(app_config_t, tg_on_pve_guest) > offsetof(app_config_t, tg_on_pve_host),
+        "tg_on_pve_guest (v14) follows tg_on_pve_host, in order");
+    OKF(offsetof(app_config_t, tg_on_pve_guest) + sizeof(bool) + 3 >= sizeof(app_config_t),
+        "tg_on_pve_guest is the last field");
 
     const size_t full_len = sizeof(blob_t);
     const size_t min_len  = offsetof(blob_t, cfg) + V3_END;
@@ -139,7 +143,7 @@ int main(void)
      * the short read left behind. Armed-by-accident is the one outcome
      * this feature must never produce. */
     const size_t v7_len = offsetof(blob_t, cfg) + offsetof(app_config_t, pve);
-    OKF(ACCEPT(v7_len, 7u), "a v7-length blob is accepted by v10");
+    OKF(ACCEPT(v7_len, 7u), "a v7-length blob is accepted by v14");
     blob_t v7 = { .version = 7u, .cfg = defaults };
     v7.cfg.pve.enabled = false;
     v7.cfg.pve.armed = false;
@@ -162,15 +166,62 @@ int main(void)
         "v9 host triggers sit after the fingerprint (v8 had none)");
     OKF(ACCEPT(full_len, 8u), "a v8 blob is accepted (then its Proxmox block is reset)");
 
-    /* v9 -> v10: each host's free-text guest list became per-guest rule
-     * slots (id + its own triggers) — a completely different field, not
-     * an appended one, so a v9 block's bytes read as v10 are meaningless
-     * too. Same reset, same reason. */
-    OKF(offsetof(pve_host_t, guests) < offsetof(pve_host_t, guest_wait_s),
-        "v10 guest rule slots sit where the old free-text list did");
-    OKF(sizeof(((pve_host_t *)0)->guests) == PVE_MAX_GUESTS * sizeof(pve_guest_t),
-        "the guests field is now an array of rule slots, not a char buffer");
+    /* v9 -> v10 and v10 -> v11 both reshaped the guest data that used to
+     * live inside pve_host_t (free-text list, then 8 rule slots, then 32).
+     * v12 removes it from pve_host_t altogether — moved to its own NVS
+     * blob per host (app_config_pve_guests_load/save), sized to however
+     * many rules are actually configured. A v9, v10 or v11 block's bytes
+     * read as v12 are just as meaningless as v8's; same reset. */
     OKF(ACCEPT(full_len, 9u), "a v9 blob is accepted (then its Proxmox block is reset)");
+    OKF(ACCEPT(full_len, 10u), "a v10 blob is accepted (then its Proxmox block is reset)");
+    OKF(ACCEPT(full_len, 11u), "a v11 blob is accepted (then its Proxmox block is reset)");
+
+    /* v11 -> v12: pve_host_t no longer carries any guest data at all —
+     * pin that it doesn't, so nobody re-adds a fixed array here without
+     * updating this suite. */
+    OKF(offsetof(pve_host_t, guest_wait_s) < sizeof(pve_host_t) &&
+        sizeof(pve_host_t) < 512,
+        "pve_host_t is back to just its own fixed fields (%zu bytes)", sizeof(pve_host_t));
+
+    /* v12 -> v13: tg_on_pve is a pure append (one bool, nothing existing
+     * moved), so — unlike every pve bump above — a v12 block is simply
+     * kept, not reset; the new field comes up at its pre-seeded default. */
+    const size_t v12_len = offsetof(blob_t, cfg) + offsetof(app_config_t, tg_on_pve_host);
+    OKF(ACCEPT(v12_len, 12u), "a v12-length blob is accepted by v14");
+    blob_t v12 = { .version = 12u, .cfg = defaults };
+    v12.cfg.tg_on_pve_host = true;                     /* defaults pre-seeded */
+    blob_t stored12;
+    memset(&stored12, 0xEE, sizeof stored12);
+    memset(&stored12.cfg, 0, sizeof stored12.cfg);
+    stored12.version = 12u;
+    strcpy(stored12.cfg.wifi_ssid, "home-net");
+    memcpy(&v12, &stored12, v12_len);                 /* the short read */
+    OKF(strcmp(v12.cfg.wifi_ssid, "home-net") == 0,
+        "a v12 blob's ssid survives the upgrade");
+    OKF(v12.cfg.tg_on_pve_host == true,
+        "the not-yet-split toggle, absent from the short blob, keeps its pre-seeded default");
+
+    /* v13 -> v14: tg_on_pve split into two. tg_on_pve_host reuses the exact
+     * byte tg_on_pve occupied — a v13 device's saved on/off carries over as
+     * its new "host" setting — and tg_on_pve_guest, new past that byte,
+     * comes up at its pre-seeded default rather than inheriting anything. */
+    const size_t v13_len = offsetof(blob_t, cfg) + offsetof(app_config_t, tg_on_pve_host) + sizeof(bool);
+    OKF(ACCEPT(v13_len, 13u), "a v13-length blob is accepted by v14");
+    blob_t v13 = { .version = 13u, .cfg = defaults };
+    v13.cfg.tg_on_pve_guest = true;                    /* defaults pre-seeded */
+    blob_t stored13;
+    memset(&stored13, 0xEE, sizeof stored13);
+    memset(&stored13.cfg, 0, sizeof stored13.cfg);
+    stored13.version = 13u;
+    strcpy(stored13.cfg.wifi_ssid, "home-net");
+    stored13.cfg.tg_on_pve_host = false;   /* the v13-era combined toggle, off */
+    memcpy(&v13, &stored13, v13_len);      /* the short read */
+    OKF(strcmp(v13.cfg.wifi_ssid, "home-net") == 0,
+        "a v13 blob's ssid survives the upgrade");
+    OKF(v13.cfg.tg_on_pve_host == false,
+        "a v13 device's combined toggle carries over as tg_on_pve_host");
+    OKF(v13.cfg.tg_on_pve_guest == true,
+        "tg_on_pve_guest, new in v14 and absent from the short blob, keeps its default");
 
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;

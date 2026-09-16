@@ -105,10 +105,13 @@
   .minibox table td { padding: .18rem 0; border: 0; font-size: .82rem; }
   .minibox table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
   .statusDots { font-size: .78rem; opacity: .8; margin: .8rem 0 0; }
-  .statusDots .dot { display: inline-flex; align-items: center; gap: .35rem; margin-right: 1rem; }
+  .statusDots .dot { display: inline-flex; align-items: center; gap: .35rem; margin-right: 1rem;
+                      margin-bottom: .3rem; }
   .statusDots .dot::before { content: ''; width: 7px; height: 7px; border-radius: 50%;
-                              background: #8886; }
+                              background: #8886; flex: none; }
   .statusDots .dot.up::before { background: #16a34a; }
+  .statusDots .dot.warn::before { background: #d9822b; }
+  .statusDots .dot.bad::before { background: #c00; }
 
   /* ---- Proxmox tab ---- */
   .pveHost > h2 { display: flex; align-items: center; gap: .6rem; }
@@ -227,10 +230,6 @@
       </div>
     </div>
     <div class="statusDots" id="statusDots"></div>
-  </div>
-  <div class="box" id="pveBox" hidden>
-    <h2>Proxmox <span class="sub" id="pveMode"></span></h2>
-    <table id="pveHosts"></table>
   </div>
   <div class="box">
     <h2>Logs <span class="sub">device log tail, ~12&nbsp;KB</span></h2>
@@ -366,19 +365,22 @@
       <h2>Proxmox Virtual Environment</h2>
       <label class="chk"><input type="checkbox" id="pveEnabled" name="pve_enabled"
         value="1" style="width:auto"> Enable control of Proxmox hosts, VMs and containers</label>
-      <div class="modes" style="margin-top:.8rem">
-        <label><input type="radio" name="pve_armed" value="0" checked>
-          <b>Dry run</b><br><span class="hint">Counts down and alerts. Sends nothing.</span></label>
-        <label><input type="radio" name="pve_armed" value="1">
-          <b>Armed</b><br><span class="hint">Really shuts them down.</span></label>
+      <div id="pveModeFields">
+        <div class="modes" style="margin-top:.8rem">
+          <label><input type="radio" name="pve_armed" value="0" checked>
+            <b>Dry run</b><br><span class="hint">Counts down and alerts. Sends nothing.</span></label>
+          <label><input type="radio" name="pve_armed" value="1">
+            <b>Armed</b><br><span class="hint">Really shuts them down.</span></label>
+        </div>
+        <div class="inline">Re-arm once the mains has been back for
+          <input name="pve_mains_back_min" id="pveMainsBack" type="number" min="0" max="1440"> minutes
+          <span class="hint">(0 = disabled)</span></div>
       </div>
-      <div class="inline">Re-arm once the mains has been back for
-        <input name="pve_mains_back_min" id="pveMainsBack" type="number" min="0" max="1440"> minutes</div>
     </div>
 
     <div id="pveHostBoxes"></div>
 
-    <p><button class="act primary" id="pveSave">Save &amp; reboot</button>
+    <p><button class="act primary" id="pveSave">Save</button>
        <span class="hint" id="pveMsg"></span></p>
   </form>
 </section>
@@ -501,12 +503,16 @@
       <label class="chk"><input type="checkbox" id="tgLow" name="tg_on_low_batt"
         value="1" style="width:auto"> Battery low</label><br>
       <label class="chk"><input type="checkbox" id="tgLink" name="tg_on_link"
-        value="1" style="width:auto"> Bluetti unit unreachable / back</label>
+        value="1" style="width:auto"> Bluetti unit unreachable / back</label><br>
+      <label class="chk"><input type="checkbox" id="tgPveHost" name="tg_on_pve_host"
+        value="1" style="width:auto"> Proxmox host shutdowns</label><br>
+      <label class="chk"><input type="checkbox" id="tgPveGuest" name="tg_on_pve_guest"
+        value="1" style="width:auto"> Proxmox guest (VM/CT) shutdowns</label>
       <p class="hint">Repeats of the same event inside a minute are suppressed,
         so a flapping supply won't spam the chat.</p>
     </div>
 
-    <p><button class="act primary" id="tgSave">Save &amp; reboot</button>
+    <p><button class="act primary" id="tgSave">Save</button>
        <span class="hint" id="tgMsg"></span></p>
   </form>
 </section>
@@ -647,6 +653,21 @@ function fmtRuntime(sec) {
   if (m < 60) return m + ' min';
   return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
 }
+/* One Proxmox host's status as a dot: {cls, title} — cls picks the color
+   (''=neutral, 'up'=green, 'warn'=amber, 'bad'=red), title is the same
+   detail the old Proxmox box showed, now a hover tooltip instead of a
+   table cell. */
+function pveHostDot(h, p) {
+  if (!h.enabled) return { cls: '', title: 'disabled' };
+  if (h.fired) return { cls: h.ok ? 'warn' : 'bad', title: h.last || (h.ok ? 'fired' : 'failed') };
+  if (!h.pinned) return { cls: 'warn', title: 'not tested yet — will be skipped' };
+  if (h.countdown_s >= 0) {
+    return { cls: 'warn', title: `shutdown in ${fmtMMSS(h.countdown_s)} unless the mains returns` };
+  }
+  if (p.on_battery_s >= 0) return { cls: '', title: 'on battery — waiting on the charge trigger' };
+  if (h.last && !h.ok) return { cls: 'warn', title: h.last };
+  return { cls: 'up', title: 'ready' };
+}
 function renderStatus(j) {
   const valid = !!j.telemetry_valid;
   $('#statusWaiting').hidden = valid;
@@ -659,9 +680,17 @@ function renderStatus(j) {
     ['Gateway', j.gateway || '—'],
     ['Firmware', (j.fw_version || '?') + (j.fw_date ? ' (' + j.fw_date + ')' : '')],
   ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
-  $('#statusDots').innerHTML =
+  let dots =
     `<span class="dot${j.ble_connected ? ' up' : ''}">BLE${j.ble_connected ? ' linked' : ''}</span>` +
     `<span class="dot up">NUT :${j.nut_port || 3493}</span>`;
+  const pv = j.pve;
+  if (pv && pv.enabled) {
+    dots += (pv.hosts || []).filter(h => h.enabled || h.node).map(h => {
+      const { cls, title } = pveHostDot(h, pv);
+      return `<span class="dot${cls ? ' ' + cls : ''}" title="${title.replace(/"/g, '&quot;')}">${h.node || 'host'}</span>`;
+    }).join('');
+  }
+  $('#statusDots').innerHTML = dots;
   if (!valid) {
     $('#nutTable').innerHTML = '<tr><td colspan="2">Waiting for Bluetti…</td></tr>';
     return;
@@ -750,7 +779,6 @@ async function refreshStatus() {
     renderStatus(j);
     $('#setupWarn').hidden = !!j.configured;
     $('#fbWarn').hidden = !j.fb_ap_up;
-    renderPve(j.pve);
     if (j.fb_ap_up && j.network) $('#fbWarnNet').textContent = `"${j.network}"`;
     /* Name the tab after the device, so several bridges are told apart in
        a row of tabs. Falls back to the static title before the first poll
@@ -907,7 +935,7 @@ async function loadConfig() {
       pveSyncChip(i);
       pveSlot[i].rules = new Map();
       (h.guests || []).forEach(g => {
-        if (g.enabled) pveSlot[i].rules.set(g.id, { min: g.on_battery_min || 0, pct: g.charge_pct || 0 });
+        pveSlot[i].rules.set(g.id, { min: g.on_battery_min || 0, pct: g.charge_pct || 0 });
       });
       pveSlot[i].liveGuests = null;
       pveSyncGuestFields(i);
@@ -930,6 +958,8 @@ async function loadConfig() {
     $('#tgPower').checked = !!cfg.tg_on_power;
     $('#tgLow').checked = !!cfg.tg_on_low_batt;
     $('#tgLink').checked = !!cfg.tg_on_link;
+    $('#tgPveHost').checked = !!cfg.tg_on_pve_host;
+    $('#tgPveGuest').checked = !!cfg.tg_on_pve_guest;
 
     $('#credUser').value = cfg.auth_user || 'admin';
     $('#credCur').disabled = !cfg.auth_set;
@@ -951,6 +981,7 @@ function wireForm(formSel, btnSel, msgSel, after) {
     if (after && after(fd) === false) return;
     $(btnSel).disabled = true;
     $(msgSel).textContent = 'Saving…';
+    let reboot = true;
     try {
       const r = await fetch('/api/reconfigure',
         { method: 'POST', body: new URLSearchParams(fd) });
@@ -960,12 +991,18 @@ function wireForm(formSel, btnSel, msgSel, after) {
         if (!why || why.length > 120 || why.includes('<')) why = 'HTTP ' + r.status;
         throw new Error(why);
       }
+      try { const j = await r.json(); if (j.reboot === false) reboot = false; } catch (e) {}
     } catch (e) {
       $(msgSel).textContent = 'Failed: ' + e.message;
       $(btnSel).disabled = false;
       return;
     }
-    $(msgSel).textContent = 'Saved. Rebooting — reload in ~15 s.';
+    if (reboot) {
+      $(msgSel).textContent = 'Saved. Rebooting — reload in ~15 s.';
+    } else {
+      $(msgSel).textContent = 'Saved.';
+      $(btnSel).disabled = false;
+    }
   };
 }
 
@@ -1303,38 +1340,8 @@ wireForm('#nutForm', '#nutSave', '#nutMsg', fd => {
 function fmtMMSS(sec) {
   return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 }
-function renderPve(p) {
-  const box = $('#pveBox');
-  if (!p || !p.enabled) { box.hidden = true; return; }
-  box.hidden = false;
-  const m = $('#pveMode');
-  m.textContent = p.armed ? 'armed' : 'dry run';
-  m.style.color = p.armed ? '#c00' : '';
-  const t = $('#pveHosts');
-  t.innerHTML = '';
-  (p.hosts || []).forEach((h, i) => {
-    if (!h.enabled && !h.node) return;
-    const tr = document.createElement('tr');
-    const name = document.createElement('td');
-    name.textContent = h.node || `host ${i + 1}`;
-    const st = document.createElement('td');
-    let text, warn = false;
-    if (!h.enabled)          { text = 'disabled'; }
-    else if (h.fired)        { text = h.last || 'fired'; warn = !h.ok; }
-    else if (!h.pinned)      { text = 'not tested yet — will be skipped'; warn = true; }
-    else if (h.countdown_s >= 0) { text = `shutdown in ${fmtMMSS(h.countdown_s)} unless the mains returns`; warn = true; }
-    else if (p.on_battery_s >= 0) { text = 'on battery — waiting on the charge trigger'; }
-    else                     { text = h.last && !h.ok ? h.last : 'ready'; warn = h.last && !h.ok; }
-    st.textContent = text;
-    if (warn) st.style.color = '#d9822b';
-    tr.append(name, st);
-    t.appendChild(tr);
-  });
-}
-
 /* ---- Proxmox tab ---- */
 const PVE_SLOTS = 4;
-const PVE_GUEST_SLOTS = 8;   /* must track PVE_MAX_GUESTS in pve_shutdown.h */
 /* Per-slot: what's stored (so a blank field means "keep"), the live guest
    list from the last Load (null = never loaded), the configured rules
    (guest id -> {min, pct}; presence means "on"), and whether the slot was
@@ -1344,18 +1351,22 @@ const pveSlot = Array.from({ length: PVE_SLOTS },
 
 function pveHostBox(i) {
   return `<div class="box pveHost" data-i="${i}" hidden>
-    <h2>Host ${i + 1} <span class="name" id="h${i}_title"></span><span class="spacer"></span>
+    <h2>Host ${i + 1} <span class="name" id="h${i}_title"></span>
       <span class="chip dim" id="h${i}_chip">not tested</span>
+      <span class="spacer"></span>
+      <label class="gswitch" title="Enabled">
+        <input type="checkbox" name="h${i}_on" value="1" id="h${i}_on">
+        <span class="gtrack"></span>
+      </label>
+      <button type="button" class="act minibtn pveExpand" data-i="${i}"
+              aria-expanded="true" title="Collapse">−</button>
       ${i ? `<button type="button" class="act minibtn pveRemove" data-i="${i}">Remove</button>` : ''}
     </h2>
+    <div id="h${i}_body">
     <input type="hidden" name="h${i}_clear" value="">
     <input type="hidden" name="h${i}_fp" id="h${i}_fp" value="">
     <input type="hidden" name="h${i}_fp_clear" id="h${i}_fp_clear" value="">
-    ${Array.from({ length: PVE_GUEST_SLOTS }, (_, g) => ['id', 'on', 'min', 'pct']
-      .map(k => `<input type="hidden" name="h${i}_g${g}_${k}" id="h${i}_g${g}_${k}" value="">`)
-      .join('')).join('')}
-    <label class="chk"><input type="checkbox" name="h${i}_on" value="1"
-      style="width:auto"> Enabled</label>
+    <div id="h${i}_gfields" hidden></div>
 
     <div class="sect">Connection</div>
     <div class="grid2">
@@ -1368,14 +1379,14 @@ function pveHostBox(i) {
       <div><label for="h${i}_token">Token ID</label>
         <input id="h${i}_token" name="h${i}_token" autocomplete="off" spellcheck="false"
                placeholder="ups@pve!shutdown"></div>
-      <div><label for="h${i}_secret">API key</label>
+      <div><label for="h${i}_secret">Secret</label>
         <input id="h${i}_secret" name="h${i}_secret" type="password" autocomplete="off"
                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></div>
     </div>
-    <p class="hint" style="margin:.4rem 0 0">One URL per node. The token needs
+    <p class="hint" style="margin:.4rem 0 0">The token needs
       <code>Sys.PowerMgmt</code>, plus <code>VM.Audit</code> and <code>VM.PowerMgmt</code>
-      to list and stop guests — <a href="https://github.com/thatguy-za/esp32-nut-bluetti/blob/main/docs/CONFIGURING.md#proxmox-shutdown"
-      target="_blank" rel="noopener">the four <code>pveum</code> lines</a>.</p>
+      to list and stop guests. <a href="https://github.com/thatguy-za/esp32-nut-bluetti/blob/main/docs/CONFIGURING.md#proxmox-shutdown"
+      target="_blank" rel="noopener">More info</a>.</p>
 
     <div class="row" style="margin:.6rem 0 0">
       <button type="button" class="act pveTest" data-i="${i}">Test connection</button>
@@ -1390,7 +1401,7 @@ function pveHostBox(i) {
     <p class="hint" style="margin:0">Timed on this bridge's clock from the moment the mains
       drops. 0 turns that trigger off.</p>
 
-    <div class="sect">Guests <span class="sub" style="font-weight:400;opacity:.6">up to ${PVE_GUEST_SLOTS} with their own rule</span></div>
+    <div class="sect">Guests <span class="sub" style="font-weight:400;opacity:.6">each with its own rule, if you want one</span></div>
     <div class="row" style="margin:.3rem 0">
       <button type="button" class="act minibtn pveLoad" data-i="${i}">Load guests</button>
       <span class="hint" id="h${i}_gmsg"></span>
@@ -1404,6 +1415,7 @@ function pveHostBox(i) {
         style="width:auto"> shut down the node itself</label></div>
     <p class="hint" style="margin:0">Applies when this trigger stops a guest that has no
       rule of its own — one with its own timer that already fired earlier needs no wait.</p>
+    </div>
   </div>`;
 }
 $('#pveHostBoxes').innerHTML =
@@ -1450,12 +1462,7 @@ function pveHostForm(i) {
     if (v) fd.set(`h${i}_${k}`, v);
   }
   if ($(`#h${i}_fp_clear`).value) fd.set(`h${i}_fp_clear`, $(`#h${i}_fp_clear`).value);
-  for (let g = 0; g < PVE_GUEST_SLOTS; g++) {
-    for (const k of ['id', 'on', 'min', 'pct']) {
-      const v = $(`#h${i}_g${g}_${k}`).value;
-      if (v) fd.set(`h${i}_g${g}_${k}`, v);
-    }
-  }
+  $(`#h${i}_gfields`).querySelectorAll('input').forEach(inp => fd.set(inp.name, inp.value));
   if (document.querySelector(`[name=h${i}_node_off]`).checked) fd.set(`h${i}_node_off`, '1');
   return fd;
 }
@@ -1467,18 +1474,20 @@ async function pvePost(path, fd) {
 }
 
 /* -- guests: pveSlot[i].rules (id -> {min, pct}) is the truth; the hidden
-   h${i}_g${slot}_* fields are just its serialization for the form, rebuilt
-   on every change. Cards show the live list (names, type, running state)
-   merged with any configured id the live list didn't include. */
+   fields in h${i}_gfields are just its serialization for the form, fully
+   rebuilt on every change — one hN_gK_{id,min,pct} triplet per rule, plus
+   a count, so the server knows how many to read. No cap: however many
+   rules the Map holds is however many get posted. Cards show the live
+   list (names, type, running state) merged with any configured id the
+   live list didn't include. */
 function pveSyncGuestFields(i) {
-  const ids = [...pveSlot[i].rules.keys()];
-  for (let g = 0; g < PVE_GUEST_SLOTS; g++) {
-    const id = ids[g], r = id !== undefined ? pveSlot[i].rules.get(id) : null;
-    $(`#h${i}_g${g}_id`).value  = id !== undefined ? id : '';
-    $(`#h${i}_g${g}_on`).value  = id !== undefined ? '1' : '';
-    $(`#h${i}_g${g}_min`).value = r ? r.min : '';
-    $(`#h${i}_g${g}_pct`).value = r ? r.pct : '';
-  }
+  const entries = [...pveSlot[i].rules.entries()];
+  $(`#h${i}_gfields`).innerHTML =
+    `<input type="hidden" name="h${i}_gcount" value="${entries.length}">` +
+    entries.map(([id, r], g) => `
+      <input type="hidden" name="h${i}_g${g}_id" value="${id}">
+      <input type="hidden" name="h${i}_g${g}_min" value="${r.min}">
+      <input type="hidden" name="h${i}_g${g}_pct" value="${r.pct}">`).join('');
 }
 function pveGuestCard(i, g) {
   const rule = pveSlot[i].rules.get(g.id), on = !!rule;
@@ -1523,11 +1532,6 @@ function pveRenderGuestCards(i) {
   box.querySelectorAll('.gswitch input').forEach(cb => cb.onchange = () => {
     const id = +cb.dataset.id;
     if (cb.checked) {
-      if (pveSlot[i].rules.size >= PVE_GUEST_SLOTS) {
-        cb.checked = false;
-        $(`#h${i}_gmsg`).textContent = `Up to ${PVE_GUEST_SLOTS} guest rules per host.`;
-        return;
-      }
       pveSlot[i].rules.set(id, { min: 0, pct: 0 });
     } else {
       pveSlot[i].rules.delete(id);
@@ -1543,7 +1547,7 @@ function pveRenderGuestCards(i) {
   });
   const n = pveSlot[i].rules.size;
   $(`#h${i}_gfoot`).textContent = n
-    ? `${n} of ${PVE_GUEST_SLOTS} guest rule${n === 1 ? '' : 's'} used — the rest go down with the node.`
+    ? `${n} guest rule${n === 1 ? '' : 's'} configured — the rest go down with the node.`
     : '';
 }
 async function pveLoadGuests(i, quiet) {
@@ -1567,11 +1571,24 @@ for (let i = 0; i < PVE_SLOTS; i++) {
 }
 document.querySelectorAll('.pveLoad').forEach(b => b.onclick = () => pveLoadGuests(+b.dataset.i, false));
 
+function pveSetExpanded(i, open) {
+  const b = document.querySelector(`.pveExpand[data-i="${i}"]`);
+  $(`#h${i}_body`).hidden = !open;
+  b.textContent = open ? '−' : '+';
+  b.title = open ? 'Collapse' : 'Expand';
+  b.setAttribute('aria-expanded', String(open));
+}
+document.querySelectorAll('.pveExpand').forEach(b => b.onclick = () => {
+  const i = +b.dataset.i;
+  pveSetExpanded(i, $(`#h${i}_body`).hidden);
+});
+
 $('#pveAddHost').onclick = () => {
   const next = [...document.querySelectorAll('#pveHostBoxes .pveHost')].find(b => b.hidden);
   if (!next) return;
   const i = +next.dataset.i;
   pveSlot[i].added = true;
+  pveSetExpanded(i, true);
   pveShowSlots();
   $(`#h${i}_url`).focus();
 };
@@ -1620,6 +1637,15 @@ async function pveRunTest(i) {
       retry.onclick = () => pveResetAndRetry(i);
       msg.append('✗ This host answered differently than last time — it may have changed. ', retry);
       pveChip(i, 'bad', 'changed');
+    } else if (j.connected) {
+      /* The connection itself worked — certificate trusted, PVE answered —
+         so this is a checkmark, not a failure. Whatever's left (usually a
+         privilege PVE didn't confirm) still needs a look before arming. */
+      msg.innerHTML = '';
+      const ok = document.createElement('span'); ok.style.color = '#16a34a'; ok.textContent = '✓ Connected.';
+      msg.append(ok, ' ', j.msg);
+      pveChip(i, 'warn', 'check privileges');
+      pveLoadGuests(i, true);
     } else {
       msg.textContent = '✗ ' + j.msg;
       if (j.pinned) pveChip(i, 'warn', 'connected before');
@@ -1632,10 +1658,12 @@ async function pveRunTest(i) {
 document.querySelectorAll('.pveTest').forEach(b => b.onclick = () => pveRunTest(+b.dataset.i));
 
 function syncPveTriggers() {
-  /* Dim rather than disable: a disabled input is left out of the form, and
-     the server would read the missing host fields as blank. */
+  /* Hidden rather than disabled: a disabled input is left out of the form,
+     and the server would read the missing host fields as blank. Hidden
+     inputs still submit their values, so nothing is lost by hiding. */
   const on = $('#pveEnabled').checked;
-  document.querySelectorAll('#pveHostBoxes .box').forEach(b => b.style.opacity = on ? '' : '.55');
+  $('#pveModeFields').hidden = !on;
+  $('#pveHostBoxes').hidden = !on;
 }
 $('#pveEnabled').onchange = syncPveTriggers;
 

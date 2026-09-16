@@ -296,10 +296,13 @@ static bool nut_verify_login(const char *user, const char *pass, void *ctx)
            app_config_check_nut_password(cfg, pass);
 }
 
-static void pve_event(const char *text, void *user)
+static void pve_event(pve_event_kind_t kind, const char *text, void *user)
 {
-    (void)user;
-    notify_send(text);
+    const app_config_t *cfg = user;
+    bool on = cfg && (kind == PVE_EVENT_GUEST ? cfg->tg_on_pve_guest : cfg->tg_on_pve_host);
+    if (on) {
+        notify_send(text);
+    }
 }
 
 static void start_services(const app_config_t *cfg)
@@ -361,11 +364,19 @@ static void start_services(const app_config_t *cfg)
     strlcpy(ncfg.chat_id, cfg->tg_chat, sizeof(ncfg.chat_id));
     notify_start(&ncfg, cfg->ups_name);
 
-    /* Proxmox shutdown. Its events (fired, dry-run, a host that failed)
-     * go out through Telegram if that is on — the same channel as the
-     * power alerts, so the "shutting down" message lands where the
-     * "mains lost" one did. */
-    pve_shutdown_start(&cfg->pve, pve_event, NULL);
+    /* Proxmox shutdown. Its events (fired, dry-run, a host or guest that
+     * failed) go out through Telegram if tg_enabled and the matching
+     * per-kind toggle are on — tg_on_pve_host / tg_on_pve_guest, separate
+     * from each other and from the power/link/low-battery ones, gated
+     * inside pve_event() via the cfg pointer passed as `user`. Guest rules
+     * live in their own NVS blob per host (no compile-time cap), loaded
+     * here and handed off — pve_shutdown owns freeing them from this point
+     * on. */
+    pve_guest_list_t pve_guests[PVE_MAX_HOSTS] = { 0 };
+    for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+        app_config_pve_guests_load(i, &pve_guests[i].items, &pve_guests[i].n);
+    }
+    pve_shutdown_start(&cfg->pve, pve_guests, pve_event, (void *)cfg);
 
     provisioning_admin_start(cfg);
     xTaskCreate(staleness_task, "staleness", 3072, NULL, 4, NULL);

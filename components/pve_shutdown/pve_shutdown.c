@@ -45,18 +45,39 @@ static const char *TAG = "pve";
 /* A guest listing carries ~250 bytes per guest; 8 KB covers ~30. */
 #define PVE_GUEST_RESP_MAX 8192
 
+/* One host's pending guest work, queued from pve_shutdown_observe() and
+ * drained by the worker. Unbounded (realloc'd), unlike the old per-host
+ * bitmask — there's no cap on how many guests can fire at once now. */
+typedef struct {
+    int  host;
+    int  id;
+    char reason[96];
+} pending_guest_t;
+
+/* Last test/shutdown result for one guest, kept by id — not by array
+ * position, since the configured list can be edited (and reordered) out
+ * from under it. */
+typedef struct {
+    int  id;
+    char text[64];
+    bool ok;
+} guest_last_t;
+
 static struct {
     pve_config_t      cfg;
+    pve_guest_list_t  guests[PVE_MAX_HOSTS];   /* configured rules, owned here */
     pve_engine_t      eng;
     pve_event_cb_t    cb;
     void             *cb_user;
     SemaphoreHandle_t lock;
     bool              started;
-    bool              running;               /* the worker task is alive  */
-    unsigned          pending_hosts;         /* host bit: node needs shutdown */
-    unsigned          pending_guests[PVE_MAX_HOSTS]; /* guest bit: that guest does */
-    struct { char text[64]; bool ok; } host_last[PVE_MAX_HOSTS];
-    struct { char text[64]; bool ok; } guest_last[PVE_MAX_HOSTS][PVE_MAX_GUESTS];
+    bool              running;         /* the worker task is alive         */
+    unsigned          pending_hosts;   /* host bit: node needs shutdown    */
+    pending_guest_t  *pending_guests;  /* realloc'd, any host, any length  */
+    int               pending_guest_n;
+    struct { char text[128]; bool ok; } host_last[PVE_MAX_HOSTS];
+    guest_last_t     *guest_last[PVE_MAX_HOSTS];   /* realloc'd, by id */
+    int               guest_last_n[PVE_MAX_HOSTS];
 } P;
 
 static void note_host(int i, bool ok, const char *text)
@@ -68,19 +89,61 @@ static void note_host(int i, bool ok, const char *text)
     xSemaphoreGive(P.lock);
 }
 
-static void note_guest(int i, int g, bool ok, const char *text)
+/* Upserts by id: a guest firing for the first time grows the array, one
+ * that's fired before just updates in place. */
+static void note_guest(int i, int id, bool ok, const char *text)
 {
-    if (i < 0 || i >= PVE_MAX_HOSTS || g < 0 || g >= PVE_MAX_GUESTS) return;
+    if (i < 0 || i >= PVE_MAX_HOSTS) return;
     xSemaphoreTake(P.lock, portMAX_DELAY);
-    P.guest_last[i][g].ok = ok;
-    strlcpy(P.guest_last[i][g].text, text, sizeof(P.guest_last[i][g].text));
+    guest_last_t *found = NULL;
+    for (int k = 0; k < P.guest_last_n[i]; k++) {
+        if (P.guest_last[i][k].id == id) {
+            found = &P.guest_last[i][k];
+            break;
+        }
+    }
+    if (!found) {
+        guest_last_t *grown = realloc(P.guest_last[i],
+                                      (size_t)(P.guest_last_n[i] + 1) * sizeof(*grown));
+        if (!grown) {
+            xSemaphoreGive(P.lock);
+            return;
+        }
+        P.guest_last[i] = grown;
+        found = &P.guest_last[i][P.guest_last_n[i]];
+        found->id = id;
+        P.guest_last_n[i]++;
+    }
+    found->ok = ok;
+    strlcpy(found->text, text, sizeof(found->text));
     xSemaphoreGive(P.lock);
+}
+
+/* Drops any guest_last entry whose id is no longer in host i's configured
+ * list — otherwise a device that's had many different guests configured
+ * over time would keep every one of them forever. Call with P.lock held. */
+static void prune_guest_last(int i)
+{
+    int keep = 0;
+    for (int k = 0; k < P.guest_last_n[i]; k++) {
+        bool still_configured = false;
+        for (int g = 0; g < P.guests[i].n; g++) {
+            if (P.guests[i].items[g].id == P.guest_last[i][k].id) {
+                still_configured = true;
+                break;
+            }
+        }
+        if (still_configured) {
+            P.guest_last[i][keep++] = P.guest_last[i][k];
+        }
+    }
+    P.guest_last_n[i] = keep;
 }
 
 void pve_shutdown_note_test(int i, bool ok, const char *msg)
 {
     if (!P.started) return;
-    note_host(i, ok, ok ? "test ok" : msg);
+    note_host(i, ok, msg);
 }
 
 /* ------------------------------------------------------------------ */
@@ -318,11 +381,11 @@ static void describe(int st, const char *err, char *out, size_t sz)
     else                 snprintf(out, sz, "HTTP %d", st);
 }
 
-static void emit(const char *text)
+static void emit(pve_event_kind_t kind, const char *text)
 {
     ESP_LOGW(TAG, "%s", text);
     if (P.cb) {
-        P.cb(text, P.cb_user);
+        P.cb(kind, text, P.cb_user);
     }
 }
 
@@ -384,13 +447,14 @@ static bool shutdown_node(const pve_host_t *h, char *why, size_t wsz)
     return false;
 }
 
-/* Handle one host's pending work: any guests whose own trigger (or the
- * node's, sweeping them up) fired, then — if the node itself is due — the
- * node. `guest_reason` holds one entry per bit that could be set in
- * `guest_mask`; entries for bits not set are never read. */
+/* Handle one host's pending work: any guests due — whether their own
+ * trigger fired them or the node's swept them up — then, if the node
+ * itself is due, the node. `batch` holds every pending guest for this
+ * host in this pass (any length; `.host` is unused here, all entries
+ * already belong to host `i`). */
 static void run_host(int i, const pve_config_t *cfg, bool node_pending,
-                     unsigned guest_mask, const char *node_reason,
-                     const char guest_reason[PVE_MAX_GUESTS][96])
+                     const pending_guest_t *batch, int batch_n,
+                     const char *node_reason)
 {
     const pve_host_t *h = &cfg->hosts[i];
     char text[240];
@@ -398,17 +462,16 @@ static void run_host(int i, const pve_config_t *cfg, bool node_pending,
         return;
     }
     if (!cfg->armed) {
-        for (int g = 0; g < PVE_MAX_GUESTS; g++) {
-            if (!(guest_mask & (1u << g))) continue;
+        for (int k = 0; k < batch_n; k++) {
             snprintf(text, sizeof(text), "DRY RUN \xE2\x80\x94 would shut down guest %d on %s (%s)",
-                     h->guests[g].id, h->node, guest_reason[g]);
-            emit(text);
-            note_guest(i, g, true, "dry run: would shut down");
+                     batch[k].id, h->node, batch[k].reason);
+            emit(PVE_EVENT_GUEST, text);
+            note_guest(i, batch[k].id, true, "dry run: would shut down");
         }
         if (node_pending) {
             snprintf(text, sizeof(text), "DRY RUN \xE2\x80\x94 would shut down %s (%s)",
                      h->node, node_reason);
-            emit(text);
+            emit(PVE_EVENT_HOST, text);
             note_host(i, true, "dry run: would shut down");
         }
         return;
@@ -417,34 +480,31 @@ static void run_host(int i, const pve_config_t *cfg, bool node_pending,
         if (node_pending) {
             snprintf(text, sizeof(text), "\xE2\x9D\x8C Proxmox %s NOT shut down: "
                      "certificate not trusted yet (use Test connection on the Proxmox tab)", h->node);
-            emit(text);
+            emit(PVE_EVENT_HOST, text);
             note_host(i, false, "not trusted \xE2\x80\x94 skipped");
         }
-        for (int g = 0; g < PVE_MAX_GUESTS; g++) {
-            if (guest_mask & (1u << g)) {
-                note_guest(i, g, false, "not trusted \xE2\x80\x94 skipped");
-            }
+        for (int k = 0; k < batch_n; k++) {
+            note_guest(i, batch[k].id, false, "not trusted \xE2\x80\x94 skipped");
         }
         return;
     }
 
     bool any_guest_shut = false;
-    for (int g = 0; g < PVE_MAX_GUESTS; g++) {
-        if (!(guest_mask & (1u << g))) continue;
-        int id = h->guests[g].id;
+    for (int k = 0; k < batch_n; k++) {
+        int id = batch[k].id;
         char why[96] = "";
         if (shutdown_guest(h, id, why, sizeof(why))) {
             snprintf(text, sizeof(text), "\xF0\x9F\x94\xBB Shutting down guest %d on %s (%s)",
-                     id, h->node, guest_reason[g]);
-            note_guest(i, g, true, "shutdown sent");
+                     id, h->node, batch[k].reason);
+            note_guest(i, id, true, "shutdown sent");
             any_guest_shut = true;
         } else {
             snprintf(text, sizeof(text), "\xE2\x9D\x8C Guest %d on %s shutdown FAILED \xE2\x80\x94 %s",
                      id, h->node, why);
-            note_guest(i, g, false, why);
+            note_guest(i, id, false, why);
             ESP_LOGE(TAG, "%s: %s", h->node, why);
         }
-        emit(text);
+        emit(PVE_EVENT_GUEST, text);
     }
 
     if (!node_pending) {
@@ -467,7 +527,7 @@ static void run_host(int i, const pve_config_t *cfg, bool node_pending,
                  h->node, why);
         note_host(i, false, why);
     }
-    emit(text);
+    emit(PVE_EVENT_HOST, text);
 }
 
 /* Drains P.pending_hosts / P.pending_guests until both are empty, then
@@ -478,36 +538,59 @@ static void worker_task(void *arg)
 {
     for (;;) {
         pve_config_t cfg;
-        char reason[sizeof(P.eng.reason[0])];
-        char greason[PVE_MAX_GUESTS][sizeof(P.eng.guest_reason[0][0])];
+        char reason[sizeof(P.eng.reason[0])] = "";
+        pending_guest_t *batch = NULL;
+        int batch_n = 0;
         int i = -1;
         bool node_pending = false;
-        unsigned guest_mask = 0;
 
         xSemaphoreTake(P.lock, portMAX_DELAY);
         for (int k = 0; k < PVE_MAX_HOSTS; k++) {
-            if ((P.pending_hosts & (1u << k)) || P.pending_guests[k]) {
+            if (P.pending_hosts & (1u << k)) {
                 i = k;
-                node_pending = (P.pending_hosts & (1u << k)) != 0;
-                guest_mask = P.pending_guests[k];
-                P.pending_hosts &= ~(1u << k);
-                P.pending_guests[k] = 0;
                 break;
             }
+        }
+        if (i < 0 && P.pending_guest_n > 0) {
+            i = P.pending_guests[0].host;
         }
         if (i < 0) {
             P.running = false;
             xSemaphoreGive(P.lock);
             break;
         }
-        cfg = P.cfg;
-        strlcpy(reason, P.eng.reason[i], sizeof(reason));
-        for (int g = 0; g < PVE_MAX_GUESTS; g++) {
-            strlcpy(greason[g], P.eng.guest_reason[i][g], sizeof(greason[g]));
+        node_pending = (P.pending_hosts & (1u << i)) != 0;
+        P.pending_hosts &= ~(1u << i);
+        if (node_pending) {
+            strlcpy(reason, P.eng.reason[i], sizeof(reason));
         }
+        /* Pull every pending guest belonging to host i into `batch`,
+         * compacting the rest of the queue in place. A failed realloc just
+         * drops that one guest from this pass — it stays latched (fired)
+         * in the engine, so nothing re-queues it, but it also never gets
+         * acted on; logged loudly since that's a real gap, not just a
+         * skipped log line. */
+        int keep = 0;
+        for (int k = 0; k < P.pending_guest_n; k++) {
+            if (P.pending_guests[k].host == i) {
+                pending_guest_t *grown = realloc(batch, (size_t)(batch_n + 1) * sizeof(*grown));
+                if (grown) {
+                    batch = grown;
+                    batch[batch_n++] = P.pending_guests[k];
+                } else {
+                    ESP_LOGE(TAG, "out of memory: guest %d on host %d dropped from this pass",
+                             P.pending_guests[k].id, i);
+                }
+            } else {
+                P.pending_guests[keep++] = P.pending_guests[k];
+            }
+        }
+        P.pending_guest_n = keep;
+        cfg = P.cfg;
         xSemaphoreGive(P.lock);
 
-        run_host(i, &cfg, node_pending, guest_mask, reason, greason);
+        run_host(i, &cfg, node_pending, batch, batch_n, reason);
+        free(batch);
     }
     vTaskDelete(NULL);
 }
@@ -516,40 +599,65 @@ static void worker_task(void *arg)
 /* Public                                                              */
 /* ------------------------------------------------------------------ */
 
-int pve_shutdown_start(const pve_config_t *cfg, pve_event_cb_t cb, void *user)
+/* Frees every host's guest list in `guests` — used when a caller hands
+ * pve_shutdown_start/reconfigure a list this module won't end up keeping
+ * (already started; not started yet). */
+static void free_guest_lists(pve_guest_list_t guests[PVE_MAX_HOSTS])
+{
+    for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+        free(guests[i].items);
+    }
+}
+
+int pve_shutdown_start(const pve_config_t *cfg, pve_guest_list_t guests[PVE_MAX_HOSTS],
+                       pve_event_cb_t cb, void *user)
 {
     if (P.started) {
+        free_guest_lists(guests);
         return 0;
     }
     P.lock = xSemaphoreCreateMutex();
     if (!P.lock) {
+        free_guest_lists(guests);
         return -1;
     }
     P.cfg = *cfg;
     P.cb = cb;
     P.cb_user = user;
     memset(&P.eng, 0, sizeof(P.eng));
+    for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+        P.guests[i] = guests[i];   /* take ownership of .items */
+        pve_engine_sync_guests(&P.eng.guests[i], &P.guests[i]);
+    }
     P.started = true;
     if (cfg->enabled) {
         for (int i = 0; i < PVE_MAX_HOSTS; i++) {
             const pve_host_t *h = &cfg->hosts[i];
             if (!h->enabled) continue;
-            ESP_LOGI(TAG, "%s: %s â on battery %u min / charge <= %u%%%s",
+            ESP_LOGI(TAG, "%s: %s \xE2\x80\x94 on battery %u min / charge <= %u%%%s (%d guest rule%s)",
                      h->node, cfg->armed ? "ARMED" : "dry run",
                      (unsigned)h->on_battery_min, (unsigned)h->charge_pct,
-                     h->fingerprint[0] ? "" : " (NOT PINNED)");
+                     h->fingerprint[0] ? "" : " (NOT PINNED)",
+                     P.guests[i].n, P.guests[i].n == 1 ? "" : "s");
         }
     }
     return 0;
 }
 
-void pve_shutdown_reconfigure(const pve_config_t *cfg)
+void pve_shutdown_reconfigure(const pve_config_t *cfg, pve_guest_list_t guests[PVE_MAX_HOSTS])
 {
     if (!P.started) {
+        free_guest_lists(guests);
         return;
     }
     xSemaphoreTake(P.lock, portMAX_DELAY);
     P.cfg = *cfg;
+    for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+        free(P.guests[i].items);
+        P.guests[i] = guests[i];   /* take ownership of .items */
+        pve_engine_sync_guests(&P.eng.guests[i], &P.guests[i]);
+        prune_guest_last(i);
+    }
     xSemaphoreGive(P.lock);
 }
 
@@ -564,28 +672,37 @@ void pve_shutdown_observe(bool known, bool on_mains, int soc_pct)
     };
 
     xSemaphoreTake(P.lock, portMAX_DELAY);
-    pve_fire_t fire = pve_eval(&P.cfg, &P.eng, &obs, esp_timer_get_time());
+    pve_fire_t fire = pve_eval(&P.cfg, P.guests, &P.eng, &obs, esp_timer_get_time());
     bool any = fire.hosts != 0;
-    for (int i = 0; i < PVE_MAX_HOSTS && !any; i++) {
-        any = fire.guests[i] != 0;
+    for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+        if (fire.hosts & (1u << i)) {
+            ESP_LOGW(TAG, "%s: trigger \xE2\x80\x94 %s (%s)", P.cfg.hosts[i].node,
+                     P.eng.reason[i], P.cfg.armed ? "ARMED" : "dry run");
+        }
+        for (int g = 0; g < P.eng.guests[i].n; g++) {
+            pve_guest_engine_t *gs = &P.eng.guests[i].items[g];
+            if (!gs->fired_now) continue;
+            any = true;
+            pending_guest_t *grown = realloc(P.pending_guests,
+                                             (size_t)(P.pending_guest_n + 1) * sizeof(*grown));
+            if (!grown) {
+                ESP_LOGE(TAG, "out of memory: guest %d trigger on %s dropped",
+                         gs->id, P.cfg.hosts[i].node);
+                continue;
+            }
+            P.pending_guests = grown;
+            P.pending_guests[P.pending_guest_n].host = i;
+            P.pending_guests[P.pending_guest_n].id = gs->id;
+            strlcpy(P.pending_guests[P.pending_guest_n].reason, gs->reason,
+                   sizeof(P.pending_guests[0].reason));
+            P.pending_guest_n++;
+            ESP_LOGW(TAG, "%s: guest %d trigger \xE2\x80\x94 %s (%s)",
+                     P.cfg.hosts[i].node, gs->id, gs->reason, P.cfg.armed ? "ARMED" : "dry run");
+        }
     }
     bool start = false;
     if (any) {
         P.pending_hosts |= fire.hosts;
-        for (int i = 0; i < PVE_MAX_HOSTS; i++) {
-            P.pending_guests[i] |= fire.guests[i];
-            if (fire.hosts & (1u << i)) {
-                ESP_LOGW(TAG, "%s: trigger \xE2\x80\x94 %s (%s)", P.cfg.hosts[i].node,
-                         P.eng.reason[i], P.cfg.armed ? "ARMED" : "dry run");
-            }
-            for (int g = 0; g < PVE_MAX_GUESTS; g++) {
-                if (fire.guests[i] & (1u << g)) {
-                    ESP_LOGW(TAG, "%s: guest %d trigger \xE2\x80\x94 %s (%s)",
-                             P.cfg.hosts[i].node, P.cfg.hosts[i].guests[g].id,
-                             P.eng.guest_reason[i][g], P.cfg.armed ? "ARMED" : "dry run");
-                }
-            }
-        }
         if (!P.running) {
             P.running = true;
             start = true;
@@ -611,9 +728,6 @@ void pve_shutdown_status(pve_status_t *out)
     out->on_battery_s = -1;
     for (int i = 0; i < PVE_MAX_HOSTS; i++) {
         out->hosts[i].countdown_s = -1;
-        for (int g = 0; g < PVE_MAX_GUESTS; g++) {
-            out->hosts[i].guests[g].countdown_s = -1;
-        }
     }
     if (!P.started) {
         return;
@@ -635,18 +749,50 @@ void pve_shutdown_status(pve_status_t *out)
         o->countdown_s = pve_countdown_s(&P.cfg, &P.eng, i, now);
         strlcpy(o->last, P.host_last[i].text, sizeof(o->last));
         o->last_ok = P.host_last[i].ok;
-        for (int g = 0; g < PVE_MAX_GUESTS; g++) {
-            const pve_guest_t *gg = &h->guests[g];
-            pve_guest_status_t *go = &o->guests[g];
-            go->id = gg->id;
-            go->enabled = gg->enabled && gg->id != 0;
-            go->fired = P.eng.guest_fired[i][g];
-            go->countdown_s = pve_guest_countdown_s(&P.cfg, &P.eng, i, g, now);
-            strlcpy(go->last, P.guest_last[i][g].text, sizeof(go->last));
-            go->last_ok = P.guest_last[i][g].ok;
+    }
+    xSemaphoreGive(P.lock);
+}
+
+void pve_shutdown_guest_status(int i, pve_guest_status_t **out, int *n)
+{
+    *out = NULL;
+    *n = 0;
+    if (i < 0 || i >= PVE_MAX_HOSTS || !P.started) {
+        return;
+    }
+    int64_t now = esp_timer_get_time();
+    xSemaphoreTake(P.lock, portMAX_DELAY);
+    int count = P.guests[i].n;
+    pve_guest_status_t *arr = count > 0 ? malloc((size_t)count * sizeof(*arr)) : NULL;
+    if (count > 0 && !arr) {
+        xSemaphoreGive(P.lock);
+        return;
+    }
+    for (int g = 0; g < count; g++) {
+        int id = P.guests[i].items[g].id;
+        pve_guest_status_t *go = &arr[g];
+        go->id = id;
+        go->fired = false;
+        for (int k = 0; k < P.eng.guests[i].n; k++) {
+            if (P.eng.guests[i].items[k].id == id) {
+                go->fired = P.eng.guests[i].items[k].fired;
+                break;
+            }
+        }
+        go->countdown_s = pve_guest_countdown_s(&P.cfg, &P.eng, &P.guests[i], i, id, now);
+        go->last[0] = '\0';
+        go->last_ok = true;
+        for (int k = 0; k < P.guest_last_n[i]; k++) {
+            if (P.guest_last[i][k].id == id) {
+                strlcpy(go->last, P.guest_last[i][k].text, sizeof(go->last));
+                go->last_ok = P.guest_last[i][k].ok;
+                break;
+            }
         }
     }
     xSemaphoreGive(P.lock);
+    *out = arr;
+    *n = count;
 }
 
 /* ------------------------------------------------------------------ */
@@ -663,8 +809,8 @@ static bool has_priv(cJSON *data, const char *path, const char *priv)
     return v && ((cJSON_IsNumber(v) && v->valueint) || cJSON_IsTrue(v));
 }
 
-int pve_shutdown_test(pve_host_t *h, char *msg, size_t msg_sz,
-                      char seen_fp[96])
+int pve_shutdown_test(pve_host_t *h, const pve_guest_list_t *guests,
+                      char *msg, size_t msg_sz, char seen_fp[96])
 {
     char err[80] = "";
     seen_fp[0] = '\0';
@@ -711,7 +857,7 @@ int pve_shutdown_test(pve_host_t *h, char *msg, size_t msg_sz,
     if (r.status != 200) {
         snprintf(msg, msg_sz, "PVE %s reachable, but /access/permissions: HTTP %d",
                  ver, r.status);
-        ret = -1;
+        ret = 1;          /* connected fine; this part just didn't confirm */
         goto done;
     }
     j = cJSON_Parse(resp);
@@ -720,7 +866,7 @@ int pve_shutdown_test(pve_host_t *h, char *msg, size_t msg_sz,
         if (j) cJSON_Delete(j);
         snprintf(msg, msg_sz, "PVE %s reachable, permissions reply unreadable "
                               "(too long? the token should carry one role)", ver);
-        ret = -1;
+        ret = 1;
         goto done;
     }
 
@@ -730,12 +876,10 @@ int pve_shutdown_test(pve_host_t *h, char *msg, size_t msg_sz,
                    has_priv(d, "/", "Sys.PowerMgmt") ||
                    has_priv(d, "/nodes", "Sys.PowerMgmt") ||
                    has_priv(d, nodepath, "Sys.PowerMgmt");
-    int guests_missing = 0, guests = 0;
-    for (int g = 0; g < PVE_MAX_GUESTS; g++) {
-        if (!h->guests[g].enabled || h->guests[g].id == 0) continue;
+    int guests_missing = 0;
+    for (int g = 0; g < guests->n; g++) {
         char vp[24];
-        snprintf(vp, sizeof(vp), "/vms/%d", h->guests[g].id);
-        guests++;
+        snprintf(vp, sizeof(vp), "/vms/%d", guests->items[g].id);
         if (!has_priv(d, "/", "VM.PowerMgmt") && !has_priv(d, "/vms", "VM.PowerMgmt") &&
             !has_priv(d, vp, "VM.PowerMgmt")) {
             guests_missing++;
@@ -744,9 +888,8 @@ int pve_shutdown_test(pve_host_t *h, char *msg, size_t msg_sz,
     cJSON_Delete(j);
 
     if (node_ok && !guests_missing) {
-        snprintf(msg, msg_sz, "%sPVE %s: Sys.PowerMgmt ok%s",
-                 trusted_now ? "Certificate trusted (first connection). " : "",
-                 ver, guests ? ", VM.PowerMgmt ok for the guests" : "");
+        snprintf(msg, msg_sz, "PVE %s: Sys.PowerMgmt ok%s",
+                 ver, guests->n ? ", VM.PowerMgmt ok for the guests" : "");
         ret = 0;
         goto done;
     }
@@ -755,7 +898,7 @@ int pve_shutdown_test(pve_host_t *h, char *msg, size_t msg_sz,
              node_ok ? "" : "Sys.PowerMgmt not confirmed on /nodes",
              (!node_ok && guests_missing) ? "; " : "",
              guests_missing ? "VM.PowerMgmt missing for some guests" : "");
-    ret = -1;
+    ret = 1;              /* connected fine; a privilege just isn't confirmed */
 done:
     free(resp);
     return ret;

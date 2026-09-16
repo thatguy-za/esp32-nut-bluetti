@@ -31,6 +31,24 @@ static const char *TAG = "app_config";
  *  10: each host's free-text guest list became per-guest rule slots
  *      (id + its own triggers). Layout changed again; v8 and v9 blocks are
  *      both reset to defaults on load.
+ *  11: the guest rule array grew from 8 to 32 slots per host (the actual
+ *      ceiling — one bit per guest in the engine's 32-bit fire bitmask).
+ *      Layout changed again; v8, v9 and v10 blocks are all reset.
+ *  12: guest rules moved out of app_config_t entirely — each host's list
+ *      is now its own NVS blob (app_config_pve_guests_load/save), sized to
+ *      however many are configured, not a compile-time cap. pve_host_t
+ *      shrank; v8 through v11 blocks are all reset (their Proxmox settings,
+ *      not their guest data — that lived inside the block being discarded
+ *      and was never written to the new per-host keys, so it simply isn't
+ *      there to read; nothing further to erase).
+ *  13: added tg_on_pve (Telegram: a Proxmox host/guest shutdown). Appended
+ *      after pve, not grouped with the other tg_on_* flags — layout is
+ *      append-only and pve has to stay the field appended just before it.
+ *  14: split tg_on_pve into tg_on_pve_host and tg_on_pve_guest. A v13 blob
+ *      is kept, not reset — tg_on_pve_host lands on the old field's byte
+ *      (so a v13 device's combined on/off carries over as its new "host"
+ *      setting), and tg_on_pve_guest, new past the old struct's end, comes
+ *      up at its pre-seeded default.
  *
  * From v3 on, fields are only ever appended, and a stored blob of an
  * older-but-recognised version (3 to 7) is kept: the bytes that were
@@ -38,7 +56,7 @@ static const char *TAG = "app_config";
  * up at their defaults. A newer, much older, or unreadable blob is still
  * discarded.
  */
-#define CFG_VERSION 10u
+#define CFG_VERSION 14u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -76,6 +94,91 @@ void app_config_pve_defaults(pve_config_t *pv)
     }
 }
 
+/* One host's guest rules, kept out of the main blob so there's no
+ * compile-time cap on how many. Key "pveg0".."pveg3" — well under NVS's
+ * 15-character key limit even at PVE_MAX_HOSTS well past 4. */
+static void guest_key(int host_i, char out[8])
+{
+    snprintf(out, 8, "pveg%d", host_i);
+}
+
+void app_config_pve_guests_load(int host_i, pve_guest_t **out, int *n)
+{
+    *out = NULL;
+    *n = 0;
+    if (host_i < 0 || host_i >= PVE_MAX_HOSTS) {
+        return;
+    }
+    nvs_handle_t h;
+    if (nvs_open(CFG_NS, NVS_READONLY, &h) != ESP_OK) {
+        return;   /* nothing stored yet at all: no rules, not an error */
+    }
+    char key[8];
+    guest_key(host_i, key);
+    size_t len = 0;
+    esp_err_t err = nvs_get_blob(h, key, NULL, &len);
+    if (err != ESP_OK || len == 0 || len % sizeof(pve_guest_t) != 0) {
+        nvs_close(h);
+        return;
+    }
+    pve_guest_t *buf = malloc(len);
+    if (!buf) {
+        ESP_LOGE(TAG, "no memory to load host %d's guest rules", host_i);
+        nvs_close(h);
+        return;
+    }
+    err = nvs_get_blob(h, key, buf, &len);
+    nvs_close(h);
+    if (err != ESP_OK) {
+        free(buf);
+        return;
+    }
+    *out = buf;
+    *n = (int)(len / sizeof(pve_guest_t));
+}
+
+esp_err_t app_config_pve_guests_save(int host_i, const pve_guest_t *arr, int n)
+{
+    if (host_i < 0 || host_i >= PVE_MAX_HOSTS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(CFG_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    char key[8];
+    guest_key(host_i, key);
+    if (n <= 0 || !arr) {
+        err = nvs_erase_key(h, key);
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            err = ESP_OK;
+        }
+    } else {
+        err = nvs_set_blob(h, key, arr, (size_t)n * sizeof(pve_guest_t));
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    return err;
+}
+
+void app_config_pve_guests_erase_all(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(CFG_NS, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+        char key[8];
+        guest_key(i, key);
+        nvs_erase_key(h, key);   /* NOT_FOUND is fine: nothing to erase */
+    }
+    nvs_commit(h);
+    nvs_close(h);
+}
+
 void app_config_defaults(app_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
@@ -94,6 +197,8 @@ void app_config_defaults(app_config_t *cfg)
     cfg->tg_on_power = true;             /* the events worth waking for */
     cfg->tg_on_low_batt = true;
     cfg->tg_on_link = false;
+    cfg->tg_on_pve_host = true;           /* a host or guest going down is */
+    cfg->tg_on_pve_guest = true;          /* worth it too */
     strlcpy(cfg->nut_user, "upsmon", sizeof(cfg->nut_user));
     /* A fresh device ships with a per-unit NUT password, "bluetti<XXXX>"
      * (XXXX = last two MAC bytes), so LOGIN is not wide open out of the
@@ -180,12 +285,13 @@ esp_err_t app_config_load(app_config_t *cfg)
     *cfg = blob->cfg;
     uint32_t stored_version = blob->version;
     free(blob);
-    if (stored_version == 8u || stored_version == 9u) {
+    if (stored_version >= 8u && stored_version <= 11u) {
         /* v8's Proxmox block had global triggers and a different host
-         * layout; v9 replaced a free-text guest list with per-guest rule
-         * slots. Neither's bytes mean what v10's do. Off and dry-run is
-         * the only safe reading of a block we cannot interpret. */
-        ESP_LOGW(TAG, "config v%u: Proxmox settings reset (host layout changed in v10)",
+         * layout; v9 replaced a free-text guest list with 8 per-guest rule
+         * slots; v10 grew that to 32; v11 moved guest rules out of the
+         * block entirely. None of their bytes mean what v12's do. Off and
+         * dry-run is the only safe reading of a block we cannot interpret. */
+        ESP_LOGW(TAG, "config v%u: Proxmox settings reset (host layout changed in v12)",
                  (unsigned)stored_version);
         app_config_pve_defaults(&cfg->pve);
     }
@@ -227,6 +333,7 @@ esp_err_t app_config_save(const app_config_t *cfg)
 
 esp_err_t app_config_erase(void)
 {
+    app_config_pve_guests_erase_all();
     nvs_handle_t h;
     esp_err_t err = nvs_open(CFG_NS, NVS_READWRITE, &h);
     if (err != ESP_OK) {

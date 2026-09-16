@@ -101,6 +101,15 @@ typedef struct {
      * token secrets live in here in the clear, like the Telegram token;
      * they are never sent back out through the config JSON. */
     pve_config_t pve;
+
+    /* Telegram: a host shutdown, and a guest shutdown, pve_shutdown fires
+     * (or would, in dry run) — separate toggles, so a guest-heavy setup
+     * doesn't have to choose between silence and one alert per VM/CT.
+     * Grouped with the other tg_on_* flags above in spirit, but appended
+     * here — layout is append-only, and pve must stay the last field
+     * appended before them. */
+    bool     tg_on_pve_host;
+    bool     tg_on_pve_guest;
 } app_config_t;
 
 /* How long the station has to be down before the fallback AP comes up.
@@ -127,6 +136,20 @@ void app_config_defaults(app_config_t *cfg);
 
 /* Just the Proxmox block: off, dry run, 30 min / 10 % per host. */
 void app_config_pve_defaults(pve_config_t *pv);
+
+/* One host's guest rules — stored as their own NVS blob per host, not in
+ * app_config_t, since there's no compile-time cap on how many a host can
+ * have. `*out` is malloc'd (NULL if `*n` comes back 0); the caller frees
+ * it. Never fails outright: a missing/corrupt blob just reads as no rules. */
+void app_config_pve_guests_load(int host_i, pve_guest_t **out, int *n);
+
+/* Replaces host `host_i`'s stored guest rules with `arr` (n entries; n=0
+ * or arr=NULL erases the blob rather than storing an empty one). */
+esp_err_t app_config_pve_guests_save(int host_i, const pve_guest_t *arr, int n);
+
+/* Erases every host's stored guest rules — used when the whole Proxmox
+ * block resets (an old config version, or the user clearing a host). */
+void app_config_pve_guests_erase_all(void);
 
 /* Defaults, then overlay any values stored in NVS. Always succeeds
  * (falls back to defaults on a missing/corrupt blob). */

@@ -623,17 +623,25 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r);
 static esp_err_t h_admin_credentials(httpd_req_t *r);
 
 /* POST /api/pve-test — check one Proxmox host with the posted (or stored)
- * settings. Blocking. Reply: {"ok":bool,"pinned":bool,"msg":"…","fp":"AB:CD:…"|""}
- * where fp carries the fingerprint only when this call is the one that just
+ * settings. Blocking. Reply:
+ *   {"ok":bool,"connected":bool,"pinned":bool,"msg":"…","fp":"AB:CD:…"|""}
+ * `connected` is true whenever the certificate is trusted and PVE answered
+ * at all, even if `ok` is false because a privilege wasn't confirmed — the
+ * page shows that as a green checkmark plus a warning, not a red failure.
+ * `fp` carries the fingerprint only when this call is the one that just
  * trusted it (first connection, or after "Forget"), for the form to keep. */
 static bool pve_host_from_form(const char *, int, pve_host_t *,
                                const pve_host_t *, char *, size_t);
+static void pve_guests_from_form(const char *body, int i, pve_guest_list_t *out);
+
 /* Shared by the test and guest-list endpoints: read the posted host into
- * `h`, validated as if enabled. */
-static esp_err_t pve_read_host(httpd_req_t *r, pve_host_t *h, int *idx)
+ * `h` (validated as if enabled) and its posted guest rules into `guests`
+ * — the caller must free `guests->items`. */
+static esp_err_t pve_read_host(httpd_req_t *r, pve_host_t *h,
+                               pve_guest_list_t *guests, int *idx)
 {
     int len = r->content_len;
-    if (len <= 0 || len > 1024) {
+    if (len <= 0 || len > 65536) {
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
     }
     char *body = calloc(1, len + 1);
@@ -655,6 +663,7 @@ static esp_err_t pve_read_host(httpd_req_t *r, pve_host_t *h, int *idx)
     *h = P.cfg->pve.hosts[i];
     char err[80] = "";
     bool ok = pve_host_from_form(body, i, h, &P.cfg->pve.hosts[i], err, sizeof(err));
+    pve_guests_from_form(body, i, guests);
     memset(body, 0, len);
     free(body);
     h->enabled = true;
@@ -664,6 +673,8 @@ static esp_err_t pve_read_host(httpd_req_t *r, pve_host_t *h, int *idx)
         snprintf(err, sizeof(err), "URL (https://\xE2\x80\xA6), node, token ID and secret are required");
     }
     if (!ok) {
+        free(guests->items);
+        *guests = (pve_guest_list_t){ 0 };
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, err);
     }
     *idx = i;
@@ -675,8 +686,10 @@ static esp_err_t h_pve_guests(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
     pve_host_t h;
+    pve_guest_list_t guests = { 0 };
     int i;
-    esp_err_t rc = pve_read_host(r, &h, &i);
+    esp_err_t rc = pve_read_host(r, &h, &guests, &i);
+    free(guests.items);   /* not needed for the live listing */
     if (rc != ESP_OK) {
         return rc;                      /* already answered */
     }
@@ -701,20 +714,24 @@ static esp_err_t h_pve_test(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
     pve_host_t h;
+    pve_guest_list_t guests = { 0 };
     int i;
-    esp_err_t rc = pve_read_host(r, &h, &i);
+    esp_err_t rc = pve_read_host(r, &h, &guests, &i);
     if (rc != ESP_OK) {
         return rc;                      /* already answered */
     }
     char msg[200], fp[96];
-    int t = pve_shutdown_test(&h, msg, sizeof(msg), fp);
+    int t = pve_shutdown_test(&h, &guests, msg, sizeof(msg), fp);
+    free(guests.items);
     pve_shutdown_note_test(i, t == 0, msg);
     bool pinned = h.fingerprint[0] != '\0';
     memset(&h, 0, sizeof(h));
 
-    char out[360];
-    snprintf(out, sizeof(out), "{\"ok\":%s,\"pinned\":%s,\"msg\":\"%s\",\"fp\":\"%s\"}",
-             t == 0 ? "true" : "false", pinned ? "true" : "false", msg, fp);
+    char out[380];
+    snprintf(out, sizeof(out),
+             "{\"ok\":%s,\"connected\":%s,\"pinned\":%s,\"msg\":\"%s\",\"fp\":\"%s\"}",
+             t == 0 ? "true" : "false", t >= 0 ? "true" : "false",
+             pinned ? "true" : "false", msg, fp);
     return send_json(r, out);
 }
 /* POST /api/notify-test — send a Telegram message with the posted (or
@@ -941,11 +958,11 @@ static esp_err_t h_admin_status(httpd_req_t *r)
     int rt_s = nut_server_get_var("battery.runtime", runtime, sizeof(runtime))
                    ? atoi(runtime) : -1;
 
-    char *out = malloc(5500);
+    char *out = malloc(16000);
     if (!out) {
         return httpd_resp_send_500(r);
     }
-    int n = snprintf(out, 5500,
+    int n = snprintf(out, 16000,
              "{\"wifi_mode\":\"%s\",\"network\":\"%s\",\"ip\":\"%s\","
              "\"addressing\":\"%s\",\"gateway\":\"%s\",\"dns\":\"%s\","
              "\"hostname\":\"%s\","
@@ -988,39 +1005,39 @@ static esp_err_t h_admin_status(httpd_req_t *r)
      * in over the closing brace so the block above stays one snprintf. */
     pve_status_t ps;
     pve_shutdown_status(&ps);
-    if (n > 0 && n < 5500 && out[n - 1] == '}') {
+    if (n > 0 && n < 16000 && out[n - 1] == '}') {
         n--;
     }
-    n += snprintf(out + n, 5500 - n,
+    n += snprintf(out + n, 16000 - n,
                   ",\"pve\":{\"enabled\":%s,\"armed\":%s,\"on_battery_s\":%d,\"hosts\":[",
                   ps.enabled ? "true" : "false", ps.armed ? "true" : "false",
                   ps.on_battery_s);
-    for (int i = 0; i < PVE_MAX_HOSTS && n < 5500; i++) {
+    for (int i = 0; i < PVE_MAX_HOSTS && n < 16000; i++) {
         const pve_host_status_t *h = &ps.hosts[i];
-        n += snprintf(out + n, 5500 - n,
+        n += snprintf(out + n, 16000 - n,
                       "%s{\"node\":\"%s\",\"enabled\":%s,\"pinned\":%s,"
                       "\"fired\":%s,\"countdown_s\":%d,\"last\":\"%s\",\"ok\":%s,"
                       "\"guests\":[",
                       i ? "," : "", h->node, h->enabled ? "true" : "false",
                       h->pinned ? "true" : "false", h->fired ? "true" : "false",
                       h->countdown_s, h->last, h->last_ok ? "true" : "false");
-        bool gfirst = true;
-        for (int g = 0; g < PVE_MAX_GUESTS && n < 5500; g++) {
-            const pve_guest_status_t *go = &h->guests[g];
-            if (!go->enabled) continue;
-            n += snprintf(out + n, 5500 - n,
+        pve_guest_status_t *gs = NULL;
+        int gn = 0;
+        pve_shutdown_guest_status(i, &gs, &gn);
+        for (int g = 0; g < gn && n < 16000; g++) {
+            n += snprintf(out + n, 16000 - n,
                           "%s{\"id\":%d,\"fired\":%s,\"countdown_s\":%d,\"last\":\"%s\",\"ok\":%s}",
-                          gfirst ? "" : ",", go->id,
-                          go->fired ? "true" : "false", go->countdown_s, go->last,
-                          go->last_ok ? "true" : "false");
-            gfirst = false;
+                          g ? "," : "", gs[g].id,
+                          gs[g].fired ? "true" : "false", gs[g].countdown_s, gs[g].last,
+                          gs[g].last_ok ? "true" : "false");
         }
-        if (n < 5500) {
-            n += snprintf(out + n, 5500 - n, "]}");
+        free(gs);
+        if (n < 16000) {
+            n += snprintf(out + n, 16000 - n, "]}");
         }
     }
-    if (n < 5500) {
-        snprintf(out + n, 5500 - n, "]}}");
+    if (n < 16000) {
+        snprintf(out + n, 16000 - n, "]}}");
     }
     esp_err_t e = send_json(r, out);
     free(out);
@@ -1073,11 +1090,12 @@ static esp_err_t h_admin_config(httpd_req_t *r)
     REQUIRE_AUTH(r);
     char def_ap[33];
     wifi_mgr_default_ap_ssid(def_ap, sizeof(def_ap));
-    char *out = malloc(6500);  /* + four Proxmox hosts, each with up to 8 guest rules */
+    char *out = malloc(16000);  /* + four Proxmox hosts and their guest rules (no per-host cap;
+                                   a very large configured list is truncated here, not lost) */
     if (!out) {
         return httpd_resp_send_500(r);
     }
-    int n = snprintf(out, 6500,
+    int n = snprintf(out, 16000,
              "{\"ble_addr\":\"%s\",\"log_level\":%d,\"controls_enabled\":%s,"
              "\"ups_name\":\"%s\",\"nut_port\":%u,\"low_pct\":%u,\"poll_ms\":%u,"
              "\"nut_user\":\"%s\",\"nut_auth_set\":%s,"
@@ -1089,7 +1107,8 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              "\"static_mask\":\"%s\",\"static_gw\":\"%s\",\"static_dns\":\"%s\","
              "\"fb_ap_enabled\":%s,\"fb_ap_ssid\":\"%s\",\"has_fb_ap_pass\":%s,"
              "\"tg_enabled\":%s,\"tg_chat\":\"%s\",\"has_tg_token\":%s,"
-             "\"tg_on_power\":%s,\"tg_on_low_batt\":%s,\"tg_on_link\":%s}",
+             "\"tg_on_power\":%s,\"tg_on_low_batt\":%s,\"tg_on_link\":%s,"
+             "\"tg_on_pve_host\":%s,\"tg_on_pve_guest\":%s}",
              P.cfg->ble_addr,
              P.cfg->log_level,
              P.cfg->controls_enabled ? "true" : "false",
@@ -1111,18 +1130,20 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              P.cfg->tg_token[0] ? "true" : "false",
              P.cfg->tg_on_power ? "true" : "false",
              P.cfg->tg_on_low_batt ? "true" : "false",
-             P.cfg->tg_on_link ? "true" : "false");
+             P.cfg->tg_on_link ? "true" : "false",
+             P.cfg->tg_on_pve_host ? "true" : "false",
+             P.cfg->tg_on_pve_guest ? "true" : "false");
 
     /* Proxmox. Secrets are write-only: only "is one stored" goes out. */
     const pve_config_t *pv = &P.cfg->pve;
-    if (n > 0 && n < 6500 && out[n - 1] == '}') {
+    if (n > 0 && n < 16000 && out[n - 1] == '}') {
         n--;
     }
-    n += snprintf(out + n, 6500 - n,
+    n += snprintf(out + n, 16000 - n,
                   ",\"pve\":{\"enabled\":%s,\"armed\":%s,\"mains_back_min\":%u,\"hosts\":[",
                   pv->enabled ? "true" : "false", pv->armed ? "true" : "false",
                   (unsigned)pv->mains_back_min);
-    for (int i = 0; i < PVE_MAX_HOSTS && n < 6500; i++) {
+    for (int i = 0; i < PVE_MAX_HOSTS && n < 16000; i++) {
         const pve_host_t *h = &pv->hosts[i];
         char fp[96] = "";
         if (h->fingerprint[0]) {
@@ -1135,7 +1156,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
             }
             fp[o] = '\0';
         }
-        n += snprintf(out + n, 6500 - n,
+        n += snprintf(out + n, 16000 - n,
                       "%s{\"enabled\":%s,\"url\":\"%s\",\"node\":\"%s\","
                       "\"token_id\":\"%s\",\"has_secret\":%s,"
                       "\"guest_wait_s\":%u,\"shutdown_node\":%s,\"fingerprint\":\"%s\","
@@ -1144,23 +1165,22 @@ static esp_err_t h_admin_config(httpd_req_t *r)
                       h->token_id, h->secret[0] ? "true" : "false",
                       (unsigned)h->guest_wait_s, h->shutdown_node ? "true" : "false",
                       fp, (unsigned)h->on_battery_min, (unsigned)h->charge_pct);
-        bool gfirst = true;
-        for (int g = 0; g < PVE_MAX_GUESTS && n < 6500; g++) {
-            const pve_guest_t *gg = &h->guests[g];
-            if (gg->id == 0) continue;
-            n += snprintf(out + n, 6500 - n,
-                          "%s{\"id\":%d,\"enabled\":%s,\"on_battery_min\":%u,\"charge_pct\":%u}",
-                          gfirst ? "" : ",", gg->id,
-                          gg->enabled ? "true" : "false", (unsigned)gg->on_battery_min,
-                          (unsigned)gg->charge_pct);
-            gfirst = false;
+        pve_guest_t *gg = NULL;
+        int gn = 0;
+        app_config_pve_guests_load(i, &gg, &gn);
+        for (int g = 0; g < gn && n < 16000; g++) {
+            n += snprintf(out + n, 16000 - n,
+                          "%s{\"id\":%d,\"on_battery_min\":%u,\"charge_pct\":%u}",
+                          g ? "," : "", gg[g].id,
+                          (unsigned)gg[g].on_battery_min, (unsigned)gg[g].charge_pct);
         }
-        if (n < 6500) {
-            n += snprintf(out + n, 6500 - n, "]}");
+        free(gg);
+        if (n < 16000) {
+            n += snprintf(out + n, 16000 - n, "]}");
         }
     }
-    if (n < 6500) {
-        snprintf(out + n, 6500 - n, "]}}");
+    if (n < 16000) {
+        snprintf(out + n, 16000 - n, "]}}");
     }
     esp_err_t e = send_json(r, out);
     free(out);
@@ -1229,22 +1249,55 @@ static esp_err_t h_admin_credentials(httpd_req_t *r)
     return send_json(r, "{\"ok\":true}");
 }
 
-/* One guest rule slot, prefixed "hN_gG_". An id of 0 (blank or unset) is an
- * empty slot regardless of what else was posted for it. */
-static void pve_guest_from_form(const char *body, int i, int g, pve_guest_t *gg)
+/* A host's guest rules, prefixed "hN_gG_", G = 0..count-1 — no per-host
+ * cap, so the count itself is posted ("hN_gcount") rather than assumed.
+ * An entry with no positive id is skipped rather than stored: presence in
+ * the list is what "configured" means now, there's no separate enabled
+ * flag or reserved empty-slot id. `out->items` is malloc'd (or NULL if
+ * nothing valid was posted); the caller frees it. */
+static void pve_guests_from_form(const char *body, int i, pve_guest_list_t *out)
 {
+    out->items = NULL;
+    out->n = 0;
     char k[24], v[16];
-#define GK(name) (snprintf(k, sizeof(k), "h%d_g%d_%s", i, g, name), k)
-    gg->id = form_get(body, GK("id"), v, sizeof(v)) ? atoi(v) : 0;
-    gg->enabled = form_get(body, GK("on"), v, sizeof(v)) && v[0] == '1';
-    gg->on_battery_min = (form_get(body, GK("min"), v, sizeof(v)) &&
-                         atoi(v) >= 0 && atoi(v) <= 1440) ? (uint16_t)atoi(v) : 0;
-    gg->charge_pct = (form_get(body, GK("pct"), v, sizeof(v)) &&
-                     atoi(v) >= 0 && atoi(v) <= 100) ? (uint8_t)atoi(v) : 0;
-#undef GK
-    if (gg->id <= 0) {
-        memset(gg, 0, sizeof(*gg));
+    snprintf(k, sizeof(k), "h%d_gcount", i);
+    if (!form_get(body, k, v, sizeof(v))) {
+        return;
     }
+    long count = strtol(v, NULL, 10);
+    /* A sanity cap against a malformed or hostile count, not a feature
+     * limit — nothing about the storage or the engine stops here. */
+    if (count <= 0) {
+        return;
+    }
+    if (count > 10000) {
+        count = 10000;
+    }
+    pve_guest_t *arr = malloc((size_t)count * sizeof(*arr));
+    if (!arr) {
+        return;
+    }
+    int n = 0;
+    for (long g = 0; g < count; g++) {
+#define GK(name) (snprintf(k, sizeof(k), "h%d_g%ld_%s", i, g, name), k)
+        int id = form_get(body, GK("id"), v, sizeof(v)) ? atoi(v) : 0;
+        if (id <= 0) {
+            continue;
+        }
+        arr[n].id = id;
+        arr[n].on_battery_min = (form_get(body, GK("min"), v, sizeof(v)) &&
+                                atoi(v) >= 0 && atoi(v) <= 1440) ? (uint16_t)atoi(v) : 0;
+        arr[n].charge_pct = (form_get(body, GK("pct"), v, sizeof(v)) &&
+                            atoi(v) >= 0 && atoi(v) <= 100) ? (uint8_t)atoi(v) : 0;
+        n++;
+#undef GK
+    }
+    if (n == 0) {
+        free(arr);
+        arr = NULL;
+    }
+    out->items = arr;
+    out->n = n;
 }
 
 /* Read a host's fields from a form body, prefixed "hN_". Blank secret and
@@ -1267,9 +1320,6 @@ static bool pve_host_from_form(const char *body, int i, pve_host_t *h,
     form_get(body, HK("url"), h->url, sizeof(h->url));
     form_get(body, HK("node"), h->node, sizeof(h->node));
     form_get(body, HK("token"), h->token_id, sizeof(h->token_id));
-    for (int g = 0; g < PVE_MAX_GUESTS; g++) {
-        pve_guest_from_form(body, i, g, &h->guests[g]);
-    }
     h->shutdown_node = form_get(body, HK("node_off"), v, sizeof(v)) && v[0] == '1';
     if (form_get(body, HK("wait"), v, sizeof(v)) && atoi(v) >= 0) {
         h->guest_wait_s = (uint16_t)atoi(v);
@@ -1325,7 +1375,11 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
     int len = r->content_len;
-    if (len <= 0 || len > 4096) {
+    /* Every other section fits comfortably under 4 KB; the "pve" section
+     * can carry an unbounded number of guest rules, so its ceiling is much
+     * higher (matching pve_read_host's, and the sanity cap in
+     * pve_guests_from_form). */
+    if (len <= 0 || len > 65536) {
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad body");
     }
     char *body = malloc(len + 1);
@@ -1518,17 +1572,44 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         }
         char err[80] = "";
         bool ok = true;
+        /* Guest rules live outside app_config_t; parsed here and saved
+         * separately below, once every host's validated. */
+        pve_guest_list_t guests[PVE_MAX_HOSTS] = { 0 };
+        bool save_guests[PVE_MAX_HOSTS] = { false };
         /* Switched off: keep the hosts exactly as stored, so turning the
          * feature off and on again does not mean re-entering four tokens.
          * (A missing form key reads as blank, which would wipe them.) */
         for (int i = 0; pv->enabled && i < PVE_MAX_HOSTS && ok; i++) {
             ok = pve_host_from_form(body, i, &pv->hosts[i], &P.cfg->pve.hosts[i],
                                     err, sizeof(err));
+            if (!ok) {
+                break;
+            }
+            char ck[24], cv[8] = "";
+            snprintf(ck, sizeof(ck), "h%d_clear", i);
+            if (form_get(body, ck, cv, sizeof(cv)) && cv[0] == '1') {
+                /* "Remove": wipe this slot's guest rules too, rather than
+                 * leaving them to reappear if the slot is reused. guests[i]
+                 * stays {NULL,0} — saving that erases the stored blob. */
+                save_guests[i] = true;
+            } else if (pv->hosts[i].enabled) {
+                pve_guests_from_form(body, i, &guests[i]);
+                save_guests[i] = true;
+            }
         }
         memset(body, 0, len);
         free(body);
         if (!ok) {
+            for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+                free(guests[i].items);
+            }
             return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, err);
+        }
+        for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+            if (save_guests[i]) {
+                app_config_pve_guests_save(i, guests[i].items, guests[i].n);
+            }
+            free(guests[i].items);
         }
 
     /* ---- Telegram notifications ---- */
@@ -1546,6 +1627,10 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
             form_get(body, "tg_on_low_batt", v, sizeof(v)) && v[0] == '1';
         P.pending.tg_on_link =
             form_get(body, "tg_on_link", v, sizeof(v)) && v[0] == '1';
+        P.pending.tg_on_pve_host =
+            form_get(body, "tg_on_pve_host", v, sizeof(v)) && v[0] == '1';
+        P.pending.tg_on_pve_guest =
+            form_get(body, "tg_on_pve_guest", v, sizeof(v)) && v[0] == '1';
         memset(body, 0, len);
         free(body);
 
@@ -1565,6 +1650,35 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
     if (app_config_save(P.cfg) != ESP_OK) {
         return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
                                    "could not save config");
+    }
+    if (strcmp(section, "pve") == 0) {
+        /* Applies live: nothing here needs a subsystem re-initialized the
+         * way Wi-Fi or the NUT server would, and a reboot mid-outage would
+         * briefly drop the very NUT clients this feature exists to protect
+         * — right when someone might be adjusting a trigger or arming it. */
+        pve_guest_list_t live_guests[PVE_MAX_HOSTS] = { 0 };
+        for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+            app_config_pve_guests_load(i, &live_guests[i].items, &live_guests[i].n);
+        }
+        pve_shutdown_reconfigure(&P.cfg->pve, live_guests);
+        ESP_LOGW(TAG, "'pve' settings changed via web; applied live, no reboot");
+        return send_json(r, "{\"ok\":true,\"reboot\":false}");
+    }
+    if (strcmp(section, "notify") == 0) {
+        /* Also applies live — notify_reconfigure() swaps the whole config
+         * under its own lock, and a bad token/chat only fails the next
+         * send, not a reboot. */
+        notify_config_t ncfg = {
+            .enabled = P.cfg->tg_enabled,
+            .on_power = P.cfg->tg_on_power,
+            .on_low_batt = P.cfg->tg_on_low_batt,
+            .on_link = P.cfg->tg_on_link,
+        };
+        strlcpy(ncfg.bot_token, P.cfg->tg_token, sizeof(ncfg.bot_token));
+        strlcpy(ncfg.chat_id, P.cfg->tg_chat, sizeof(ncfg.chat_id));
+        notify_reconfigure(&ncfg);
+        ESP_LOGW(TAG, "'notify' settings changed via web; applied live, no reboot");
+        return send_json(r, "{\"ok\":true,\"reboot\":false}");
     }
     ESP_LOGW(TAG, "'%s' settings changed via web; rebooting", section);
     send_json(r, "{\"ok\":true}");

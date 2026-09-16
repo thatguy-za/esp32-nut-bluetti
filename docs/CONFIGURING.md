@@ -188,6 +188,8 @@ the Elite 10 Mini; the writes are the untested half.
 | Mains lost / restored | on |
 | Battery low (crosses the NUT low-battery threshold) | on |
 | Bluetti unit unreachable / back | off |
+| Proxmox host shutdowns (dry-run fires included) | on |
+| Proxmox guest (VM/CT) shutdowns (dry-run fires included) | on |
 
 1. Message [@BotFather](https://t.me/BotFather), `/newbot`, copy the token.
 2. Message [@userinfobot](https://t.me/userinfobot) for your numeric chat ID
@@ -203,6 +205,8 @@ keeps serving NUT and drops the message rather than stalling.
 Mains lost/restored fire only on genuine on-line ↔ on-battery transitions —
 coming back from a dropped link (a reboot, say) is silent unless the
 unreachable/back alert is on.
+
+**Save** on this tab applies immediately too — no reboot.
 
 ## Proxmox shutdown
 
@@ -246,9 +250,9 @@ self-contained:
 
 | | |
 | --- | --- |
-| **Connection** | API URL (`https://<node-ip>:8006`, **one per node** even in a cluster — a node that has already shut down can't proxy for the ones still to come), node name, token ID and API key (Proxmox's own two-field token — no certificate to type in, see below). The key is write-only: the page never shows it again. |
+| **Connection** | API URL (`https://<node-ip>:8006`, **one per node** even in a cluster — a node that has already shut down can't proxy for the ones still to come), node name, token ID and secret (Proxmox's own two-field token — no certificate to type in, see below). The secret is write-only: the page never shows it again. |
 | **Shut down when** | *On battery for N minutes* (default 30), timed on the bridge's own clock from the moment the mains drops; *or charge at or below N %* (default 10). Either one fires this host — the node itself, and any guest below with no trigger of its own. |
-| **Guests** | **Load guests** lists the node's VMs and containers as cards; switch one on to give it its own on-battery/charge trigger, independent of the host's. Up to 8 per host. Leave a card off and it still goes down, just carried along whenever the host's own trigger fires rather than on a clock of its own. |
+| **Guests** | **Load guests** lists the node's VMs and containers as cards; switch one on to give it its own on-battery/charge trigger, independent of the host's — no limit on how many. Leave a card off and it still goes down, just carried along whenever the host's own trigger fires rather than on a clock of its own. |
 
 Hosts — and guests with their own trigger — fire **independently**: each has
 its own countdown off the same shared outage and its own fire-once latch, so
@@ -267,7 +271,7 @@ instead, the way SSH trusts a server's host key the first time you connect —
 compare: nothing to check it *against* until the bridge has seen it once, so
 the page never shows or asks for one.
 
-1. Fill in the connection (URL, node, token ID, API key) and click **Test
+1. Fill in the connection (URL, node, token ID, secret) and click **Test
    connection**. On a host it hasn't seen before, the bridge completes the TLS
    handshake, trusts the certificate it was shown, and — in that same click —
    uses it to confirm the token's privileges and load the guest list.
@@ -292,6 +296,11 @@ one outage (or pull the Bluetti's mains plug) fire in dry run, check every host
 reads *ready* on the Status page, and only then switch to **Armed**. Saving
 armed asks you to confirm.
 
+**Save** on this tab applies immediately — no reboot, unlike the other tabs.
+Nothing here needs a subsystem restarted, and a reboot mid-outage would
+briefly drop the NUT clients this feature exists to protect, right when
+you might be adjusting a trigger.
+
 ### The safety model
 
 Borrowed wholesale from pve-ups, because it is right:
@@ -310,8 +319,10 @@ Borrowed wholesale from pve-ups, because it is right:
 - **The charge trigger needs a live reading**; a figure from before the link
   dropped says nothing about now. Only the timer fires blind.
 
-The **Status** page shows the mode and one line per host: *ready*, the
-countdown while on battery, *shutdown sent*, or what went wrong.
+The **Status** page shows one dot per host, alongside the BLE and NUT ones —
+green for *ready*, amber for untested/counting down/just fired, red for a
+failure. Hover a dot for the detail: the countdown while on battery,
+*shutdown sent*, or what went wrong.
 
 > **The token can power off servers.** Keep the bridge on the same trusted
 > network as the Proxmox web interface. The admin page's login is what stands

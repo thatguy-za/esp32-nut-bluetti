@@ -8,6 +8,7 @@
  * covered and needs a real host. */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -37,21 +38,66 @@ static pve_config_t base(void)
     return c;
 }
 
+/* No guest configured for any host, for the host-only scenarios below —
+ * pve_eval() now takes each host's guest list as a separate argument since
+ * there's no per-host cap to embed it against. */
+static pve_guest_list_t g_guests[PVE_MAX_HOSTS];
+
+/* Replaces host `host`'s configured guest list and keeps the engine's
+ * per-guest state matched to it, the way the runtime does after a save. */
+static void set_guests(pve_engine_t *e, int host, const pve_guest_t *arr, int n)
+{
+    free(g_guests[host].items);
+    g_guests[host].items = NULL;
+    g_guests[host].n = 0;
+    if (n > 0) {
+        g_guests[host].items = malloc((size_t)n * sizeof(pve_guest_t));
+        memcpy(g_guests[host].items, arr, (size_t)n * sizeof(pve_guest_t));
+        g_guests[host].n = n;
+    }
+    pve_engine_sync_guests(&e->guests[host], &g_guests[host]);
+}
+
+/* Frees everything set_guests() has allocated so far and zeroes the
+ * engine — the guest-scenario equivalent of `memset(&e, 0, sizeof e)`. */
+static void reset_engine(pve_engine_t *e)
+{
+    for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+        free(e->guests[i].items);
+        free(g_guests[i].items);
+        g_guests[i] = (pve_guest_list_t){ 0 };
+    }
+    memset(e, 0, sizeof *e);
+}
+
+static bool guest_fired(const pve_engine_t *e, int host, int id)
+{
+    for (int g = 0; g < e->guests[host].n; g++) {
+        if (e->guests[host].items[g].id == id) return e->guests[host].items[g].fired;
+    }
+    return false;
+}
+static bool guest_fired_now(const pve_engine_t *e, int host, int id)
+{
+    for (int g = 0; g < e->guests[host].n; g++) {
+        if (e->guests[host].items[g].id == id) return e->guests[host].items[g].fired_now;
+    }
+    return false;
+}
+static const char *guest_reason(const pve_engine_t *e, int host, int id)
+{
+    for (int g = 0; g < e->guests[host].n; g++) {
+        if (e->guests[host].items[g].id == id) return e->guests[host].items[g].reason;
+    }
+    return "";
+}
+
 static unsigned feed(const pve_config_t *c, pve_engine_t *e, pve_power_t pw,
                      int soc, int64_t t)
 {
     pve_obs_t o = { .power = pw, .soc_pct = soc };
-    return pve_eval(c, e, &o, t).hosts;
+    return pve_eval(c, g_guests, e, &o, t).hosts;
 }
-/* Full result, for tests that need the guest bits too. */
-static pve_fire_t feedf(const pve_config_t *c, pve_engine_t *e, pve_power_t pw,
-                        int soc, int64_t t)
-{
-    pve_obs_t o = { .power = pw, .soc_pct = soc };
-    return pve_eval(c, e, &o, t);
-}
-#define G0 (1u << 0)
-#define G1 (1u << 1)
 #define BATT PVE_PWR_BATTERY
 #define LINE PVE_PWR_LINE
 #define NONE PVE_PWR_UNKNOWN
@@ -190,82 +236,138 @@ int main(void)
     /* ==================================================================
      * Guests: each an independent countdown off the same shared edge,
      * with the node's own firing as a catch-all for anyone not already
-     * gone.
+     * gone. No per-host cap any more — a guest is "configured" by being
+     * present in the list at all, so there's no separate enabled flag and
+     * no reserved "empty slot" id.
      * ================================================================== */
 
     /* ---- a guest's own trigger fires it before the host ---- */
     c = base();   /* host 0: 30 min / 10% */
-    c.hosts[0].guests[0] = (pve_guest_t){ .id = 101, .enabled = true, .on_battery_min = 10 };
-    memset(&e, 0, sizeof e);
-    pve_fire_t f = feedf(&c, &e, BATT, 90, MIN(0));
-    OKF(f.hosts == 0 && f.guests[0] == 0, "t=0: nothing yet");
-    f = feedf(&c, &e, BATT, 85, MIN(10));
-    OKF(f.hosts == 0 && f.guests[0] == G0, "t=10: the guest fires on its own trigger, the host does not");
-    OKF(strstr(e.guest_reason[0][0], "10 min") != NULL, "guest reason: '%s'", e.guest_reason[0][0]);
-    OKF(e.guest_fired[0][0] && !e.fired[0], "guest latched, host not");
-    f = feedf(&c, &e, BATT, 70, MIN(30));
-    OKF(f.hosts == H0 && f.guests[0] == 0, "t=30: the host fires; the guest, already gone, is not repeated");
+    reset_engine(&e);
+    set_guests(&e, 0, (pve_guest_t[]){ { .id = 101, .on_battery_min = 10 } }, 1);
+    OKF(feed(&c, &e, BATT, 90, MIN(0)) == 0 && !guest_fired_now(&e, 0, 101), "t=0: nothing yet");
+    OKF(feed(&c, &e, BATT, 85, MIN(10)) == 0 && guest_fired_now(&e, 0, 101),
+        "t=10: the guest fires on its own trigger, the host does not");
+    OKF(strstr(guest_reason(&e, 0, 101), "10 min") != NULL, "guest reason: '%s'", guest_reason(&e, 0, 101));
+    OKF(guest_fired(&e, 0, 101) && !e.fired[0], "guest latched, host not");
+    OKF(feed(&c, &e, BATT, 70, MIN(30)) == H0 && !guest_fired_now(&e, 0, 101),
+        "t=30: the host fires; the guest, already gone, is not repeated");
 
     /* ---- a guest with neither trigger set only ever moves with the node ---- */
     c = base();
-    c.hosts[0].guests[0] = (pve_guest_t){ .id = 102, .enabled = true };  /* both triggers off */
-    memset(&e, 0, sizeof e);
-    feedf(&c, &e, BATT, 95, MIN(0));
-    OKF(feedf(&c, &e, BATT, 90, MIN(29)).guests[0] == 0, "t=29: no trigger of its own, quiet");
-    f = feedf(&c, &e, BATT, 89, MIN(30));
-    OKF(f.hosts == H0 && f.guests[0] == G0, "t=30: swept up the moment the node fires");
-    OKF(strstr(e.guest_reason[0][0], "with the node") != NULL, "reason says so: '%s'", e.guest_reason[0][0]);
+    reset_engine(&e);
+    set_guests(&e, 0, (pve_guest_t[]){ { .id = 102 } }, 1);   /* both triggers off */
+    feed(&c, &e, BATT, 95, MIN(0));
+    OKF(feed(&c, &e, BATT, 90, MIN(29)) == 0 && !guest_fired_now(&e, 0, 102),
+        "t=29: no trigger of its own, quiet");
+    OKF(feed(&c, &e, BATT, 89, MIN(30)) == H0 && guest_fired_now(&e, 0, 102),
+        "t=30: swept up the moment the node fires");
+    OKF(strstr(guest_reason(&e, 0, 102), "with the node") != NULL,
+        "reason says so: '%s'", guest_reason(&e, 0, 102));
 
     /* ---- two guests, two independent countdowns off the same edge ---- */
     c = base();
-    c.hosts[0].guests[0] = (pve_guest_t){ .id = 101, .enabled = true, .on_battery_min = 5 };
-    c.hosts[0].guests[1] = (pve_guest_t){ .id = 102, .enabled = true, .charge_pct = 50 };
-    memset(&e, 0, sizeof e);
-    OKF(pve_guest_countdown_s(&c, &e, 0, 0, MIN(0)) == -1, "no countdown before the edge");
-    feedf(&c, &e, BATT, 90, MIN(0));
-    OKF(pve_guest_countdown_s(&c, &e, 0, 0, MIN(0)) == 5 * 60, "guest 0: 5:00 to go");
-    OKF(pve_guest_countdown_s(&c, &e, 0, 1, MIN(0)) == -1, "guest 1 has no timer (charge only)");
-    f = feedf(&c, &e, BATT, 60, MIN(5));
-    OKF(f.guests[0] == G0, "guest 0 fires on its timer");
-    f = feedf(&c, &e, BATT, 50, MIN(6));
-    OKF(f.guests[0] == G1, "guest 1 fires on charge <= 50%%");
-    OKF(strstr(e.guest_reason[0][1], "50%") != NULL, "reason: '%s'", e.guest_reason[0][1]);
+    reset_engine(&e);
+    set_guests(&e, 0, (pve_guest_t[]){
+        { .id = 101, .on_battery_min = 5 },
+        { .id = 102, .charge_pct = 50 },
+    }, 2);
+    OKF(pve_guest_countdown_s(&c, &e, &g_guests[0], 0, 101, MIN(0)) == -1, "no countdown before the edge");
+    feed(&c, &e, BATT, 90, MIN(0));
+    OKF(pve_guest_countdown_s(&c, &e, &g_guests[0], 0, 101, MIN(0)) == 5 * 60, "guest 101: 5:00 to go");
+    OKF(pve_guest_countdown_s(&c, &e, &g_guests[0], 0, 102, MIN(0)) == -1, "guest 102 has no timer (charge only)");
+    OKF(feed(&c, &e, BATT, 60, MIN(5)) == 0 && guest_fired_now(&e, 0, 101) && !guest_fired_now(&e, 0, 102),
+        "guest 101 fires on its timer");
+    OKF(feed(&c, &e, BATT, 50, MIN(6)) == 0 && guest_fired_now(&e, 0, 102),
+        "guest 102 fires on charge <= 50%%");
+    OKF(strstr(guest_reason(&e, 0, 102), "50%") != NULL, "reason: '%s'", guest_reason(&e, 0, 102));
 
     /* ---- latches release together with the host's, on the shared mains-back edge ---- */
     c = base();
-    c.hosts[0].guests[0] = (pve_guest_t){ .id = 101, .enabled = true, .on_battery_min = 5 };
-    memset(&e, 0, sizeof e);
-    feedf(&c, &e, BATT, 90, MIN(0));
-    feedf(&c, &e, BATT, 80, MIN(5));                 /* guest fires */
-    OKF(e.guest_fired[0][0], "latched");
-    feedf(&c, &e, LINE, 80, MIN(6));                 /* mains back */
-    OKF(feedf(&c, &e, LINE, 85, MIN(10)).guests[0] == 0 && e.guest_fired[0][0],
+    reset_engine(&e);
+    set_guests(&e, 0, (pve_guest_t[]){ { .id = 101, .on_battery_min = 5 } }, 1);
+    feed(&c, &e, BATT, 90, MIN(0));
+    feed(&c, &e, BATT, 80, MIN(5));                  /* guest fires */
+    OKF(guest_fired(&e, 0, 101), "latched");
+    feed(&c, &e, LINE, 80, MIN(6));                  /* mains back */
+    OKF(feed(&c, &e, LINE, 85, MIN(10)) == 0 && !guest_fired_now(&e, 0, 101) && guest_fired(&e, 0, 101),
         "still latched 4 min into mains-back");
-    feedf(&c, &e, LINE, 90, MIN(11));
-    OKF(!e.guest_fired[0][0], "released at 5 min mains-back, with the host's shared edge");
+    feed(&c, &e, LINE, 90, MIN(11));
+    OKF(!guest_fired(&e, 0, 101), "released at 5 min mains-back, with the host's shared edge");
 
-    /* ---- disabled slot / empty id: never fires, never swept ---- */
+    /* ---- a host with only a charge trigger never counts down ---- */
     c = base();
-    c.hosts[0].guests[0] = (pve_guest_t){ .id = 101, .enabled = false, .on_battery_min = 1 };
-    c.hosts[0].guests[1] = (pve_guest_t){ .id = 0, .enabled = true, .on_battery_min = 1 };
-    memset(&e, 0, sizeof e);
-    for (int m = 0; m < 30; m++) feedf(&c, &e, BATT, 50, MIN(m));
-    OKF(!e.guest_fired[0][0] && !e.guest_fired[0][1], "disabled and id-0 slots: never fire on their own");
-    f = feedf(&c, &e, BATT, 50, MIN(30));
-    OKF((f.guests[0] & (G0 | G1)) == 0, "...and not swept up when the host fires either");
+    reset_engine(&e);
+    set_guests(&e, 0, (pve_guest_t[]){ { .id = 101 } }, 1);
+    for (int m = 0; m < 30; m++) feed(&c, &e, BATT, 50, MIN(m));
+    OKF(!guest_fired(&e, 0, 101), "a guest present but never triggered, own or swept: never fires on its own");
+    OKF(feed(&c, &e, BATT, 50, MIN(30)) == H0 && guest_fired_now(&e, 0, 101),
+        "...swept up once the host fires, same as any other configured guest");
 
     /* ---- a disabled host's guests are inert too ---- */
     c = base(); c.hosts[0].enabled = false;
-    c.hosts[0].guests[0] = (pve_guest_t){ .id = 101, .enabled = true, .on_battery_min = 1 };
-    memset(&e, 0, sizeof e);
-    for (int m = 0; m < 30; m++) feedf(&c, &e, BATT, 50, MIN(m));
-    OKF(!e.guest_fired[0][0], "host disabled: its guests never fire either");
+    reset_engine(&e);
+    set_guests(&e, 0, (pve_guest_t[]){ { .id = 101, .on_battery_min = 1 } }, 1);
+    for (int m = 0; m < 30; m++) feed(&c, &e, BATT, 50, MIN(m));
+    OKF(!guest_fired(&e, 0, 101), "host disabled: its guests never fire either");
 
-    /* ---- out-of-range guest index ---- */
-    OKF(pve_guest_countdown_s(&c, &e, 0, -1, 0) == -1 &&
-        pve_guest_countdown_s(&c, &e, 0, PVE_MAX_GUESTS, 0) == -1,
-        "countdown for a bad guest slot is -1, not a read past the array");
+    /* ---- unknown guest id: countdown query is -1, not a crash ---- */
+    OKF(pve_guest_countdown_s(&c, &e, &g_guests[0], 0, 999, 0) == -1,
+        "countdown for an id that isn't in the list is -1");
+    OKF(pve_guest_countdown_s(&c, &e, &g_guests[0], -1, 101, 0) == -1 &&
+        pve_guest_countdown_s(&c, &e, &g_guests[0], PVE_MAX_HOSTS, 101, 0) == -1,
+        "countdown for a bad host index is -1, not a read past the array");
 
+    /* ==================================================================
+     * pve_engine_sync_guests: the dynamic-list bookkeeping itself, not
+     * routed through an outage — this is what keeps a latch attached to
+     * the right guest across an edit instead of a slot position.
+     * ================================================================== */
+
+    /* ---- a persisting id keeps its fired state and reason ---- */
+    {
+        pve_guest_engine_list_t st = { 0 };
+        pve_guest_list_t cfg1 = { .items = (pve_guest_t[]){ { .id = 101 }, { .id = 102 } }, .n = 2 };
+        pve_engine_sync_guests(&st, &cfg1);
+        OKF(st.n == 2 && !st.items[0].fired && !st.items[1].fired,
+            "a fresh list starts with nothing fired");
+        st.items[0].fired = true;
+        strcpy(st.items[0].reason, "on battery for 10 min");
+
+        /* Guest 102 removed, 103 added, 101 (fired) persists. */
+        pve_guest_list_t cfg2 = { .items = (pve_guest_t[]){ { .id = 101 }, { .id = 103 } }, .n = 2 };
+        pve_engine_sync_guests(&st, &cfg2);
+        OKF(st.n == 2, "resized to match the new list");
+        bool found101 = false, found103 = false;
+        for (int i = 0; i < st.n; i++) {
+            if (st.items[i].id == 101) {
+                found101 = true;
+                OKF(st.items[i].fired && strcmp(st.items[i].reason, "on battery for 10 min") == 0,
+                    "101 kept its fired state and reason across the edit");
+            }
+            if (st.items[i].id == 103) {
+                found103 = true;
+                OKF(!st.items[i].fired, "103, new to the list, starts unfired");
+            }
+        }
+        OKF(found101 && found103, "both ids present after the sync");
+        for (int i = 0; i < st.n; i++) {
+            OKF(st.items[i].id != 102, "102, dropped from the list, is gone from the state too");
+        }
+        free(st.items);
+    }
+
+    /* ---- syncing to an empty list frees the state cleanly ---- */
+    {
+        pve_guest_engine_list_t st = { 0 };
+        pve_guest_list_t cfg1 = { .items = (pve_guest_t[]){ { .id = 101 } }, .n = 1 };
+        pve_engine_sync_guests(&st, &cfg1);
+        pve_guest_list_t empty = { 0 };
+        pve_engine_sync_guests(&st, &empty);
+        OKF(st.n == 0 && st.items == NULL, "an empty configured list leaves no engine state behind");
+    }
+
+    reset_engine(&e);
     printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
     return fails ? 1 : 0;
 }
