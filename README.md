@@ -88,7 +88,7 @@ Served from the ESP32 itself. **Status** shows the live power flow — where the
 watts are coming from, where they're going, and what the battery is doing —
 plus the NUT variables your clients see:
 
-<img src="screenshots/status.png" alt="Status tab: on-line banner, 68% battery bar, power flow from mains through the battery to AC and DC loads, and the NUT and network variable panels" width="820">
+<img src="screenshots/status.png" alt="Status tab: on-line banner, 87% battery bar, power flow from solar and mains through the battery to AC and DC loads, the NUT and network variable panels, and BLE/NUT/Proxmox-host status dots" width="820">
 
 **Maintenance** handles updates over the air — pick a GitHub release, or upload
 a `.bin` when the bridge has no route out:
@@ -113,6 +113,8 @@ pve-ups style:
   trusted the way SSH trusts a host key, not blindly accepted.
 - **Dry run until you arm it** — counts down and alerts without touching
   anything, so you can watch a full outage play out before it can act.
+
+<img src="screenshots/proxmox.png" alt="Proxmox tab: armed/dry-run toggle, re-arm timer, a host's connection fields, its on-battery/charge thresholds, and per-guest cards for two running VMs and a stopped container" width="820">
 
 Set up from the **Proxmox** tab; full walkthrough (token setup, the safety
 model, re-arming after mains returns) in
