@@ -891,6 +891,9 @@ function renderStatus(j) {
       const { cls, title } = pveHostDot(h, pv);
       return `<span class="dot${cls ? ' ' + cls : ''}" title="${title.replace(/"/g, '&quot;')}">${h.node || 'host'}</span>`;
     }).join('');
+    /* Picks up a scheduled self-test's result as it lands, not just on
+       load or a manual Test connection click. */
+    for (let i = 0; i < PVE_SLOTS; i++) pveSyncChip(i);
   }
   $('#statusDots').innerHTML = dots;
   applyIntegrationVisibility(!!j.nut_enabled, !!(pv && pv.enabled), !!j.tg_enabled);
@@ -1694,17 +1697,31 @@ function pveChip(i, cls, text) {
   c.className = 'chip ' + cls;
   c.textContent = text;
 }
-/* Reflects only whether this host has connected before — 'ready'/'ok' (a
-   full test just passed) is set separately by the Test handler, which
-   calls this first and then overrides on success. */
+/* Reflects whether this host is pinned at all, and — once it is — whether
+   its most recent health check (a manual Test connection, or the
+   automatic scheduled self-test, whichever ran last) passed. 'ready' (a
+   full test just passed in *this* click) is set separately by the Test
+   handler right after calling this. */
 function pveSyncChip(i) {
   const has = !!$(`#h${i}_fp`).value;
-  pveChip(i, has ? 'ok' : 'dim', has ? 'connected before' : 'not tested');
+  const hs = lastStatus?.pve?.hosts?.[i];
+  const failed = has && hs && hs.last && hs.ok === false;
+  pveChip(i, !has ? 'dim' : failed ? 'bad' : 'ok',
+              !has ? 'not tested' : failed ? 'error' : 'Connected');
   /* Nothing to shut down yet is meaningful until the host has actually
      answered once — a cert that was never pinned isn't a host you can
      trust a trigger against. */
   $(`#h${i}_triggers`).hidden = !has;
   $(`#h${i}_untested`).hidden = has;
+  /* Surface the failure's detail too — but not over a test this box is
+     actively running (that click's own handler owns the message next). */
+  const btn = document.querySelector(`.pveTest[data-i="${i}"]`);
+  if (failed && btn && !btn.disabled) {
+    const msg = $(`#h${i}_msg`);
+    msg.textContent = '✗ ' + hs.last;
+    msg.classList.add('err');
+    msg.classList.remove('ok');
+  }
 }
 function pveTitle(i) {
   $(`#h${i}_title`).textContent = $(`#h${i}_node`).value ? '· ' + $(`#h${i}_node`).value : '';
@@ -1921,7 +1938,7 @@ async function pveRunTest(i) {
     } else {
       msg.textContent = '✗ ' + j.msg;
       msg.classList.add('err');
-      if (j.pinned) pveChip(i, 'warn', 'connected before');
+      if (j.pinned) pveChip(i, 'bad', 'error');
     }
   } catch (e) {
     msg.textContent = 'Failed: ' + e.message;

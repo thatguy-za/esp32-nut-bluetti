@@ -607,6 +607,13 @@ static void worker_task(void *arg)
  * reasonably promptly. */
 #define SELFTEST_TICK_MS (15 * 60 * 1000)
 
+/* Before the very first check: just long enough for Wi-Fi to associate and
+ * get an IP, so a from-cold-boot self-test doesn't fail on network that
+ * simply isn't up yet and isn't the long SELFTEST_TICK_MS wait either — a
+ * host whose credentials died while the device was off should be found
+ * within a minute of booting, not up to fifteen. */
+#define SELFTEST_BOOT_DELAY_MS (60 * 1000)
+
 /* Re-runs the same check as a manual "Test connection" against every
  * pinned, enabled host on P.selftest_hours — so a rotated certificate or
  * a revoked token surfaces on its own instead of waiting for a real outage
@@ -615,9 +622,8 @@ static void worker_task(void *arg)
  * responsive (same reasoning pve-ups documents for its own self-test). */
 static void selftest_task(void *arg)
 {
+    vTaskDelay(pdMS_TO_TICKS(SELFTEST_BOOT_DELAY_MS));
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(SELFTEST_TICK_MS));
-
         xSemaphoreTake(P.lock, portMAX_DELAY);
         pve_config_t cfg = P.cfg;
         uint16_t selftest_hours = P.selftest_hours;
@@ -625,6 +631,7 @@ static void selftest_task(void *arg)
         int64_t now = esp_timer_get_time();
         xSemaphoreGive(P.lock);
         if (!cfg.enabled || selftest_hours == 0 || on_battery) {
+            vTaskDelay(pdMS_TO_TICKS(SELFTEST_TICK_MS));
             continue;
         }
 
@@ -661,6 +668,7 @@ static void selftest_task(void *arg)
             ESP_LOGI(TAG, "%s: self-test \xE2\x80\x94 %s", hc->node, msg);
             pve_shutdown_note_test(i, t == 0, msg);
         }
+        vTaskDelay(pdMS_TO_TICKS(SELFTEST_TICK_MS));
     }
 }
 
