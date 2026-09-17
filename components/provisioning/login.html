@@ -29,8 +29,8 @@
 </head>
 <body>
 <form class="card" id="f">
-  <h1>BLUETTI NUT Bridge</h1>
-  <p class="sub" id="host">Sign in to continue.</p>
+  <h1 id="brand">BLUETTI NUT Bridge</h1>
+  <p class="sub">Log in</p>
 
   <label for="u">Username</label>
   <input id="u" name="user" autocomplete="username" autocapitalize="none"
@@ -48,7 +48,7 @@
 <script>
 const $ = s => document.querySelector(s);
 fetch('/api/hostname').then(r => r.text()).then(h => {
-  if (h) { document.title = h; $('#host').textContent = 'Sign in to ' + h + '.'; }
+  if (h) { document.title = h; $('#brand').textContent = h; }
 }).catch(() => {});
 
 $('#f').onsubmit = async (e) => {

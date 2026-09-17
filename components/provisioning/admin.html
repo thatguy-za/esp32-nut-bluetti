@@ -235,7 +235,6 @@
     <button data-tab="bluetti">Bluetti</button>
     <button data-tab="nut">NUT</button>
     <button data-tab="pve">Proxmox</button>
-    <button data-tab="wifi">Network</button>
     <button data-tab="notify">Telegram</button>
   </div>
   <button class="navArrow" id="navRight" aria-label="Scroll tabs right" hidden>›</button>
@@ -245,6 +244,7 @@
     <div id="accountMenu" class="menu" hidden>
       <button data-tab="account">User Account</button>
       <button data-tab="maint">Device Settings</button>
+      <button data-tab="wifi">Network</button>
       <button id="signout">Log out</button>
     </div>
   </div>
@@ -1597,7 +1597,10 @@ function pveHostBox(i) {
       <button type="button" class="act pveTest" data-i="${i}">Test connection</button>
     </div>
     <p class="hint" id="h${i}_msg" style="margin:.2rem 0 0"></p>
+    <p class="hint" id="h${i}_untested" style="margin:.2rem 0 0">Test the connection
+      to set when this host shuts down.</p>
 
+    <div id="h${i}_triggers" hidden>
     <div class="sect">Shut down when</div>
     <div class="inline">on battery for
       <input id="h${i}_min" name="h${i}_min" type="number" min="0" max="1440"> minutes
@@ -1621,6 +1624,7 @@ function pveHostBox(i) {
     <p class="hint" style="margin:0">Applies when this trigger stops a guest that has no
       rule of its own — one with its own timer that already fired earlier needs no wait.</p>
     </div>
+    </div>
   </div>`;
 }
 $('#pveHostBoxes').innerHTML =
@@ -1640,6 +1644,11 @@ function pveChip(i, cls, text) {
 function pveSyncChip(i) {
   const has = !!$(`#h${i}_fp`).value;
   pveChip(i, has ? 'ok' : 'dim', has ? 'connected before' : 'not tested');
+  /* Nothing to shut down yet is meaningful until the host has actually
+     answered once — a cert that was never pinned isn't a host you can
+     trust a trigger against. */
+  $(`#h${i}_triggers`).hidden = !has;
+  $(`#h${i}_untested`).hidden = has;
 }
 function pveTitle(i) {
   $(`#h${i}_title`).textContent = $(`#h${i}_node`).value ? '· ' + $(`#h${i}_node`).value : '';
@@ -1868,18 +1877,21 @@ document.querySelectorAll('.pveTest').forEach(b => b.onclick = () => pveRunTest(
 
 wireForm('#pveForm', '#pveSave', '#pveMsg', fd => {
   const armed = fd.get('pve_armed') === '1';
-  let hosts = 0, unpinned = [], untriggered = [];
+  /* Only an ENABLED host has to be fully and correctly configured — a
+     disabled one is fine half-filled-in or untested, saved for later. */
+  let unpinned = [], untriggered = [];
   for (let i = 0; i < PVE_SLOTS; i++) {
     if (fd.get(`h${i}_on`) !== '1') continue;
-    hosts++;
     const name = $(`#h${i}_node`).value || `host ${i + 1}`;
     if (!fd.get(`h${i}_fp`) && !pveSlot[i].stored.fingerprint) unpinned.push(name);
     if (!+(fd.get(`h${i}_min`) || 0) && !+(fd.get(`h${i}_pct`) || 0)) untriggered.push(name);
   }
-  if (!hosts) { $('#pveMsg').textContent = 'Enable at least one host.'; return false; }
-  if (untriggered.length) { $('#pveMsg').textContent = `${untriggered.join(', ')}: set a time or a charge to shut down at.`; return false; }
+  if (untriggered.length) {
+    setMsg('#pveMsg', `${untriggered.join(', ')}: set a time or a charge to shut down at.`, 'err');
+    return false;
+  }
   if (armed && unpinned.length) {
-    $('#pveMsg').textContent = `${unpinned.join(', ')}: not tested yet — would be skipped. Test connection first.`;
+    setMsg('#pveMsg', `${unpinned.join(', ')}: not tested yet — would be skipped. Test connection first.`, 'err');
     return false;
   }
   if (armed) return confirm('ARM the Proxmox shutdown? When a host\'s trigger is met, the bridge will really shut it down.');

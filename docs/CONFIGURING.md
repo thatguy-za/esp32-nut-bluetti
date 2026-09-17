@@ -283,6 +283,12 @@ self-contained:
 | **Shut down when** | *On battery for N minutes* (default 30), timed on the bridge's own clock from the moment the mains drops; *or charge at or below N %* (default 10). Either one fires this host — the node itself, and any guest below with no trigger of its own. |
 | **Guests** | **Load guests** lists the node's VMs and containers as cards; switch one on to give it its own on-battery/charge trigger, independent of the host's — no limit on how many. Leave a card off and it still goes down, just carried along whenever the host's own trigger fires rather than on a clock of its own. |
 
+**Shut down when** and **Guests** stay hidden until **Test connection**
+succeeds — nothing to set a trigger against until the bridge has actually
+reached the host and pinned its certificate. A host can be filled in, left
+disabled, and saved for later without ever being tested; only an *enabled*
+host has to have a working, tested connection before you can save.
+
 Hosts — and guests with their own trigger — fire **independently**: each has
 its own countdown off the same shared outage and its own fire-once latch, so
 a disposable VM can go at ten minutes while the hypervisor itself waits until
