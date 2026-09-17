@@ -70,7 +70,7 @@ static const char *TAG = "app_config";
  * discarded the whole blob outright on any v8-v11 device that upgraded
  * straight to v12+, since NVS refuses a read into a too-small buffer.
  */
-#define CFG_VERSION 15u
+#define CFG_VERSION 16u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -100,6 +100,7 @@ void app_config_pve_defaults(pve_config_t *pv)
     pv->enabled        = false;
     pv->armed          = false;
     pv->mains_back_min = 5;
+    pv->selftest_hours = 24;
     for (int i = 0; i < PVE_MAX_HOSTS; i++) {
         pv->hosts[i].on_battery_min = 30;
         pv->hosts[i].charge_pct     = 10;

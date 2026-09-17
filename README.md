@@ -66,7 +66,7 @@ page. Offline / Linux / `esptool` steps: [`dist/FLASHING.md`](dist/FLASHING.md).
    admin username and password.
 2. **Pick your unit.** On the bridge's page, **Bluetti** tab → *Scan for
    devices* → choose yours.
-3. **Turn NUT on.** **Settings** → **Integrations** → **NUT server** (off by
+3. **Turn NUT on.** Gear icon → **Integrations** → **NUT server** (off by
    default). Its tab appears once it's on.
 4. **Set the NUT bits.** UPS name, low-battery %, continuous AC rating. Save.
 
@@ -101,10 +101,11 @@ plus the NUT variables your clients see:
 
 <img src="screenshots/status.png" alt="Status tab: on-line banner, 87% battery bar, power flow from solar and mains through the battery to AC and DC loads, the NUT and network variable panels, and BLE/NUT/Proxmox-host status dots" width="820">
 
-**Settings** turns integrations on or off and handles updates over the air —
-pick a GitHub release, or upload a `.bin` when the bridge has no route out:
+The gear icon's **Integrations** page turns NUT, Proxmox and Telegram on or
+off; **Device Settings** handles updates over the air — pick a GitHub
+release, or upload a `.bin` when the bridge has no route out:
 
-<img src="screenshots/maintenance.png" alt="Settings tab: update from GitHub, update from a file, and status LED settings" width="820">
+<img src="screenshots/maintenance.png" alt="Device Settings: update from GitHub, update from a file, and status LED settings" width="820">
 
 ## Proxmox shutdown
 
@@ -124,10 +125,13 @@ pve-ups style:
   trusted the way SSH trusts a host key, not blindly accepted.
 - **Dry run until you arm it** — counts down and alerts without touching
   anything, so you can watch a full outage play out before it can act.
+- **Self-tested on a schedule** — every connected host is automatically
+  re-verified (default daily), so a rotated certificate or a revoked token
+  turns up on its own instead of waiting for a real outage to find it.
 
 <img src="screenshots/proxmox.png" alt="Proxmox tab: armed/dry-run toggle, re-arm timer, a host's connection fields, its on-battery/charge thresholds, and per-guest cards for two running VMs and a stopped container" width="820">
 
-Turn it on from **Settings** → **Integrations**; the **Proxmox** tab appears
+Turn it on from the gear icon's **Integrations** page; the **Proxmox** tab appears
 once it's on. Full walkthrough (token setup, the safety model, re-arming
 after mains returns) in
 [`docs/CONFIGURING.md`](docs/CONFIGURING.md#proxmox-shutdown).
@@ -137,10 +141,10 @@ after mains returns) in
 - **NUT server** — upsd-compatible, read-only, with an optional login gating
   `LOGIN`/`PRIMARY` the way upsd does.
 - **Integrations, off until you turn them on** — NUT, Proxmox and Telegram
-  are each a switch on the Settings tab; a disabled one is fully stopped, not
-  just hidden. Bluetti itself has no such switch.
+  are each a switch on the gear icon's Integrations page; a disabled one is
+  fully stopped, not just hidden. Bluetti itself has no such switch.
 - **Web admin** — live power flow, logs, config, all on the device.
-- **Over-the-air updates** — pick a GitHub release from the Settings tab, or
+- **Over-the-air updates** — pick a GitHub release from Device Settings, or
   upload a `.bin`. Spare-slot write with bootloader rollback.
 - **Telegram alerts** — mains lost/restored, battery low, unit unreachable,
   Proxmox host/guest shutdowns. Held and retried if the network is down when

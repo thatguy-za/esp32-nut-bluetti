@@ -1020,10 +1020,11 @@ static esp_err_t h_admin_status(httpd_req_t *r)
         n += snprintf(out + n, 16000 - n,
                       "%s{\"node\":\"%s\",\"enabled\":%s,\"pinned\":%s,"
                       "\"fired\":%s,\"countdown_s\":%d,\"last\":\"%s\",\"ok\":%s,"
-                      "\"guests\":[",
+                      "\"checked_s\":%d,\"guests\":[",
                       i ? "," : "", h->node, h->enabled ? "true" : "false",
                       h->pinned ? "true" : "false", h->fired ? "true" : "false",
-                      h->countdown_s, h->last, h->last_ok ? "true" : "false");
+                      h->countdown_s, h->last, h->last_ok ? "true" : "false",
+                      h->last_checked_s);
         pve_guest_status_t *gs = NULL;
         int gn = 0;
         pve_shutdown_guest_status(i, &gs, &gn);
@@ -1145,9 +1146,10 @@ static esp_err_t h_admin_config(httpd_req_t *r)
         n--;
     }
     n += snprintf(out + n, 16000 - n,
-                  ",\"pve\":{\"enabled\":%s,\"armed\":%s,\"mains_back_min\":%u,\"hosts\":[",
+                  ",\"pve\":{\"enabled\":%s,\"armed\":%s,\"mains_back_min\":%u,"
+                  "\"selftest_hours\":%u,\"hosts\":[",
                   pv->enabled ? "true" : "false", pv->armed ? "true" : "false",
-                  (unsigned)pv->mains_back_min);
+                  (unsigned)pv->mains_back_min, (unsigned)pv->selftest_hours);
     for (int i = 0; i < PVE_MAX_HOSTS && n < 16000; i++) {
         const pve_host_t *h = &pv->hosts[i];
         char fp[96] = "";
@@ -1579,6 +1581,9 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         pv->armed   = form_get(body, "pve_armed", v, sizeof(v)) && v[0] == '1';
         if (form_get(body, "pve_mains_back_min", v, sizeof(v)) && atoi(v) >= 0) {
             pv->mains_back_min = (uint16_t)atoi(v);
+        }
+        if (form_get(body, "pve_selftest_hours", v, sizeof(v)) && atoi(v) >= 0) {
+            pv->selftest_hours = (uint16_t)atoi(v);
         }
         char err[80] = "";
         bool ok = true;

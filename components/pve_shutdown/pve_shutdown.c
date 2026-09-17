@@ -76,6 +76,7 @@ static struct {
     pending_guest_t  *pending_guests;  /* realloc'd, any host, any length  */
     int               pending_guest_n;
     struct { char text[128]; bool ok; } host_last[PVE_MAX_HOSTS];
+    int64_t           host_last_test_us[PVE_MAX_HOSTS]; /* 0 = never tested */
     guest_last_t     *guest_last[PVE_MAX_HOSTS];   /* realloc'd, by id */
     int               guest_last_n[PVE_MAX_HOSTS];
 } P;
@@ -144,6 +145,10 @@ void pve_shutdown_note_test(int i, bool ok, const char *msg)
 {
     if (!P.started) return;
     note_host(i, ok, msg);
+    if (i < 0 || i >= PVE_MAX_HOSTS) return;
+    xSemaphoreTake(P.lock, portMAX_DELAY);
+    P.host_last_test_us[i] = esp_timer_get_time();
+    xSemaphoreGive(P.lock);
 }
 
 /* ------------------------------------------------------------------ */
@@ -595,6 +600,68 @@ static void worker_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* How often the self-test task wakes up to check whether any host is due —
+ * coarser than the interval itself (hours), just fine-grained enough that a
+ * fresh save of a shorter interval, or the mains coming back, is noticed
+ * reasonably promptly. */
+#define SELFTEST_TICK_MS (15 * 60 * 1000)
+
+/* Re-runs the same check as a manual "Test connection" against every
+ * pinned, enabled host on cfg.selftest_hours — so a rotated certificate or
+ * a revoked token surfaces on its own instead of waiting for a real outage
+ * to find it. Skipped entirely while riding out an outage: every host
+ * costs several seconds on the network, and the countdown has to stay
+ * responsive (same reasoning pve-ups documents for its own self-test). */
+static void selftest_task(void *arg)
+{
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(SELFTEST_TICK_MS));
+
+        xSemaphoreTake(P.lock, portMAX_DELAY);
+        pve_config_t cfg = P.cfg;
+        bool on_battery = P.eng.on_battery;
+        int64_t now = esp_timer_get_time();
+        xSemaphoreGive(P.lock);
+        if (!cfg.enabled || cfg.selftest_hours == 0 || on_battery) {
+            continue;
+        }
+
+        int64_t interval_us = (int64_t)cfg.selftest_hours * 3600LL * 1000000LL;
+        for (int i = 0; i < PVE_MAX_HOSTS; i++) {
+            const pve_host_t *hc = &cfg.hosts[i];
+            if (!hc->enabled || !hc->url[0] || !hc->fingerprint[0]) {
+                continue;
+            }
+
+            xSemaphoreTake(P.lock, portMAX_DELAY);
+            int64_t last = P.host_last_test_us[i];
+            on_battery = P.eng.on_battery;   /* an outage may have just started */
+            xSemaphoreGive(P.lock);
+            if (on_battery) break;
+            if (last != 0 && now - last < interval_us) continue;
+
+            pve_host_t h = *hc;
+            pve_guest_list_t guests = { 0 };
+            xSemaphoreTake(P.lock, portMAX_DELAY);
+            if (P.guests[i].n > 0) {
+                guests.items = malloc((size_t)P.guests[i].n * sizeof(*guests.items));
+                if (guests.items) {
+                    memcpy(guests.items, P.guests[i].items,
+                           (size_t)P.guests[i].n * sizeof(*guests.items));
+                    guests.n = P.guests[i].n;
+                }
+            }
+            xSemaphoreGive(P.lock);
+
+            char msg[200], fp[96];
+            int t = pve_shutdown_test(&h, &guests, msg, sizeof(msg), fp);
+            free(guests.items);
+            ESP_LOGI(TAG, "%s: self-test \xE2\x80\x94 %s", hc->node, msg);
+            pve_shutdown_note_test(i, t == 0, msg);
+        }
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Public                                                              */
 /* ------------------------------------------------------------------ */
@@ -640,6 +707,12 @@ int pve_shutdown_start(const pve_config_t *cfg, pve_guest_list_t guests[PVE_MAX_
                      h->fingerprint[0] ? "" : " (NOT PINNED)",
                      P.guests[i].n, P.guests[i].n == 1 ? "" : "s");
         }
+    }
+    /* TLS in-task, same as the shutdown worker; runs for the life of the
+     * device, waking up briefly every SELFTEST_TICK_MS to check whether any
+     * host is due. */
+    if (xTaskCreate(selftest_task, "pve_selftest", 10240, NULL, 3, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "cannot start the Proxmox self-test task");
     }
     return 0;
 }
@@ -749,6 +822,8 @@ void pve_shutdown_status(pve_status_t *out)
         o->countdown_s = pve_countdown_s(&P.cfg, &P.eng, i, now);
         strlcpy(o->last, P.host_last[i].text, sizeof(o->last));
         o->last_ok = P.host_last[i].ok;
+        o->last_checked_s = P.host_last_test_us[i] ?
+            (int)((now - P.host_last_test_us[i]) / 1000000LL) : -1;
     }
     xSemaphoreGive(P.lock);
 }

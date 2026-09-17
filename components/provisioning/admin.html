@@ -30,13 +30,18 @@
               font: inherit; font-size: 1.1rem; line-height: 1;
               padding: .5rem .4rem; cursor: pointer; }
 
-  .avatarWrap { position: relative; display: flex; align-items: center; }
+  .menuWrap { position: relative; display: flex; align-items: center; }
   .avatarBtn { width: 1.9rem; height: 1.9rem; border-radius: 50%; border: 0;
                background: #2563eb; color: #fff; font: inherit; font-weight: 600;
                font-size: .85rem; cursor: pointer; display: flex;
                align-items: center; justify-content: center; padding: 0;
                transition: background .12s; }
   .avatarBtn:hover { background: #3b74ee; }
+  .iconBtn { width: 1.9rem; height: 1.9rem; border-radius: 50%; border: 0;
+             background: none; color: inherit; cursor: pointer; display: flex;
+             align-items: center; justify-content: center; padding: 0;
+             transition: background .12s; margin-right: .3rem; }
+  .iconBtn:hover { background: #8882; }
   .menu { position: absolute; right: 0; top: calc(100% + .4rem); min-width: 11rem;
           background: Canvas; color: CanvasText; border: 1px solid #8886;
           border-radius: .5rem; box-shadow: 0 4px 16px #0006; overflow: hidden;
@@ -197,6 +202,7 @@
   .linkbtn { background: none; border: 0; color: #2563eb; font: inherit; cursor: pointer;
              padding: 0; text-decoration: underline; }
   .minibtn { padding: .2rem .6rem; font-size: .8rem; }
+  .pveExpand { font-size: 1.1rem; line-height: 1; }
 
   /* ---- per-guest shutdown rule cards ---- */
   #pveHostBoxes .glist { display: flex; flex-direction: column; gap: .5rem; margin: .5rem 0 0; }
@@ -238,13 +244,27 @@
     <button data-tab="notify">Telegram</button>
   </div>
   <button class="navArrow" id="navRight" aria-label="Scroll tabs right" hidden>›</button>
-  <div class="avatarWrap" style="margin-left:auto">
+  <div class="menuWrap" style="margin-left:auto">
+    <button id="deviceBtn" class="iconBtn" title="Device" aria-label="Device"
+            aria-haspopup="true" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" width="18" height="18"
+           style="display:block">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
+    <div id="deviceMenu" class="menu" hidden>
+      <button data-tab="integrations">Integrations</button>
+      <button data-tab="wifi">Network</button>
+      <button data-tab="maint">Device Settings</button>
+    </div>
+  </div>
+  <div class="menuWrap">
     <button id="avatarBtn" class="avatarBtn" title="Account" aria-label="Account"
             aria-haspopup="true" aria-expanded="false">?</button>
     <div id="accountMenu" class="menu" hidden>
       <button data-tab="account">User Account</button>
-      <button data-tab="maint">Device Settings</button>
-      <button data-tab="wifi">Network</button>
       <button id="signout">Log out</button>
     </div>
   </div>
@@ -444,6 +464,9 @@
         <div class="inline">Re-arm once the mains has been back for
           <input name="pve_mains_back_min" id="pveMainsBack" type="number" min="0" max="1440"> minutes
           <span class="hint">(0 = disabled)</span></div>
+        <div class="inline">Automatically re-test every connected host every
+          <input name="pve_selftest_hours" id="pveSelftest" type="number" min="0" max="720"> hours
+          <span class="hint">(0 = disabled)</span></div>
       </div>
     </div>
 
@@ -586,8 +609,8 @@
   </form>
 </section>
 
-<!-- ---------------- Settings ---------------- -->
-<section id="maint">
+<!-- ---------------- Integrations ---------------- -->
+<section id="integrations">
   <form id="intForm">
     <input type="hidden" name="section" value="integrations">
     <div class="box">
@@ -606,7 +629,10 @@
     <div class="saveBar" hidden><button class="act primary" id="intSave">Save</button>
        <span class="hint" id="intMsg"></span></div>
   </form>
+</section>
 
+<!-- ---------------- Settings ---------------- -->
+<section id="maint">
   <div class="box" id="otaBox" hidden>
     <h2>Update from GitHub</h2>
     <p>Running <code id="fwNow">?</code>. Checks this project's releases and
@@ -736,7 +762,7 @@ tabs.forEach(b => b.onclick = () => {
   closeAccountMenu();
   if (b.closest('.tabScroll')) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   if (b.dataset.tab === 'status') pollLogs();
-  if (['bluetti', 'nut', 'pve', 'wifi', 'notify', 'maint', 'account'].includes(b.dataset.tab)) loadConfig();
+  if (['bluetti', 'nut', 'pve', 'wifi', 'notify', 'maint', 'account', 'integrations'].includes(b.dataset.tab)) loadConfig();
   ctrlActive = b.dataset.tab === 'bluetti';
   if (ctrlActive) refreshControls();
 });
@@ -756,19 +782,28 @@ tabScroll.addEventListener('scroll', updateNavArrows);
 window.addEventListener('resize', updateNavArrows);
 updateNavArrows();
 
-/* ---- account menu ---- */
+/* ---- account / device menus ---- */
+const NAV_MENUS = [
+  { btn: '#avatarBtn', menu: '#accountMenu' },
+  { btn: '#deviceBtn', menu: '#deviceMenu' },
+];
 function closeAccountMenu() {
-  $('#accountMenu').hidden = true;
-  $('#avatarBtn').setAttribute('aria-expanded', 'false');
+  for (const { btn, menu } of NAV_MENUS) {
+    $(menu).hidden = true;
+    $(btn).setAttribute('aria-expanded', 'false');
+  }
 }
-$('#avatarBtn').onclick = ev => {
-  ev.stopPropagation();
-  const open = $('#accountMenu').hidden;
-  $('#accountMenu').hidden = !open;
-  $('#avatarBtn').setAttribute('aria-expanded', String(open));
-};
+for (const { btn, menu } of NAV_MENUS) {
+  $(btn).onclick = ev => {
+    ev.stopPropagation();
+    const open = $(menu).hidden;
+    closeAccountMenu();   /* only one open at a time */
+    $(menu).hidden = !open;
+    $(btn).setAttribute('aria-expanded', String(open));
+  };
+}
 document.addEventListener('click', ev => {
-  if (!$('#accountMenu').hidden && !ev.target.closest('.avatarWrap')) closeAccountMenu();
+  if (!ev.target.closest('.menuWrap')) closeAccountMenu();
 });
 
 /* ---- status ---- */
@@ -793,6 +828,15 @@ function fmtRuntime(sec) {
   if (m < 60) return m + ' min';
   return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
 }
+/* "checked 3h ago" / "checked 12m ago" / "checked just now" — omitted
+   entirely when it's never happened (checked_s < 0). */
+function fmtCheckedAgo(sec) {
+  if (sec == null || sec < 0) return '';
+  if (sec < 60) return ' — checked just now';
+  const m = Math.round(sec / 60);
+  if (m < 60) return ` — checked ${m}m ago`;
+  return ` — checked ${Math.round(m / 60)}h ago`;
+}
 /* One Proxmox host's status as a dot: {cls, title} — cls picks the color
    (''=neutral, 'up'=green, 'warn'=amber, 'bad'=red), title is the same
    detail the old Proxmox box showed, now a hover tooltip instead of a
@@ -805,8 +849,8 @@ function pveHostDot(h, p) {
     return { cls: 'warn', title: `shutdown in ${fmtMMSS(h.countdown_s)} unless the mains returns` };
   }
   if (p.on_battery_s >= 0) return { cls: '', title: 'on battery — waiting on the charge trigger' };
-  if (h.last && !h.ok) return { cls: 'warn', title: h.last };
-  return { cls: 'up', title: 'ready' };
+  if (h.last && !h.ok) return { cls: 'warn', title: h.last + fmtCheckedAgo(h.checked_s) };
+  return { cls: 'up', title: 'ready' + fmtCheckedAgo(h.checked_s) };
 }
 /* Hides a tab from the nav entirely when its integration is off — Bluetti
    and the always-present tabs (Status, Network, Settings) are never in
@@ -1074,6 +1118,7 @@ async function loadConfig() {
     const pv = cfg.pve || {};
     document.querySelector(`input[name=pve_armed][value="${pv.armed ? 1 : 0}"]`).checked = true;
     $('#pveMainsBack').value = pv.mains_back_min ?? 5;
+    $('#pveSelftest').value = pv.selftest_hours ?? 24;
     (pv.hosts || []).forEach((h, i) => {
       if (i >= PVE_SLOTS) return;
       pveSlot[i].stored = h;
@@ -1149,16 +1194,25 @@ function lastVisibleBox(form) {
   const boxes = [...form.querySelectorAll('.box')].filter(b => b.offsetParent !== null);
   return boxes[boxes.length - 1] || form;
 }
+/* The box a given event actually happened in — a multi-box form (Bluetti,
+   Proxmox with several hosts) shouldn't always dump the save bar on the
+   last box when the edit was made in the first one. Falls back to
+   lastVisibleBox when the event has no box (a click on "+ Add host",
+   say) or its box just got hidden by that same click (Remove). */
+function boxFor(form, ev) {
+  const t = ev && ev.target && ev.target.closest ? ev.target.closest('.box') : null;
+  return (t && t.offsetParent !== null) ? t : lastVisibleBox(form);
+}
 function wireForm(formSel, btnSel, msgSel, after) {
   const form = $(formSel), btn = $(btnSel), bar = btn.closest('.saveBar');
   const snapshot = () => new URLSearchParams(new FormData(form)).toString();
   let baseline = null;
-  function refreshDirty() {
+  function refreshDirty(ev) {
     if (baseline === null) return;   /* still loading; nothing to compare to */
     const dirty = snapshot() !== baseline;
     if (dirty) {
       if (bar.hidden) setMsg(msgSel, '');   /* clear a stale "Saved." */
-      lastVisibleBox(form).appendChild(bar);   /* read as part of that box */
+      boxFor(form, ev).appendChild(bar);   /* read as part of that box */
     }
     bar.hidden = !dirty;
   }
@@ -1167,7 +1221,7 @@ function wireForm(formSel, btnSel, msgSel, after) {
      button handler, not a native input event. */
   form.addEventListener('input', refreshDirty);
   form.addEventListener('change', refreshDirty);
-  form.addEventListener('click', () => setTimeout(refreshDirty, 0));
+  form.addEventListener('click', ev => setTimeout(() => refreshDirty(ev), 0));
   formBaselines.push(() => { baseline = snapshot(); refreshDirty(); });
 
   form.onsubmit = async ev => {
@@ -1559,13 +1613,12 @@ function pveHostBox(i) {
     <h2>Host ${i + 1} <span class="name" id="h${i}_title"></span>
       <span class="chip dim" id="h${i}_chip">not tested</span>
       <span class="spacer"></span>
-      <label class="toggle" title="Enabled">
+      <label class="toggle" title="Enables this host's rules below, including its guests">
         <input type="checkbox" name="h${i}_on" value="1" id="h${i}_on">
         <span class="track"></span>
       </label>
       <button type="button" class="act minibtn pveExpand" data-i="${i}"
-              aria-expanded="true" title="Collapse">−</button>
-      ${i ? `<button type="button" class="act minibtn pveRemove" data-i="${i}">Remove</button>` : ''}
+              aria-expanded="true" title="Collapse">▴</button>
     </h2>
     <div id="h${i}_body">
     <input type="hidden" name="h${i}_clear" value="">
@@ -1624,6 +1677,9 @@ function pveHostBox(i) {
     <p class="hint" style="margin:0">Applies when this trigger stops a guest that has no
       rule of its own — one with its own timer that already fired earlier needs no wait.</p>
     </div>
+    ${i ? `<div class="row" style="margin-top:1rem">
+      <button type="button" class="act danger pveRemove" data-i="${i}">Remove</button>
+    </div>` : ''}
     </div>
   </div>`;
 }
@@ -1788,7 +1844,7 @@ document.querySelectorAll('.pveLoad').forEach(b => b.onclick = () => pveLoadGues
 function pveSetExpanded(i, open) {
   const b = document.querySelector(`.pveExpand[data-i="${i}"]`);
   $(`#h${i}_body`).hidden = !open;
-  b.textContent = open ? '−' : '+';
+  b.textContent = open ? '▴' : '▾';
   b.title = open ? 'Collapse' : 'Expand';
   b.setAttribute('aria-expanded', String(open));
 }

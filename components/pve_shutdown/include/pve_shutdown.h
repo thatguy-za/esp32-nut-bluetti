@@ -96,14 +96,16 @@ typedef struct {
 
 /* Stored inside app_config_t. Its layout changed at CFG_VERSION 9, when
  * the triggers moved into the hosts, at 10, when the free-text guest list
- * became per-guest rules, and at 12, when those rules moved out to their
+ * became per-guest rules, at 12, when those rules moved out to their
  * own per-host NVS blobs (app_config_pve_guests_load/save) — pve_host_t
- * itself no longer carries any guest data. The loader resets an older
- * block. */
+ * itself no longer carries any guest data — and at 16, when scheduled
+ * self-tests were added. The loader resets an older block. */
 typedef struct {
     bool     enabled;        /* the feature at all                         */
     bool     armed;          /* false = dry-run: log + notify, touch nothing */
     uint16_t mains_back_min; /* mains back this long before re-arming      */
+    uint16_t selftest_hours; /* re-test every pinned, enabled host on this
+                                 interval; 0 = disabled                     */
     pve_host_t hosts[PVE_MAX_HOSTS];
 } pve_config_t;
 
@@ -231,6 +233,8 @@ typedef struct {
     char last[128];               /* "" until something happens; then the
                                     last test or shutdown result          */
     bool last_ok;
+    int  last_checked_s;          /* seconds since the last connection
+                                    test, manual or scheduled; -1 = never */
 } pve_host_status_t;
 
 typedef struct {
