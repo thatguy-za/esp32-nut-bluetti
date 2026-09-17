@@ -65,6 +65,7 @@ typedef struct {
 
 static struct {
     pve_config_t      cfg;
+    uint16_t          selftest_hours;   /* not part of cfg; see pve_shutdown.h */
     pve_guest_list_t  guests[PVE_MAX_HOSTS];   /* configured rules, owned here */
     pve_engine_t      eng;
     pve_event_cb_t    cb;
@@ -607,7 +608,7 @@ static void worker_task(void *arg)
 #define SELFTEST_TICK_MS (15 * 60 * 1000)
 
 /* Re-runs the same check as a manual "Test connection" against every
- * pinned, enabled host on cfg.selftest_hours — so a rotated certificate or
+ * pinned, enabled host on P.selftest_hours — so a rotated certificate or
  * a revoked token surfaces on its own instead of waiting for a real outage
  * to find it. Skipped entirely while riding out an outage: every host
  * costs several seconds on the network, and the countdown has to stay
@@ -619,14 +620,15 @@ static void selftest_task(void *arg)
 
         xSemaphoreTake(P.lock, portMAX_DELAY);
         pve_config_t cfg = P.cfg;
+        uint16_t selftest_hours = P.selftest_hours;
         bool on_battery = P.eng.on_battery;
         int64_t now = esp_timer_get_time();
         xSemaphoreGive(P.lock);
-        if (!cfg.enabled || cfg.selftest_hours == 0 || on_battery) {
+        if (!cfg.enabled || selftest_hours == 0 || on_battery) {
             continue;
         }
 
-        int64_t interval_us = (int64_t)cfg.selftest_hours * 3600LL * 1000000LL;
+        int64_t interval_us = (int64_t)selftest_hours * 3600LL * 1000000LL;
         for (int i = 0; i < PVE_MAX_HOSTS; i++) {
             const pve_host_t *hc = &cfg.hosts[i];
             if (!hc->enabled || !hc->url[0] || !hc->fingerprint[0]) {
@@ -676,7 +678,8 @@ static void free_guest_lists(pve_guest_list_t guests[PVE_MAX_HOSTS])
     }
 }
 
-int pve_shutdown_start(const pve_config_t *cfg, pve_guest_list_t guests[PVE_MAX_HOSTS],
+int pve_shutdown_start(const pve_config_t *cfg, uint16_t selftest_hours,
+                       pve_guest_list_t guests[PVE_MAX_HOSTS],
                        pve_event_cb_t cb, void *user)
 {
     if (P.started) {
@@ -689,6 +692,7 @@ int pve_shutdown_start(const pve_config_t *cfg, pve_guest_list_t guests[PVE_MAX_
         return -1;
     }
     P.cfg = *cfg;
+    P.selftest_hours = selftest_hours;
     P.cb = cb;
     P.cb_user = user;
     memset(&P.eng, 0, sizeof(P.eng));
@@ -717,7 +721,8 @@ int pve_shutdown_start(const pve_config_t *cfg, pve_guest_list_t guests[PVE_MAX_
     return 0;
 }
 
-void pve_shutdown_reconfigure(const pve_config_t *cfg, pve_guest_list_t guests[PVE_MAX_HOSTS])
+void pve_shutdown_reconfigure(const pve_config_t *cfg, uint16_t selftest_hours,
+                              pve_guest_list_t guests[PVE_MAX_HOSTS])
 {
     if (!P.started) {
         free_guest_lists(guests);
@@ -725,6 +730,7 @@ void pve_shutdown_reconfigure(const pve_config_t *cfg, pve_guest_list_t guests[P
     }
     xSemaphoreTake(P.lock, portMAX_DELAY);
     P.cfg = *cfg;
+    P.selftest_hours = selftest_hours;
     for (int i = 0; i < PVE_MAX_HOSTS; i++) {
         free(P.guests[i].items);
         P.guests[i] = guests[i];   /* take ownership of .items */

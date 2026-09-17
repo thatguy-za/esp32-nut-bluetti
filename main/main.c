@@ -385,7 +385,7 @@ static void start_services(const app_config_t *cfg)
     for (int i = 0; i < PVE_MAX_HOSTS; i++) {
         app_config_pve_guests_load(i, &pve_guests[i].items, &pve_guests[i].n);
     }
-    pve_shutdown_start(&cfg->pve, pve_guests, pve_event, (void *)cfg);
+    pve_shutdown_start(&cfg->pve, cfg->pve_selftest_hours, pve_guests, pve_event, (void *)cfg);
 
     provisioning_admin_start(cfg);
     xTaskCreate(staleness_task, "staleness", 3072, NULL, 4, NULL);

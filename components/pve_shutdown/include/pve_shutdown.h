@@ -96,16 +96,21 @@ typedef struct {
 
 /* Stored inside app_config_t. Its layout changed at CFG_VERSION 9, when
  * the triggers moved into the hosts, at 10, when the free-text guest list
- * became per-guest rules, at 12, when those rules moved out to their
+ * became per-guest rules, and at 12, when those rules moved out to their
  * own per-host NVS blobs (app_config_pve_guests_load/save) — pve_host_t
- * itself no longer carries any guest data — and at 16, when scheduled
- * self-tests were added. The loader resets an older block. */
+ * itself no longer carries any guest data. The loader resets an older
+ * block.
+ *
+ * Don't add fields here: app_config.h documents `pve` as the last field
+ * appended before tg_on_pve_host/tg_on_pve_guest, so anything inserted in
+ * this struct shifts their on-disk offset (and hosts[]'s, if inserted
+ * above it) out from under every existing device — see selftest_hours in
+ * pve_shutdown_start/reconfigure below for how a new setting was added
+ * instead. */
 typedef struct {
     bool     enabled;        /* the feature at all                         */
     bool     armed;          /* false = dry-run: log + notify, touch nothing */
     uint16_t mains_back_min; /* mains back this long before re-arming      */
-    uint16_t selftest_hours; /* re-test every pinned, enabled host on this
-                                 interval; 0 = disabled                     */
     pve_host_t hosts[PVE_MAX_HOSTS];
 } pve_config_t;
 
@@ -197,15 +202,24 @@ int pve_guest_countdown_s(const pve_config_t *cfg, const pve_engine_t *st,
 typedef enum { PVE_EVENT_HOST, PVE_EVENT_GUEST } pve_event_kind_t;
 typedef void (*pve_event_cb_t)(pve_event_kind_t kind, const char *text, void *user);
 
-/* Takes ownership of `guests[i].items` for each host it keeps (matching
+/* `selftest_hours` re-tests every pinned, enabled host on this interval,
+ * the same check as a manual Test connection click (0 = disabled). It
+ * lives outside pve_config_t — appended instead at the true tail of
+ * app_config_t (see app_config.h's pve_selftest_hours) — so this setting
+ * could be added without shifting pve_config_t's on-disk layout out from
+ * under existing devices.
+ *
+ * Takes ownership of `guests[i].items` for each host it keeps (matching
  * cfg->hosts[i].enabled) — pass a fresh, unsynced heap-allocated list per
  * host (from app_config_pve_guests_load or equivalent); pve_shutdown frees
  * it eventually via reconfigure/stop. Do not read or free `guests` after
  * this call. */
-int  pve_shutdown_start(const pve_config_t *cfg, pve_guest_list_t guests[PVE_MAX_HOSTS],
+int  pve_shutdown_start(const pve_config_t *cfg, uint16_t selftest_hours,
+                        pve_guest_list_t guests[PVE_MAX_HOSTS],
                         pve_event_cb_t cb, void *user);
 /* Same ownership rule as pve_shutdown_start for `guests`. */
-void pve_shutdown_reconfigure(const pve_config_t *cfg, pve_guest_list_t guests[PVE_MAX_HOSTS]);
+void pve_shutdown_reconfigure(const pve_config_t *cfg, uint16_t selftest_hours,
+                              pve_guest_list_t guests[PVE_MAX_HOSTS]);
 
 /* Feed the engine from the Bluetti state. `known` is false whenever the
  * reading cannot be trusted — no link, nothing decoded, or the first sweep

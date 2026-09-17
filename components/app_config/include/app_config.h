@@ -120,6 +120,13 @@ typedef struct {
      * regardless (see app_config_load) since it had no such switch and
      * was never not running. */
     bool     nut_enabled;
+
+    /* Re-tests every pinned, enabled Proxmox host on this interval, the
+     * same check as a manual Test connection click; 0 = disabled. Kept
+     * outside pve_config_t (see pve_shutdown.h) so adding it didn't shift
+     * that struct's on-disk layout — and appended here, after nut_enabled,
+     * to stay the last field per the append-only rule above. */
+    uint16_t pve_selftest_hours;
 } app_config_t;
 
 /* How long the station has to be down before the fallback AP comes up.

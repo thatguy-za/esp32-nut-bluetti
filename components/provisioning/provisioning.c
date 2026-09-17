@@ -1149,7 +1149,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
                   ",\"pve\":{\"enabled\":%s,\"armed\":%s,\"mains_back_min\":%u,"
                   "\"selftest_hours\":%u,\"hosts\":[",
                   pv->enabled ? "true" : "false", pv->armed ? "true" : "false",
-                  (unsigned)pv->mains_back_min, (unsigned)pv->selftest_hours);
+                  (unsigned)pv->mains_back_min, (unsigned)P.cfg->pve_selftest_hours);
     for (int i = 0; i < PVE_MAX_HOSTS && n < 16000; i++) {
         const pve_host_t *h = &pv->hosts[i];
         char fp[96] = "";
@@ -1583,7 +1583,7 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
             pv->mains_back_min = (uint16_t)atoi(v);
         }
         if (form_get(body, "pve_selftest_hours", v, sizeof(v)) && atoi(v) >= 0) {
-            pv->selftest_hours = (uint16_t)atoi(v);
+            P.pending.pve_selftest_hours = (uint16_t)atoi(v);
         }
         char err[80] = "";
         bool ok = true;
@@ -1689,7 +1689,7 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         for (int i = 0; i < PVE_MAX_HOSTS; i++) {
             app_config_pve_guests_load(i, &live_guests[i].items, &live_guests[i].n);
         }
-        pve_shutdown_reconfigure(&P.cfg->pve, live_guests);
+        pve_shutdown_reconfigure(&P.cfg->pve, P.cfg->pve_selftest_hours, live_guests);
         ESP_LOGW(TAG, "'pve' settings changed via web; applied live, no reboot");
         return send_json(r, "{\"ok\":true,\"reboot\":false}");
     }
@@ -1720,7 +1720,7 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
         for (int i = 0; i < PVE_MAX_HOSTS; i++) {
             app_config_pve_guests_load(i, &live_guests[i].items, &live_guests[i].n);
         }
-        pve_shutdown_reconfigure(&P.cfg->pve, live_guests);
+        pve_shutdown_reconfigure(&P.cfg->pve, P.cfg->pve_selftest_hours, live_guests);
         notify_config_t ncfg = {
             .enabled = P.cfg->tg_enabled,
             .on_power = P.cfg->tg_on_power,

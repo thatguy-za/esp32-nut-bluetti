@@ -70,7 +70,7 @@ static const char *TAG = "app_config";
  * discarded the whole blob outright on any v8-v11 device that upgraded
  * straight to v12+, since NVS refuses a read into a too-small buffer.
  */
-#define CFG_VERSION 16u
+#define CFG_VERSION 17u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -100,7 +100,6 @@ void app_config_pve_defaults(pve_config_t *pv)
     pv->enabled        = false;
     pv->armed          = false;
     pv->mains_back_min = 5;
-    pv->selftest_hours = 24;
     for (int i = 0; i < PVE_MAX_HOSTS; i++) {
         pv->hosts[i].on_battery_min = 30;
         pv->hosts[i].charge_pct     = 10;
@@ -239,6 +238,7 @@ void app_config_defaults(app_config_t *cfg)
      * switches existed keeps running what it already had; see the
      * version-gated overrides in app_config_load().) */
     cfg->nut_enabled = false;
+    cfg->pve_selftest_hours = 24;
 
     /* Proxmox shutdown: off, and dry-run even once on — nothing is powered
      * off until the user arms it. The triggers default to what a small
