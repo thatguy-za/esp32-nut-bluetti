@@ -190,18 +190,19 @@ read as happening now.
 Off by default. Tick "Allow controlling the unit" on the **Bluetti** tab — it
 applies immediately, no reboot — and the controls the unit reports appear.
 
-Changing a control stages it rather than sending it right away — a blue dot
-marks anything changed but not yet sent, and an **Apply** button appears to
-send everything staged in one go. Nothing reaches the unit until you click
-it, so several changes can be queued up together (say, a new charging mode
-alongside a screen timeout) instead of round-tripping one at a time — each
-one is actually sent, in order, rather than a later change silently
+Changing a control stages it rather than sending it right away, and an
+**Apply** button appears to send everything staged in one go. Nothing
+reaches the unit until you click it — that's the point to catch a wrong
+toggle, so flipping AC or DC output doesn't ask you to confirm a second
+time — so several changes can be queued up together (say, a new charging
+mode alongside a screen timeout) instead of round-tripping one at a time —
+each one is actually sent, in order, rather than a later change silently
 replacing an earlier one still waiting to go out.
 
-Once sent, a control shows a small spinner instead of the dot until the
-unit's own next read of that register confirms the change — it keeps
-showing the value you asked for the whole time, rather than bouncing back
-to the old one until that confirmation arrives.
+Once sent, a control shows a small spinner in place of it until the unit's
+own next read of that register confirms the change — it keeps showing the
+value you asked for the whole time, rather than bouncing back to the old
+one until that confirmation arrives.
 
 | Control | Values | Models |
 | --- | --- | --- |

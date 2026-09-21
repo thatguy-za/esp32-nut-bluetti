@@ -1358,7 +1358,7 @@ const CTRL_OPT = {
 
    sentCtrl marks a staged field that Apply has already sent but the unit
    hasn't confirmed yet — kept apart from pendingCtrl so the toggle keeps
-   showing the value you asked for (a spinner, not the dot) instead of
+   showing the value you asked for (a spinner in place of it) instead of
    bouncing back to the old value for the second or so until the next real
    poll of that register catches up. Editing a field again while it's
    still in this state cancels the spinner — it's a fresh, unsent change
@@ -1486,13 +1486,6 @@ function renderControls(j) {
     lbl.style.cssText = 'flex:1 1 10rem;font-size:.9rem';
     lbl.textContent = CTRL_LABEL[it.field] || it.field;
     const sending = pending !== undefined && sentCtrl.has(it.field);
-    if (pending !== undefined && !sending) {
-      const dot = document.createElement('span');
-      dot.textContent = ' •';
-      dot.title = 'Changed — click Apply to send it';
-      dot.style.color = '#2563eb';
-      lbl.appendChild(dot);
-    }
     row.appendChild(lbl);
 
     let input;
@@ -1509,17 +1502,10 @@ function renderControls(j) {
       input.type = 'checkbox';
       input.id = 'ctrl_' + it.field;
       input.checked = shown === 1;
-      input.onchange = () => {
-        const want = input.checked ? 1 : 0;
-        if (want === 0 && (it.field === 'ac_output' || it.field === 'dc_output')) {
-          const onBatt = j.on_battery && it.field === 'ac_output';
-          const q = onBatt
-            ? 'The unit is on battery. Turning AC output off now cuts power to whatever it is running. Continue?'
-            : 'Turn ' + CTRL_LABEL[it.field] + ' off?';
-          if (!confirm(q)) { input.checked = true; return; }
-        }
-        stageCtrl(it.field, want);
-      };
+      /* No confirm() here for turning AC/DC output off — staging is
+         already the confirmation step: nothing reaches the unit until
+         Apply is clicked, which is the point to catch a wrong toggle. */
+      input.onchange = () => stageCtrl(it.field, input.checked ? 1 : 0);
       const wrap = document.createElement('label');
       wrap.className = 'toggle';
       const track = document.createElement('span');
