@@ -62,9 +62,9 @@ login. Everything else is a tab across the top.
 
 | Page | What's there |
 | --- | --- |
+| **Device Settings** | Firmware update, status-LED settings, restart, factory reset. |
 | **Integrations** | The three on/off switches — see below. |
 | **Network** | Join a network or run an access point; hostname; DHCP or static IPv4; the fallback AP. Addressing is station-only — an AP always serves `192.168.4.1`. |
-| **Device Settings** | Firmware update, status-LED settings, restart, factory reset. |
 
 **Avatar:**
 
