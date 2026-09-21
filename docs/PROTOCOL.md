@@ -13,10 +13,12 @@ address below, the 6-word swapped model string, SOC bounded 0-100, and register
 it is implemented here — `bt_crypto.c`, `bt_session.c`, `bt_regs.c`.
 
 The handshake, the encrypted Modbus polling and the Elite-10 decode are
-**confirmed working against a BLUETTI Elite 10 Mini** (advertises as `EL10`).
-Other models are ports of `bluetti-bt-lib`'s field definitions and have not
-touched that hardware — if a reading looks wrong, the **Verbose** log level
-(below) dumps every raw frame and register value.
+**confirmed working against a BLUETTI Elite 10 Mini** (advertises as `EL10`),
+and the same handshake and full register map are **confirmed working against
+a BLUETTI Elite 30 V2** (advertises as `EL30V2`). Other models are ports of
+`bluetti-bt-lib`'s field definitions and have not touched that hardware — if
+a reading looks wrong, the **Verbose** log level (below) dumps every raw
+frame and register value.
 
 ## Transport
 

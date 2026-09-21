@@ -30,9 +30,9 @@ vendor app. Everything is configured from a web page on the device.
 
 | | Models |
 | --- | --- |
-| ✅ **Verified on hardware** | **Elite 10 Mini** (`EL10`) — full telemetry, confirmed against a real unit |
+| ✅ **Verified on hardware** | **Elite 10 Mini** (`EL10`), **Elite 30 V2** (`EL30V2`) — full telemetry, confirmed against real units |
 | 🟡 **Should be identical** | `EL100V2` — same register map upstream, untested |
-| 🟡 **Untested, full map** | `EL30V2` `AC70` `AC180` `Handsfree 2` — charge, AC/DC power, line voltage, runtime and controls, each field taken from the model's own upstream definition |
+| 🟡 **Untested, full map** | `AC70` `AC180` `Handsfree 2` — charge, AC/DC power, line voltage, runtime and controls, each field taken from the model's own upstream definition |
 | 🟡 **Untested, partial map** | `AC180P` `AC60` `AC60P` — charge, AC/DC power, line voltage and controls; these have no runtime register |
 | 🟡 **Untested, minimal map** | `AC2P` — charge, AC/DC power and controls only; no line-voltage register, so `OL`/`OB` relies on AC input power alone |
 | ❌ **Not supported** | `EP600` `EP760` `EP800` `EP2000` (grid/PV systems) · `AC200M` `AC300` `AC500` `EB3A` `EP500` and other **V1**-protocol units |
@@ -42,7 +42,7 @@ registers are enabled per field from `bluetti-bt-lib`'s definitions, so a model
 gets exactly what it declares. An unrecognised V2 unit falls back to charge,
 power and serial — the fields `BaseDeviceV2` guarantees.
 
-Everything but the Elite 10 Mini is a port of
+Everything but the Elite 10 Mini and Elite 30 V2 is a port of
 [`bluetti-bt-lib`](https://github.com/Patrick762/bluetti-bt-lib)'s field
 definitions that has never run on that hardware. **Got another model?** Set the
 log level to **Verbose** and send a poll capture — it dumps every register and
