@@ -401,8 +401,8 @@ Borrowed wholesale from pve-ups, because it is right:
   routine checks.
 
 The **Status** page shows one dot per host, alongside the BLE and NUT ones —
-green for *ready*, amber for untested/counting down/just fired, grey for
-disabled or (with everything else fine) simply on battery, red for a
+green for *ready*, including simply being on battery with nothing due yet;
+amber for untested/counting down/just fired; grey for disabled; red for a
 failure. Hover or tap a dot for the detail: the countdown while on
 battery, *shutdown sent*, what went wrong, or how long ago it was last
 checked (manually or by the automatic self-test) — tapping shows the same

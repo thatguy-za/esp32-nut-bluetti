@@ -879,7 +879,7 @@ function pveHostDot(h, p) {
   if (h.countdown_s >= 0) {
     return { cls: 'warn', title: `shutdown in ${fmtMMSS(h.countdown_s)} unless the mains returns` };
   }
-  if (p.on_battery_s >= 0) return { cls: '', title: 'on battery — waiting on the charge trigger' };
+  if (p.on_battery_s >= 0) return { cls: 'up', title: 'on battery — waiting on the charge trigger' };
   if (h.last && !h.ok) return { cls: 'warn', title: h.last + fmtCheckedAgo(h.checked_s) };
   return { cls: 'up', title: 'ready' + fmtCheckedAgo(h.checked_s) };
 }
