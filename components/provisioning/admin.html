@@ -174,6 +174,13 @@
   .statusDots .dot.warn::before { background: #d9822b; }
   .statusDots .dot.bad::before { background: #c00; }
 
+  /* A control that's been sent but not yet confirmed by the unit's own
+     next read of that register. */
+  .spin { display: inline-block; width: .9rem; height: .9rem;
+          border: 2px solid #8886; border-top-color: #2563eb; border-radius: 50%;
+          vertical-align: middle; animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   /* ---- Proxmox tab ---- */
   .pveHost > h2 { display: flex; align-items: center; gap: .6rem; }
   .pveHost > h2 .name { font-weight: 400; opacity: .7; }
@@ -1347,13 +1354,37 @@ const CTRL_OPT = {
    control is touched — a control only actually goes out once Apply is
    clicked. A field drops out again once the unit's own reported value
    catches up to what was staged, whether that's from this page's Apply or
-   from some other page/session. */
+   from some other page/session.
+
+   sentCtrl marks a staged field that Apply has already sent but the unit
+   hasn't confirmed yet — kept apart from pendingCtrl so the toggle keeps
+   showing the value you asked for (a spinner, not the dot) instead of
+   bouncing back to the old value for the second or so until the next real
+   poll of that register catches up. Editing a field again while it's
+   still in this state cancels the spinner — it's a fresh, unsent change
+   now, whatever becomes of the one already in flight. sentAtCtrl times
+   out a field that's been "sending" for too long (the write may have
+   been rejected, or the register never confirms), dropping it back to a
+   plain unsent change so Apply can be clicked again. */
 let pendingCtrl = {};
+let sentCtrl = new Set();
+let sentAtCtrl = {};
+const CTRL_SENT_TIMEOUT_MS = 8000;
 
 function updateCtrlApplyBar() {
-  const n = Object.keys(pendingCtrl).length;
+  const n = Object.keys(pendingCtrl).filter(f => !sentCtrl.has(f)).length;
   $('#ctrlApplyBar').hidden = n === 0;
   $('#ctrlApply').textContent = n > 1 ? `Apply (${n} changes)` : 'Apply';
+}
+
+/* Stages a field's new value — cancelling any in-flight spinner for it,
+   since an edit here supersedes whatever was already sent. */
+function stageCtrl(field, value) {
+  pendingCtrl[field] = value;
+  sentCtrl.delete(field);
+  delete sentAtCtrl[field];
+  updateCtrlApplyBar();
+  rerenderControls();
 }
 
 async function sendControl(field, value) {
@@ -1366,7 +1397,7 @@ async function sendControl(field, value) {
 }
 
 $('#ctrlApply').onclick = async () => {
-  const entries = Object.entries(pendingCtrl);
+  const entries = Object.entries(pendingCtrl).filter(([f]) => !sentCtrl.has(f));
   if (!entries.length) return;
   ctrlBusy = true;
   $('#ctrlApply').disabled = true;
@@ -1375,7 +1406,12 @@ $('#ctrlApply').onclick = async () => {
   for (const [field, value] of entries) {
     try {
       await sendControl(field, value);
-      delete pendingCtrl[field];
+      /* Stays in pendingCtrl (as the value to keep showing) until the
+         unit's own next read of that register confirms it — see
+         renderControls, which is what actually clears it. */
+      sentCtrl.add(field);
+      sentAtCtrl[field] = Date.now();
+      rerenderControls();
     } catch (e) {
       failedFields.push(field);
     }
@@ -1395,7 +1431,7 @@ function renderControls(j) {
   const hint = $('#cfgControls').closest('.box').querySelector('.hint');
   if (!j.enabled) {
     list.hidden = true;
-    pendingCtrl = {}; updateCtrlApplyBar();
+    pendingCtrl = {}; sentCtrl.clear(); sentAtCtrl = {}; updateCtrlApplyBar();
     if (hint) hint.hidden = false;
     return;
   }
@@ -1423,11 +1459,20 @@ function renderControls(j) {
   }
 
   /* A field the unit now reports as matching what was staged is done —
-     drop it so Apply's count (and the dirty dot) reflect only what is
-     still actually unconfirmed. */
+     drop it (and its spinner) so Apply's count reflects only what is
+     still actually unconfirmed. One that's been "sending" too long
+     without confirming is dropped back to a plain unsent change instead,
+     so it's not stuck spinning forever over a write that may have been
+     rejected or a register that just never got back around to being
+     read. */
   for (const it of items) {
     if (pendingCtrl[it.field] !== undefined && pendingCtrl[it.field] === it.value) {
       delete pendingCtrl[it.field];
+      sentCtrl.delete(it.field);
+      delete sentAtCtrl[it.field];
+    } else if (sentCtrl.has(it.field) && Date.now() - sentAtCtrl[it.field] > CTRL_SENT_TIMEOUT_MS) {
+      sentCtrl.delete(it.field);
+      delete sentAtCtrl[it.field];
     }
   }
   updateCtrlApplyBar();
@@ -1440,7 +1485,8 @@ function renderControls(j) {
     const lbl = document.createElement('span');
     lbl.style.cssText = 'flex:1 1 10rem;font-size:.9rem';
     lbl.textContent = CTRL_LABEL[it.field] || it.field;
-    if (pending !== undefined) {
+    const sending = pending !== undefined && sentCtrl.has(it.field);
+    if (pending !== undefined && !sending) {
       const dot = document.createElement('span');
       dot.textContent = ' •';
       dot.title = 'Changed — click Apply to send it';
@@ -1451,6 +1497,14 @@ function renderControls(j) {
 
     let input;
     if (it.kind === 'bool') {
+      if (sending) {
+        const spin = document.createElement('span');
+        spin.className = 'spin';
+        spin.title = 'Sent — waiting for the unit to confirm';
+        row.appendChild(spin);
+        list.appendChild(row);
+        continue;
+      }
       input = document.createElement('input');
       input.type = 'checkbox';
       input.id = 'ctrl_' + it.field;
@@ -1464,8 +1518,7 @@ function renderControls(j) {
             : 'Turn ' + CTRL_LABEL[it.field] + ' off?';
           if (!confirm(q)) { input.checked = true; return; }
         }
-        pendingCtrl[it.field] = want;
-        updateCtrlApplyBar();
+        stageCtrl(it.field, want);
       };
       const wrap = document.createElement('label');
       wrap.className = 'toggle';
@@ -1485,8 +1538,7 @@ function renderControls(j) {
       input.onchange = () => {
         const v = parseInt(input.value, 10);
         if (isNaN(v) || v < lo || v > hi) { input.value = shown; return; }
-        pendingCtrl[it.field] = v;
-        updateCtrlApplyBar();
+        stageCtrl(it.field, v);
       };
       const pct = document.createElement('span');
       pct.textContent = '%'; pct.style.cssText = 'font-size:.85rem;opacity:.7';
@@ -1504,14 +1556,19 @@ function renderControls(j) {
         if (Number(v) === shown) o.selected = true;
         input.appendChild(o);
       }
-      input.onchange = () => {
-        pendingCtrl[it.field] = Number(input.value);
-        updateCtrlApplyBar();
-      };
+      input.onchange = () => stageCtrl(it.field, Number(input.value));
     }
     row.appendChild(input);
     list.appendChild(row);
   }
+}
+
+let lastControls = null;
+/* Re-renders from the last poll's data, so staging or applying a change
+   shows its dot/spinner right away instead of waiting up to 3 s for the
+   next actual poll to come back. */
+function rerenderControls() {
+  if (lastControls) renderControls(lastControls);
 }
 
 async function refreshControls() {
@@ -1521,7 +1578,8 @@ async function refreshControls() {
     try {
       const r = await fetch('/api/controls');
       if (bounceIfSignedOut(r)) return;
-      renderControls(await r.json());
+      lastControls = await r.json();
+      renderControls(lastControls);
     } catch (e) { /* keep last */ }
   }
   ctrlTimer = setTimeout(refreshControls, 3000);

@@ -106,10 +106,13 @@ static struct {
     int64_t              req_sent_us;
     int                  poll_fails;     /* consecutive reads with no reply */
 
-    /* A single queued control write, sent ahead of the next poll read. */
-    bool                 write_pending;
-    uint16_t             write_reg;
-    uint16_t             write_val;
+    /* Queued control writes, sent one per poll tick, ahead of the next
+     * read, oldest first. A register already queued has its value replaced
+     * in place rather than growing the queue, so this can never need more
+     * slots than there are distinct writeable controls (11, see
+     * bt_regs.c's BT_CONTROLS) — 16 leaves headroom without tracking. */
+    struct { uint16_t reg; uint16_t val; } write_queue[16];
+    int                  write_queue_n;
 
     bluetti_state_t      state;
     SemaphoreHandle_t    lock;
@@ -431,11 +434,21 @@ static void poll_timer_cb(void *arg)
         ESP_LOGW(TAG, "no reply to the last read (%d) — moving on", b.poll_fails);
     }
 
-    /* A queued control write goes ahead of the next poll read. */
+    /* A queued control write goes ahead of the next poll read — oldest
+     * first, one per tick, so applying several controls at once still
+     * sends each of them instead of the newest silently replacing the
+     * others. */
     xSemaphoreTake(b.lock, portMAX_DELAY);
-    bool do_write = b.write_pending;
-    uint16_t wreg = b.write_reg, wval = b.write_val;
-    b.write_pending = false;
+    bool do_write = b.write_queue_n > 0;
+    uint16_t wreg = 0, wval = 0;
+    if (do_write) {
+        wreg = b.write_queue[0].reg;
+        wval = b.write_queue[0].val;
+        for (int i = 1; i < b.write_queue_n; i++) {
+            b.write_queue[i - 1] = b.write_queue[i];
+        }
+        b.write_queue_n--;
+    }
     xSemaphoreGive(b.lock);
 
     if (do_write) {
@@ -940,7 +953,7 @@ void bluetti_ble_set_controls(bool on)
     b.cfg.controls = on;
     xSemaphoreTake(b.lock, portMAX_DELAY);
     if (!on) {
-        b.write_pending = false;
+        b.write_queue_n = 0;
     }
     if (b.device) {
         b.plan_n = bt_regs_plan(b.device, on, b.plan, BT_REG_PLAN_MAX);
@@ -1024,9 +1037,23 @@ int bluetti_ble_write_control(const char *field, int value)
         return -1;
     }
     xSemaphoreTake(b.lock, portMAX_DELAY);
-    b.write_pending = true;
-    b.write_reg = c->reg;
-    b.write_val = (uint16_t)value;
+    int slot = -1;
+    for (int i = 0; i < b.write_queue_n; i++) {
+        if (b.write_queue[i].reg == c->reg) {
+            slot = i;      /* not yet sent — replace with the newer value */
+            break;
+        }
+    }
+    if (slot < 0) {
+        if (b.write_queue_n >= (int)(sizeof(b.write_queue) / sizeof(b.write_queue[0]))) {
+            xSemaphoreGive(b.lock);
+            ESP_LOGW(TAG, "control write refused: %s — queue full", field);
+            return -1;
+        }
+        slot = b.write_queue_n++;
+    }
+    b.write_queue[slot].reg = c->reg;
+    b.write_queue[slot].val = (uint16_t)value;
     xSemaphoreGive(b.lock);
     ESP_LOGW(TAG, "queued control write: %s = %d (reg %u)", field, value, c->reg);
     return 0;
