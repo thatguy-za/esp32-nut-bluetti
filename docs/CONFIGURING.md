@@ -187,8 +187,9 @@ read as happening now.
 > nothing is exposed as a writable NUT variable, so a misconfigured `upsmon`
 > can never toggle the power station.
 
-Off by default. Tick "Allow controlling the unit" on the **Bluetti** tab — it
-applies immediately, no reboot — and the controls the unit reports appear.
+Off by default. Tick "Allow control of the Bluetti power station" on the
+**Bluetti** tab — it applies immediately, no reboot — and the controls the
+unit reports appear.
 
 Changing a control stages it rather than sending it right away, and an
 **Apply** button appears to send everything staged in one go. Nothing
@@ -414,7 +415,7 @@ failure. Hover a dot for the detail: the countdown while on battery,
 | `battery.capacity` | the model's spec capacity, or your NUT-tab override |
 | `ups.load` | % of the configured continuous AC rating |
 | `ups.realpower` / `ups.realpower.nominal` | AC + DC output W / the configured AC rating |
-| `input.realpower` / `input.realpower.ac` | total input W / mains input W |
+| `input.realpower` / `input.realpower.ac` / `input.realpower.dc` | total input W / mains input W / DC (solar) input W |
 | `output.realpower` / `output.realpower.dc` | AC output W / DC output W |
 | `outlet.1.*` / `outlet.2.*` | AC and DC output banks — `desc`, `status`, `realpower` |
 | `input.voltage`, `input.current`, `output.voltage` | measured, Elite-10 family only |

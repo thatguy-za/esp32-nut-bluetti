@@ -140,6 +140,9 @@ static void publish_nut_from_bluetti(const bluetti_state_t *st)
     if (st->ac_in_watts >= 0.0f) {
         nut_server_set_var_float("input.realpower.ac", st->ac_in_watts, 0);
     }
+    if (st->dc_in_watts >= 0.0f) {
+        nut_server_set_var_float("input.realpower.dc", st->dc_in_watts, 0);
+    }
     if (st->ac_out_watts >= 0.0f) {
         nut_server_set_var_float("output.realpower", st->ac_out_watts, 0);
     }
