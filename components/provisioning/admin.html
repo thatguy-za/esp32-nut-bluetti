@@ -367,7 +367,10 @@
       <p class="hint">Experimental. Control the power station from this UI; NUT
         stays read-only.</p>
       <div id="ctrlList" hidden style="margin-top:.8rem; border-top:1px solid #8883; padding-top:.6rem"></div>
-      <p class="hint" id="ctrlMsg" hidden></p>
+      <div class="saveBar" id="ctrlApplyBar" hidden>
+        <button type="button" class="act primary" id="ctrlApply">Apply</button>
+        <span class="hint" id="ctrlApplyMsg"></span>
+      </div>
     </div>
 
     <div class="saveBar" hidden><button class="act primary" id="efSave">Save &amp; reboot</button>
@@ -1340,32 +1343,59 @@ const CTRL_OPT = {
   eco_mode_dc:   { 1: '1 hour', 2: '2 hours', 3: '3 hours', 4: '4 hours' },
 };
 
+/* Changes are staged here (field -> value) rather than sent the instant a
+   control is touched — a control only actually goes out once Apply is
+   clicked. A field drops out again once the unit's own reported value
+   catches up to what was staged, whether that's from this page's Apply or
+   from some other page/session. */
+let pendingCtrl = {};
+
+function updateCtrlApplyBar() {
+  const n = Object.keys(pendingCtrl).length;
+  $('#ctrlApplyBar').hidden = n === 0;
+  $('#ctrlApply').textContent = n > 1 ? `Apply (${n} changes)` : 'Apply';
+}
+
 async function sendControl(field, value) {
+  const r = await fetch('/api/control', {
+    method: 'POST',
+    body: new URLSearchParams({ field, value }),
+  });
+  if (bounceIfSignedOut(r)) throw new Error('signed out');
+  if (!r.ok) throw new Error((await r.text()).trim() || 'HTTP ' + r.status);
+}
+
+$('#ctrlApply').onclick = async () => {
+  const entries = Object.entries(pendingCtrl);
+  if (!entries.length) return;
   ctrlBusy = true;
-  $('#ctrlMsg').hidden = false;
-  $('#ctrlMsg').textContent = 'Sending…';
-  try {
-    const r = await fetch('/api/control', {
-      method: 'POST',
-      body: new URLSearchParams({ field, value }),
-    });
-    if (bounceIfSignedOut(r)) return;
-    if (!r.ok) throw new Error((await r.text()).trim() || 'HTTP ' + r.status);
-    $('#ctrlMsg').textContent = 'Sent — the unit confirms this on the next poll, '
-      + 'so it may take a few seconds.';
-  } catch (e) {
-    $('#ctrlMsg').textContent = 'Could not send: ' + e.message;
+  $('#ctrlApply').disabled = true;
+  $('#ctrlApplyMsg').textContent = 'Sending…';
+  const failedFields = [];
+  for (const [field, value] of entries) {
+    try {
+      await sendControl(field, value);
+      delete pendingCtrl[field];
+    } catch (e) {
+      failedFields.push(field);
+    }
   }
+  $('#ctrlApply').disabled = false;
+  $('#ctrlApplyMsg').textContent = failedFields.length
+    ? 'Could not send: ' + failedFields.map(f => CTRL_LABEL[f] || f).join(', ')
+    : 'Sent — the unit confirms this on the next poll, so it may take a few seconds.';
+  updateCtrlApplyBar();
   ctrlBusy = false;
   setTimeout(refreshControls, 1500);
-}
+};
 
 function renderControls(j) {
   const list = $('#ctrlList');
   /* Collapsed when off: only the toggle and its one-line hint. */
   const hint = $('#cfgControls').closest('.box').querySelector('.hint');
   if (!j.enabled) {
-    list.hidden = true; $('#ctrlMsg').hidden = true;
+    list.hidden = true;
+    pendingCtrl = {}; updateCtrlApplyBar();
     if (hint) hint.hidden = false;
     return;
   }
@@ -1392,19 +1422,38 @@ function renderControls(j) {
     return;
   }
 
+  /* A field the unit now reports as matching what was staged is done —
+     drop it so Apply's count (and the dirty dot) reflect only what is
+     still actually unconfirmed. */
+  for (const it of items) {
+    if (pendingCtrl[it.field] !== undefined && pendingCtrl[it.field] === it.value) {
+      delete pendingCtrl[it.field];
+    }
+  }
+  updateCtrlApplyBar();
+
   for (const it of items) {
     const row = document.createElement('div');
     row.className = 'row';
+    const pending = pendingCtrl[it.field];
+    const shown = pending !== undefined ? pending : it.value;
     const lbl = document.createElement('span');
     lbl.style.cssText = 'flex:1 1 10rem;font-size:.9rem';
     lbl.textContent = CTRL_LABEL[it.field] || it.field;
+    if (pending !== undefined) {
+      const dot = document.createElement('span');
+      dot.textContent = ' •';
+      dot.title = 'Changed — click Apply to send it';
+      dot.style.color = '#2563eb';
+      lbl.appendChild(dot);
+    }
     row.appendChild(lbl);
 
     let input;
     if (it.kind === 'bool') {
       input = document.createElement('input');
       input.type = 'checkbox';
-      input.checked = it.value === 1;
+      input.checked = shown === 1;
       input.onchange = () => {
         const want = input.checked ? 1 : 0;
         if (want === 0 && (it.field === 'ac_output' || it.field === 'dc_output')) {
@@ -1414,7 +1463,8 @@ function renderControls(j) {
             : 'Turn ' + CTRL_LABEL[it.field] + ' off?';
           if (!confirm(q)) { input.checked = true; return; }
         }
-        sendControl(it.field, want);
+        pendingCtrl[it.field] = want;
+        updateCtrlApplyBar();
       };
       const wrap = document.createElement('span');
       wrap.className = 'toggle';
@@ -1428,12 +1478,13 @@ function renderControls(j) {
       const [lo, hi] = it.allowed.split(',').map(Number);
       input = document.createElement('input');
       input.type = 'number';
-      input.min = lo; input.max = hi; input.value = it.value;
+      input.min = lo; input.max = hi; input.value = shown;
       input.style.width = '5rem';
       input.onchange = () => {
         const v = parseInt(input.value, 10);
-        if (isNaN(v) || v < lo || v > hi) { input.value = it.value; return; }
-        sendControl(it.field, v);
+        if (isNaN(v) || v < lo || v > hi) { input.value = shown; return; }
+        pendingCtrl[it.field] = v;
+        updateCtrlApplyBar();
       };
       const pct = document.createElement('span');
       pct.textContent = '%'; pct.style.cssText = 'font-size:.85rem;opacity:.7';
@@ -1447,10 +1498,13 @@ function renderControls(j) {
       for (const [v, name] of Object.entries(opts)) {
         const o = document.createElement('option');
         o.value = v; o.textContent = name;
-        if (Number(v) === it.value) o.selected = true;
+        if (Number(v) === shown) o.selected = true;
         input.appendChild(o);
       }
-      input.onchange = () => sendControl(it.field, Number(input.value));
+      input.onchange = () => {
+        pendingCtrl[it.field] = Number(input.value);
+        updateCtrlApplyBar();
+      };
     }
     row.appendChild(input);
     list.appendChild(row);

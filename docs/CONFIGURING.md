@@ -190,6 +190,12 @@ read as happening now.
 Off by default. Tick "Allow controlling the unit" on the **Bluetti** tab — it
 applies immediately, no reboot — and the controls the unit reports appear.
 
+Changing a control stages it rather than sending it right away — a blue dot
+marks anything changed but not yet sent, and an **Apply** button appears to
+send everything staged in one go. Nothing reaches the unit until you click
+it, so several changes can be queued up together (say, a new charging mode
+alongside a screen timeout) instead of round-tripping one at a time.
+
 | Control | Values | Models |
 | --- | --- | --- |
 | AC output, DC output | on / off | all controllable models |
