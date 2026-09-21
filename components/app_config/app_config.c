@@ -70,7 +70,7 @@ static const char *TAG = "app_config";
  * discarded the whole blob outright on any v8-v11 device that upgraded
  * straight to v12+, since NVS refuses a read into a too-small buffer.
  */
-#define CFG_VERSION 17u
+#define CFG_VERSION 18u
 
 /* Stored blob = version word + struct. The version guards against a
  * struct-layout change in a future firmware. */
@@ -211,6 +211,7 @@ void app_config_defaults(app_config_t *cfg)
     cfg->tg_on_power = true;             /* the events worth waking for */
     cfg->tg_on_low_batt = true;
     cfg->tg_on_link = false;
+    cfg->tg_on_battery_pct = false;      /* off by default: noisier than the others */
     cfg->tg_on_pve_host = true;           /* a host or guest going down is */
     cfg->tg_on_pve_guest = true;          /* worth it too */
     strlcpy(cfg->nut_user, "upsmon", sizeof(cfg->nut_user));

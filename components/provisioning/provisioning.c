@@ -1113,7 +1113,7 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              "\"fb_ap_enabled\":%s,\"fb_ap_ssid\":\"%s\",\"has_fb_ap_pass\":%s,"
              "\"tg_enabled\":%s,\"tg_chat\":\"%s\",\"has_tg_token\":%s,"
              "\"tg_on_power\":%s,\"tg_on_low_batt\":%s,\"tg_on_link\":%s,"
-             "\"tg_on_pve_host\":%s,\"tg_on_pve_guest\":%s}",
+             "\"tg_on_pve_host\":%s,\"tg_on_pve_guest\":%s,\"tg_on_battery_pct\":%s}",
              P.cfg->ble_addr,
              P.cfg->log_level,
              P.cfg->controls_enabled ? "true" : "false",
@@ -1138,7 +1138,8 @@ static esp_err_t h_admin_config(httpd_req_t *r)
              P.cfg->tg_on_low_batt ? "true" : "false",
              P.cfg->tg_on_link ? "true" : "false",
              P.cfg->tg_on_pve_host ? "true" : "false",
-             P.cfg->tg_on_pve_guest ? "true" : "false");
+             P.cfg->tg_on_pve_guest ? "true" : "false",
+             P.cfg->tg_on_battery_pct ? "true" : "false");
 
     /* Proxmox. Secrets are write-only: only "is one stored" goes out. */
     const pve_config_t *pv = &P.cfg->pve;
@@ -1166,11 +1167,11 @@ static esp_err_t h_admin_config(httpd_req_t *r)
         n += snprintf(out + n, 16000 - n,
                       "%s{\"enabled\":%s,\"url\":\"%s\",\"node\":\"%s\","
                       "\"token_id\":\"%s\",\"has_secret\":%s,"
-                      "\"guest_wait_s\":%u,\"shutdown_node\":%s,\"fingerprint\":\"%s\","
+                      "\"shutdown_node\":%s,\"fingerprint\":\"%s\","
                       "\"on_battery_min\":%u,\"charge_pct\":%u,\"guests\":[",
                       i ? "," : "", h->enabled ? "true" : "false", h->url, h->node,
                       h->token_id, h->secret[0] ? "true" : "false",
-                      (unsigned)h->guest_wait_s, h->shutdown_node ? "true" : "false",
+                      h->shutdown_node ? "true" : "false",
                       fp, (unsigned)h->on_battery_min, (unsigned)h->charge_pct);
         pve_guest_t *gg = NULL;
         int gn = 0;
@@ -1328,9 +1329,6 @@ static bool pve_host_from_form(const char *body, int i, pve_host_t *h,
     form_get(body, HK("node"), h->node, sizeof(h->node));
     form_get(body, HK("token"), h->token_id, sizeof(h->token_id));
     h->shutdown_node = form_get(body, HK("node_off"), v, sizeof(v)) && v[0] == '1';
-    if (form_get(body, HK("wait"), v, sizeof(v)) && atoi(v) >= 0) {
-        h->guest_wait_s = (uint16_t)atoi(v);
-    }
     if (form_get(body, HK("min"), v, sizeof(v)) && atoi(v) >= 0 && atoi(v) <= 1440) {
         h->on_battery_min = (uint16_t)atoi(v);
     }
@@ -1649,6 +1647,8 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
             form_get(body, "tg_on_pve_host", v, sizeof(v)) && v[0] == '1';
         P.pending.tg_on_pve_guest =
             form_get(body, "tg_on_pve_guest", v, sizeof(v)) && v[0] == '1';
+        P.pending.tg_on_battery_pct =
+            form_get(body, "tg_on_battery_pct", v, sizeof(v)) && v[0] == '1';
         memset(body, 0, len);
         free(body);
 
@@ -1702,6 +1702,7 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
             .on_power = P.cfg->tg_on_power,
             .on_low_batt = P.cfg->tg_on_low_batt,
             .on_link = P.cfg->tg_on_link,
+            .on_battery_pct = P.cfg->tg_on_battery_pct,
         };
         strlcpy(ncfg.bot_token, P.cfg->tg_token, sizeof(ncfg.bot_token));
         strlcpy(ncfg.chat_id, P.cfg->tg_chat, sizeof(ncfg.chat_id));
@@ -1726,6 +1727,7 @@ static esp_err_t h_admin_reconfigure(httpd_req_t *r)
             .on_power = P.cfg->tg_on_power,
             .on_low_batt = P.cfg->tg_on_low_batt,
             .on_link = P.cfg->tg_on_link,
+            .on_battery_pct = P.cfg->tg_on_battery_pct,
         };
         strlcpy(ncfg.bot_token, P.cfg->tg_token, sizeof(ncfg.bot_token));
         strlcpy(ncfg.chat_id, P.cfg->tg_chat, sizeof(ncfg.chat_id));

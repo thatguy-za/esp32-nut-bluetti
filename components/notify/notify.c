@@ -50,6 +50,8 @@ static struct {
     bool              low_batt;
     int64_t           last_event_us;
     power_state_t     last_event_state;
+    int               batt_decile;   /* soc_pct/10 at the last reminder while
+                                         on battery; -1 = not tracking       */
 } N;
 
 /* ------------------------------------------------------------------ */
@@ -338,6 +340,35 @@ void notify_ups_status(const char *status, int soc_pct, int runtime_min)
         notify_send("\xF0\x9F\x94\x8B Battery no longer low.");
     }
 
+    /* A repeating reminder every 10 points the charge drops while still on
+     * battery — on top of the one-shot "mains lost" and "battery low"
+     * alerts above. Independent of the mains-transition edge above (it has
+     * to be checked on every sample, not just the moment the outage
+     * starts) and of the low-battery edge (a slower or faster drain still
+     * gets a reminder every 10 points, whether or not it also happens to
+     * be "low"). Resets once back on the mains — or the link drops, since
+     * a blind guess at what happened while disconnected is worse than
+     * just starting fresh from wherever the charge is on reconnect. */
+    if (now == PWR_BATTERY && cfg.on_battery_pct) {
+        int decile = soc_pct / 10;
+        if (N.batt_decile < 0) {
+            N.batt_decile = decile;      /* first sample on battery */
+        } else if (decile < N.batt_decile) {
+            N.batt_decile = decile;
+            if (runtime_min > 0) {
+                snprintf(text, sizeof(text),
+                         "\xF0\x9F\x94\x8B Still on battery: %d%% charge, "
+                         "about %d min left.", soc_pct, runtime_min);
+            } else {
+                snprintf(text, sizeof(text),
+                         "\xF0\x9F\x94\x8B Still on battery: %d%% charge.", soc_pct);
+            }
+            notify_send(text);
+        }
+    } else if (now != PWR_BATTERY) {
+        N.batt_decile = -1;
+    }
+
     N.power = now;
     N.low_batt = low;
 }
@@ -382,6 +413,7 @@ int notify_start(const notify_config_t *cfg, const char *label)
     N.power = PWR_UNKNOWN;
     N.low_batt = false;
     N.last_event_state = PWR_UNKNOWN;
+    N.batt_decile = -1;
 
     /* TLS needs a roomy stack. */
     if (xTaskCreate(worker, "notify", 6144, NULL, 4, NULL) != pdPASS) {

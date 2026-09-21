@@ -371,6 +371,7 @@ static void start_services(const app_config_t *cfg)
         .on_power = cfg->tg_on_power,
         .on_low_batt = cfg->tg_on_low_batt,
         .on_link = cfg->tg_on_link,
+        .on_battery_pct = cfg->tg_on_battery_pct,
     };
     strlcpy(ncfg.bot_token, cfg->tg_token, sizeof(ncfg.bot_token));
     strlcpy(ncfg.chat_id, cfg->tg_chat, sizeof(ncfg.chat_id));

@@ -84,8 +84,10 @@ typedef struct {
     char     node[32];       /* node name, as `pvecm nodes` / the UI shows */
     char     token_id[64];   /* ups@pve!shutdown                           */
     char     secret[40];     /* the token secret (a UUID)                  */
-    uint16_t guest_wait_s;   /* after guests fired alongside the node,
-                                before the node itself                     */
+    uint16_t guest_wait_s;   /* unused — the wait between guests and the node
+                                was removed; kept only so every field after
+                                it (fingerprint!) keeps its on-disk offset
+                                for devices upgrading from before this      */
     bool     shutdown_node;  /* false = guests only, the node stays up     */
     char     fingerprint[65];/* SHA-256 of the server cert, 64 hex, no
                                 colons; blank = not pinned, nothing is sent */

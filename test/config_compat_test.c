@@ -68,8 +68,12 @@ int main(void)
         "tg_on_pve_guest (v14) follows tg_on_pve_host, in order");
     OKF(offsetof(app_config_t, nut_enabled) > offsetof(app_config_t, tg_on_pve_guest),
         "nut_enabled (v15) was appended after tg_on_pve_guest");
-    OKF(offsetof(app_config_t, nut_enabled) + sizeof(bool) + 3 >= sizeof(app_config_t),
-        "nut_enabled is the last field");
+    OKF(offsetof(app_config_t, pve_selftest_hours) > offsetof(app_config_t, nut_enabled),
+        "pve_selftest_hours (v17) was appended after nut_enabled");
+    OKF(offsetof(app_config_t, tg_on_battery_pct) >= offsetof(app_config_t, pve_selftest_hours) + sizeof(uint16_t),
+        "tg_on_battery_pct (v18) was appended after pve_selftest_hours");
+    OKF(offsetof(app_config_t, tg_on_battery_pct) + sizeof(bool) + 3 >= sizeof(app_config_t),
+        "tg_on_battery_pct is the last field");
 
     const size_t full_len = sizeof(blob_t);
     const size_t min_len  = offsetof(blob_t, cfg) + V3_END;

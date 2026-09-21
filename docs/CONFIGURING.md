@@ -247,6 +247,7 @@ appears once it's on.
 | --- | --- |
 | Mains lost / restored | on |
 | Battery low (crosses the NUT low-battery threshold) | on |
+| Reminder every 10% the battery drops, while on battery | off |
 | Bluetti unit unreachable / back | off |
 | Proxmox host shutdowns (dry-run fires included) | on |
 | Proxmox guest (VM/CT) shutdowns (dry-run fires included) | on |
@@ -265,6 +266,12 @@ keeps serving NUT and drops the message rather than stalling.
 Mains lost/restored fire only on genuine on-line ↔ on-battery transitions —
 coming back from a dropped link (a reboot, say) is silent unless the
 unreachable/back alert is on.
+
+The every-10% reminder is independent of "Battery low" — it fires each time
+the charge crosses a new ten-point mark (90%, 80%, 70%, ...) for as long as
+the outage lasts, whether or not that also happens to be low, and resets
+once the mains comes back so the next outage starts counting fresh from
+wherever the charge is at.
 
 **Save** on this tab applies immediately too — no reboot.
 
@@ -394,10 +401,12 @@ Borrowed wholesale from pve-ups, because it is right:
   routine checks.
 
 The **Status** page shows one dot per host, alongside the BLE and NUT ones —
-green for *ready*, amber for untested/counting down/just fired, red for a
-failure. Hover a dot for the detail: the countdown while on battery,
-*shutdown sent*, what went wrong, or how long ago it was last checked
-(manually or by the automatic self-test).
+green for *ready*, amber for untested/counting down/just fired, grey for
+disabled or (with everything else fine) simply on battery, red for a
+failure. Hover or tap a dot for the detail: the countdown while on
+battery, *shutdown sent*, what went wrong, or how long ago it was last
+checked (manually or by the automatic self-test) — tapping shows the same
+text as a small popover, for phones and anything else without hover.
 
 > **The token can power off servers.** Keep the bridge on the same trusted
 > network as the Proxmox web interface. The admin page's login is what stands

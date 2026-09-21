@@ -127,6 +127,12 @@ typedef struct {
      * that struct's on-disk layout — and appended here, after nut_enabled,
      * to stay the last field per the append-only rule above. */
     uint16_t pve_selftest_hours;
+
+    /* A reminder every 10 percentage points the battery drops while on
+     * battery (90%, 80%, 70%, ...), on top of the one-shot "mains lost"
+     * and "battery low" alerts above — appended last, same reason as
+     * pve_selftest_hours just above. */
+    bool     tg_on_battery_pct;
 } app_config_t;
 
 /* How long the station has to be down before the fallback AP comes up.

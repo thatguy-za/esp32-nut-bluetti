@@ -77,6 +77,11 @@
         overflow: auto; max-height: 50vh; font: 12px/1.45 ui-monospace, monospace;
         white-space: pre-wrap; word-break: break-word; margin: 0; }
   .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .5rem 0; }
+  /* Like .row, but for a label-then-toggle line: never wraps the toggle
+     onto its own line even when the label text itself has to wrap. */
+  .evtRow { display: flex; gap: .5rem; align-items: center; margin: .5rem 0; }
+  .evtRow > span:first-child { flex: 1 1 auto; min-width: 0; }
+  .evtRow .toggle { flex: none; }
   .act { padding: .45rem .8rem; font: inherit; border-radius: .35rem;
          border: 1px solid #8886; background: #8882; color: inherit; cursor: pointer;
          transition: background .12s, border-color .12s, transform .05s; }
@@ -167,12 +172,19 @@
   .minibox table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
   .statusDots { font-size: .78rem; opacity: .8; margin: .8rem 0 0; }
   .statusDots .dot { display: inline-flex; align-items: center; gap: .35rem; margin-right: 1rem;
-                      margin-bottom: .3rem; }
+                      margin-bottom: .3rem; cursor: pointer; }
   .statusDots .dot::before { content: ''; width: 7px; height: 7px; border-radius: 50%;
                               background: #8886; flex: none; }
   .statusDots .dot.up::before { background: #16a34a; }
   .statusDots .dot.warn::before { background: #d9822b; }
   .statusDots .dot.bad::before { background: #c00; }
+  /* Click-to-explain popover for a status dot — title="" still works as a
+     hover tooltip on desktop; this is the tap-friendly equivalent, since a
+     touch device never sees that hover at all. */
+  .dotPopover { position: fixed; max-width: 17rem; background: Canvas; color: CanvasText;
+                border: 1px solid #8888; border-radius: .4rem; padding: .5rem .7rem;
+                font-size: .82rem; line-height: 1.35; box-shadow: 0 6px 20px #0006; z-index: 50; }
+  .dotPopover[hidden] { display: none; }
 
   /* A control that's been sent but not yet confirmed by the unit's own
      next read of that register. */
@@ -184,7 +196,8 @@
   /* ---- Proxmox tab ---- */
   .pveHost > h2 { display: flex; align-items: center; gap: .6rem; }
   .pveHost > h2 .name { font-weight: 400; opacity: .7; }
-  .pveHost > h2 .spacer { flex: 1; }
+  /* Pushes whatever follows it to the far end of any flex row it sits in. */
+  .spacer { flex: 1; }
   .chip { font-size: .72rem; font-weight: 600; border: 1px solid currentColor;
           border-radius: 20px; padding: .1rem .55rem; white-space: nowrap; opacity: .85; }
   .chip.ok   { color: #16a34a; }
@@ -222,7 +235,6 @@
   .ghead .gid { opacity: .55; font-size: .8rem; font-variant-numeric: tabular-nums; }
   .ghead .gstat { font-size: .78rem; opacity: .6; white-space: nowrap; }
   .ghead .gstat.up { color: #16a34a; opacity: .9; }
-  .ghead .spacer { flex: 1; }
   .toggle { position: relative; width: 2.1rem; height: 1.2rem; flex: none; }
   .toggle input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
   .track { position: absolute; inset: 0; background: #8886; border-radius: 1rem;
@@ -327,6 +339,7 @@
       </div>
     </div>
     <div class="statusDots" id="statusDots"></div>
+    <div class="dotPopover" id="dotPopover" hidden></div>
   </div>
   <div class="box">
     <h2>Logs <span class="sub">device log tail, ~12&nbsp;KB</span></h2>
@@ -600,16 +613,24 @@
          <span class="hint" id="tgTestMsg"></span></p>
 
       <h3 style="font-size:.85rem; margin:1.1rem 0 .5rem">Which events</h3>
-      <label class="chk"><span class="toggle"><input type="checkbox" id="tgPower" name="tg_on_power" value="1">
-        <span class="track"></span></span> Mains lost / restored</label><br>
-      <label class="chk"><span class="toggle"><input type="checkbox" id="tgLow" name="tg_on_low_batt" value="1">
-        <span class="track"></span></span> Battery low</label><br>
-      <label class="chk"><span class="toggle"><input type="checkbox" id="tgLink" name="tg_on_link" value="1">
-        <span class="track"></span></span> Bluetti unit unreachable / back</label><br>
-      <label class="chk"><span class="toggle"><input type="checkbox" id="tgPveHost" name="tg_on_pve_host" value="1">
-        <span class="track"></span></span> Proxmox host shutdowns</label><br>
-      <label class="chk"><span class="toggle"><input type="checkbox" id="tgPveGuest" name="tg_on_pve_guest" value="1">
-        <span class="track"></span></span> Proxmox guest (VM/CT) shutdowns</label>
+      <div class="evtRow"><span>Mains lost / restored</span>
+        <label class="toggle"><input type="checkbox" id="tgPower" name="tg_on_power" value="1">
+          <span class="track"></span></label></div>
+      <div class="evtRow"><span>Battery low</span>
+        <label class="toggle"><input type="checkbox" id="tgLow" name="tg_on_low_batt" value="1">
+          <span class="track"></span></label></div>
+      <div class="evtRow"><span>Reminder every 10% the battery drops, while on battery</span>
+        <label class="toggle"><input type="checkbox" id="tgBattPct" name="tg_on_battery_pct" value="1">
+          <span class="track"></span></label></div>
+      <div class="evtRow"><span>Bluetti unit unreachable / back</span>
+        <label class="toggle"><input type="checkbox" id="tgLink" name="tg_on_link" value="1">
+          <span class="track"></span></label></div>
+      <div class="evtRow"><span>Proxmox host shutdowns</span>
+        <label class="toggle"><input type="checkbox" id="tgPveHost" name="tg_on_pve_host" value="1">
+          <span class="track"></span></label></div>
+      <div class="evtRow"><span>Proxmox guest (VM/CT) shutdowns</span>
+        <label class="toggle"><input type="checkbox" id="tgPveGuest" name="tg_on_pve_guest" value="1">
+          <span class="track"></span></label></div>
       <p class="hint">Repeats of the same event inside a minute are suppressed,
         so a flapping supply won't spam the chat.</p>
     </div>
@@ -862,6 +883,22 @@ function pveHostDot(h, p) {
   if (h.last && !h.ok) return { cls: 'warn', title: h.last + fmtCheckedAgo(h.checked_s) };
   return { cls: 'up', title: 'ready' + fmtCheckedAgo(h.checked_s) };
 }
+/* Tapping a status dot shows the same detail its title attribute carries
+   as a small popover — hover alone never reaches a touch device, and grey
+   or amber otherwise gives no clue why without one. */
+document.addEventListener('click', ev => {
+  const pop = $('#dotPopover');
+  const dot = ev.target.closest('.statusDots .dot');
+  if (!dot) { pop.hidden = true; return; }
+  const text = dot.getAttribute('title');
+  if (!text) { pop.hidden = true; return; }
+  pop.textContent = text;
+  pop.hidden = false;
+  const r = dot.getBoundingClientRect();
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8));
+  pop.style.left = left + 'px';
+  pop.style.top = (r.bottom + 6) + 'px';
+});
 /* Hides a tab from the nav entirely when its integration is off — Bluetti
    and the always-present tabs (Status, Network, Settings) are never in
    this set. If the tab a user is sitting on just got hidden out from under
@@ -1141,7 +1178,6 @@ async function loadConfig() {
       $(`#h${i}_token`).value = h.token_id || '';
       $(`#h${i}_secret`).placeholder = h.has_secret ? 'unchanged' : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
       $(`#h${i}_fp`).value = h.fingerprint || '';
-      $(`#h${i}_wait`).value = h.guest_wait_s ?? 30;
       $(`#h${i}_min`).value = h.on_battery_min ?? 30;
       $(`#h${i}_pct`).value = h.charge_pct ?? 10;
       document.querySelector(`[name=h${i}_node_off]`).checked = h.shutdown_node !== false;
@@ -1175,6 +1211,7 @@ async function loadConfig() {
     $('#tgToken').placeholder = cfg.has_tg_token ? 'unchanged' : '123456789:AA…';
     $('#tgPower').checked = !!cfg.tg_on_power;
     $('#tgLow').checked = !!cfg.tg_on_low_batt;
+    $('#tgBattPct').checked = !!cfg.tg_on_battery_pct;
     $('#tgLink').checked = !!cfg.tg_on_link;
     $('#tgPveHost').checked = !!cfg.tg_on_pve_host;
     $('#tgPveGuest').checked = !!cfg.tg_on_pve_guest;
@@ -1774,12 +1811,13 @@ function pveHostBox(i) {
     <div id="h${i}_glist" class="glist"></div>
     <p class="hint" id="h${i}_gfoot" style="margin:.5rem 0 0"></p>
 
-    <div class="inline" style="margin-top:.8rem">then wait
-      <input id="h${i}_wait" name="h${i}_wait" type="number" min="0" max="600"> seconds, then
-      <label class="chk"><span class="toggle"><input type="checkbox" name="h${i}_node_off" value="1">
-        <span class="track"></span></span> shut down the node itself</label></div>
-    <p class="hint" style="margin:0">Applies when this trigger stops a guest that has no
-      rule of its own — one with its own timer that already fired earlier needs no wait.</p>
+    <div class="evtRow" id="h${i}_nodeoff_row" style="margin-top:.8rem" hidden>
+      <span>Shut down host once all guests have shutdown</span>
+      <label class="toggle">
+        <input type="checkbox" name="h${i}_node_off" value="1">
+        <span class="track"></span>
+      </label>
+    </div>
     </div>
     ${i ? `<div class="row" style="margin-top:1rem">
       <button type="button" class="act danger pveRemove" data-i="${i}">Remove</button>
@@ -1937,6 +1975,9 @@ function pveRenderGuestCards(i) {
   $(`#h${i}_gfoot`).textContent = n
     ? `${n} guest rule${n === 1 ? '' : 's'} configured — the rest go down with the node.`
     : '';
+  /* Meaningless with no guest rules at all — every guest just goes down
+     with the node, so there's nothing here to sequence. */
+  $(`#h${i}_nodeoff_row`).hidden = n === 0;
 }
 async function pveLoadGuests(i, quiet) {
   const msg = $(`#h${i}_gmsg`), b = document.querySelector(`.pveLoad[data-i="${i}"]`);

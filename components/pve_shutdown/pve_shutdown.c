@@ -495,7 +495,6 @@ static void run_host(int i, const pve_config_t *cfg, bool node_pending,
         return;
     }
 
-    bool any_guest_shut = false;
     for (int k = 0; k < batch_n; k++) {
         int id = batch[k].id;
         char why[96] = "";
@@ -503,7 +502,6 @@ static void run_host(int i, const pve_config_t *cfg, bool node_pending,
             snprintf(text, sizeof(text), "\xF0\x9F\x94\xBB Shutting down guest %d on %s (%s)",
                      id, h->node, batch[k].reason);
             note_guest(i, id, true, "shutdown sent");
-            any_guest_shut = true;
         } else {
             snprintf(text, sizeof(text), "\xE2\x9D\x8C Guest %d on %s shutdown FAILED \xE2\x80\x94 %s",
                      id, h->node, why);
@@ -516,12 +514,8 @@ static void run_host(int i, const pve_config_t *cfg, bool node_pending,
     if (!node_pending) {
         return;
     }
-    /* Only guests just stopped *in this pass* are worth a wait for — one
-     * that fired minutes ago on its own trigger has had all the time it
-     * needs already. */
-    if (any_guest_shut && h->guest_wait_s) {
-        vTaskDelay(pdMS_TO_TICKS((uint32_t)h->guest_wait_s * 1000));
-    }
+    /* The node shuts down right alongside any guest it just swept up —
+     * no more waiting for them to finish first. */
     char why[96] = "";
     bool good = !h->shutdown_node || shutdown_node(h, why, sizeof(why));
     if (good) {
