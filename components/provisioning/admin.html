@@ -1453,6 +1453,7 @@ function renderControls(j) {
     if (it.kind === 'bool') {
       input = document.createElement('input');
       input.type = 'checkbox';
+      input.id = 'ctrl_' + it.field;
       input.checked = shown === 1;
       input.onchange = () => {
         const want = input.checked ? 1 : 0;
@@ -1466,7 +1467,7 @@ function renderControls(j) {
         pendingCtrl[it.field] = want;
         updateCtrlApplyBar();
       };
-      const wrap = document.createElement('span');
+      const wrap = document.createElement('label');
       wrap.className = 'toggle';
       const track = document.createElement('span');
       track.className = 'track';
@@ -1478,6 +1479,7 @@ function renderControls(j) {
       const [lo, hi] = it.allowed.split(',').map(Number);
       input = document.createElement('input');
       input.type = 'number';
+      input.id = 'ctrl_' + it.field;
       input.min = lo; input.max = hi; input.value = shown;
       input.style.width = '5rem';
       input.onchange = () => {
@@ -1493,6 +1495,7 @@ function renderControls(j) {
       continue;
     } else {
       input = document.createElement('select');
+      input.id = 'ctrl_' + it.field;
       input.style.maxWidth = '12rem';
       const opts = CTRL_OPT[it.field] || {};
       for (const [v, name] of Object.entries(opts)) {
