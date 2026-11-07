@@ -30,7 +30,6 @@
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
-#include "services/gap/ble_svc_gap.h"
 
 static const char *TAG = "bluetti_ble";
 
@@ -875,9 +874,8 @@ int bluetti_ble_host_init(void)
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
-    ble_svc_gap_init();
-    ble_svc_gap_device_name_set("esp32-nut-bluetti");
-
+    /* No GAP service or local device name: this is a central only, and
+     * IDF 5.3.6+ only builds ble_svc_gap with the GATT server role on. */
     nimble_port_freertos_init(host_task);
     inited = true;
 
